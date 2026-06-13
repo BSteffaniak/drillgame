@@ -34,6 +34,15 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
     draw_world(draw, game, camera);
     draw_particles(draw, game, camera);
+    for cloud in &game.hazard_clouds {
+        draw.draw_circle(
+            (cloud.x - camera.x) as i32,
+            (cloud.y - camera.y) as i32,
+            cloud.radius,
+            Color::new(90, 190, 80, 70),
+        );
+    }
+
     draw_player(draw, game, camera);
     draw_hud(draw, game);
     draw_depth_ruler(draw, game);
@@ -467,6 +476,8 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
         }
         ModalScreen::Depot => draw_modal_depot(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
+        ModalScreen::Map => draw_large_map(draw, game),
+        ModalScreen::Help => draw_help(draw),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -527,6 +538,80 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 Color::RAYWHITE,
             );
         }
+    }
+}
+
+fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_rectangle(160, 70, 960, 580, Color::new(0, 0, 0, 235));
+    draw.draw_rectangle_lines(160, 70, 960, 580, Color::RAYWHITE);
+    draw.draw_text("Mine Map", 190, 96, 32, Color::GOLD);
+    draw.draw_text(
+        "M/Esc/Backspace closes | discovered terrain only",
+        190,
+        132,
+        18,
+        Color::LIGHTGRAY,
+    );
+
+    let x = 210;
+    let y = 170;
+    let width = 860;
+    let height = 420;
+    let terrain_width = game.terrain.width().max(1);
+    let terrain_height = game.terrain.height().max(1);
+    draw.draw_rectangle(x, y, width, height, Color::new(12, 10, 14, 255));
+
+    for ty in 0..terrain_height {
+        for tx in 0..terrain_width {
+            let position = TilePosition { x: tx, y: ty };
+            if !game.is_explored(position) {
+                continue;
+            }
+            let Some(tile) = game.terrain.tile(position) else {
+                continue;
+            };
+            let px = x + tx * width / terrain_width;
+            let py = y + ty * height / terrain_height;
+            let color = match tile.kind {
+                TileKind::Air => Color::new(40, 42, 55, 255),
+                TileKind::Lava => Color::RED,
+                TileKind::Gas => Color::GREEN,
+                TileKind::Ore(_) => Color::GOLD,
+                TileKind::Artifact(_) => Color::MAGENTA,
+                _ => Color::new(115, 82, 58, 255),
+            };
+            draw.draw_rectangle(px, py, 3, 3, color);
+        }
+    }
+
+    let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
+    let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
+    draw.draw_circle(player_x, player_y, 6.0, Color::SKYBLUE);
+}
+
+fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
+    draw.draw_rectangle(260, 110, 760, 500, Color::new(0, 0, 0, 235));
+    draw.draw_rectangle_lines(260, 110, 760, 500, Color::RAYWHITE);
+    draw.draw_text("Controls", 300, 145, 32, Color::GOLD);
+    let lines = [
+        "A/D or arrows: drive/steer",
+        "W/Space: thrust",
+        "S/Down: drill downward",
+        "E/Enter: interact/confirm",
+        "P/Esc: pause or close menus",
+        "M: large mine map",
+        "H: this help screen",
+        "F5/F9: save/load",
+        "Tab: details overlay",
+    ];
+    for (index, line) in lines.iter().enumerate() {
+        draw.draw_text(
+            line,
+            320,
+            210 + i32::try_from(index).unwrap_or(i32::MAX) * 34,
+            22,
+            Color::RAYWHITE,
+        );
     }
 }
 

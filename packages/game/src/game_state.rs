@@ -33,7 +33,7 @@ const MAX_FALL_SPEED: f32 = 560.0;
 const DRAG: f32 = 0.86;
 const FUEL_BURN_PER_SECOND: f32 = 5.0;
 const DRILL_FUEL_COST: f32 = 0.45;
-const PLAYER_RADIUS: f32 = 12.0;
+const PLAYER_RADIUS: f32 = 10.5;
 const SAFE_LANDING_SPEED: f32 = 330.0;
 const CRASH_DAMAGE_SCALE: f32 = 0.11;
 const HEAT_START_DEPTH: f32 = 18.0 * TILE_SIZE;
@@ -55,6 +55,8 @@ pub enum ModalScreen {
     Depot,
     Shop,
     ExitConfirm,
+    Map,
+    Help,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +86,14 @@ pub struct DustParticle {
     pub x: f32,
     pub y: f32,
     pub life: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct HazardCloud {
+    pub x: f32,
+    pub y: f32,
+    pub life: f32,
+    pub radius: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -127,6 +137,8 @@ pub struct GameState {
     pub camera_y: f32,
     pub drill_flash_seconds: f32,
     pub dust_particles: Vec<DustParticle>,
+    #[serde(default)]
+    pub hazard_clouds: Vec<HazardCloud>,
     pub sound_cues: Vec<SoundCue>,
 }
 
@@ -138,6 +150,8 @@ impl GameState {
         saved.modal = None;
         saved.request_exit = false;
         saved.show_details = false;
+        saved.dust_particles.clear();
+        saved.hazard_clouds.clear();
         saved.sound_cues.clear();
         saved
     }
@@ -167,6 +181,7 @@ impl GameState {
             camera_y: 0.0,
             drill_flash_seconds: 0.0,
             dust_particles: Vec::new(),
+            hazard_clouds: Vec::new(),
             sound_cues: Vec::new(),
         }
     }
@@ -184,7 +199,22 @@ impl GameState {
         self.sound_cues.clear();
         self.show_details = input.details;
         self.handle_save_load(input);
+        if input.map {
+            self.modal = if self.modal == Some(ModalScreen::Map) {
+                None
+            } else {
+                Some(ModalScreen::Map)
+            };
+        }
+        if input.help {
+            self.modal = if self.modal == Some(ModalScreen::Help) {
+                None
+            } else {
+                Some(ModalScreen::Help)
+            };
+        }
         self.update_particles(delta_seconds);
+        self.update_hazards(delta_seconds);
         self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
 
@@ -375,7 +405,11 @@ impl GameState {
             let max_item = match modal {
                 ModalScreen::Shop => upgrade_offers(&self.player).len() - 1,
                 ModalScreen::Depot => 1,
-                ModalScreen::Fuel | ModalScreen::Repair | ModalScreen::ExitConfirm => 0,
+                ModalScreen::Fuel
+                | ModalScreen::Repair
+                | ModalScreen::ExitConfirm
+                | ModalScreen::Map
+                | ModalScreen::Help => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
         }
@@ -390,7 +424,7 @@ impl GameState {
                 ModalScreen::Repair => self.confirm_repair(),
                 ModalScreen::Depot => self.confirm_depot(),
                 ModalScreen::Shop => self.try_buy_upgrade(self.selected_menu_item),
-                ModalScreen::ExitConfirm => {}
+                ModalScreen::ExitConfirm | ModalScreen::Map | ModalScreen::Help => {}
             }
         }
 
@@ -538,6 +572,9 @@ impl GameState {
 
         if self.collides(next_x, next_y) {
             if delta_x != 0.0 {
+                if self.player.velocity_x.abs() > SAFE_LANDING_SPEED * 0.75 {
+                    self.apply_bump_damage(self.player.velocity_x.abs());
+                }
                 self.player.velocity_x = 0.0;
             }
             if delta_y > 0.0 {
@@ -562,6 +599,13 @@ impl GameState {
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
         self.message = format!("Hard landing! Hull took {damage:.0} damage.");
+    }
+
+    fn apply_bump_damage(&mut self, speed: f32) {
+        let damage = (speed - SAFE_LANDING_SPEED * 0.75) * CRASH_DAMAGE_SCALE * 0.5;
+        self.player.hull = (self.player.hull - damage).max(0.0);
+        self.sound_cues.push(SoundCue::Damage);
+        self.message = format!("Hull scraped the wall for {damage:.0} damage.");
     }
 
     fn collides(&self, x: f32, y: f32) -> bool {
@@ -609,7 +653,7 @@ impl GameState {
                 self.drill_flash_seconds = 0.08;
                 "Drilling...".clone_into(&mut self.message);
             }
-            MineResult::Mined(mined) => self.collect_mined_tile(mined),
+            MineResult::Mined(mined) => self.collect_mined_tile(mined, target),
         }
     }
 
@@ -620,13 +664,19 @@ impl GameState {
         self.player.velocity_y = -220.0;
         self.sound_cues.push(SoundCue::Damage);
         self.drill_flash_seconds = 0.2;
+        self.hazard_clouds.push(HazardCloud {
+            x: self.player.x,
+            y: self.player.y + TILE_SIZE,
+            life: 8.0,
+            radius: 36.0,
+        });
         for _ in 0..5 {
             self.spawn_dust();
         }
         "Gas pocket exploded! Hull damaged.".clone_into(&mut self.message);
     }
 
-    fn collect_mined_tile(&mut self, mined: TileKind) {
+    fn collect_mined_tile(&mut self, mined: TileKind, target: TilePosition) {
         self.player.fuel -= DRILL_FUEL_COST;
         self.sound_cues.push(SoundCue::Drill);
         self.spawn_dust();
@@ -651,6 +701,15 @@ impl GameState {
         } else {
             "Tunnel opened.".clone_into(&mut self.message);
         }
+        if matches!(mined, TileKind::Stone | TileKind::HardRock)
+            && falling_rock_roll(target, self.terrain.seed())
+        {
+            self.player.hull = (self.player.hull - 7.0).max(0.0);
+            self.player.velocity_y += 90.0;
+            self.sound_cues.push(SoundCue::Damage);
+            self.spawn_dust();
+            self.message.push_str(" Falling rocks clipped the rig!");
+        }
     }
 
     fn update_particles(&mut self, delta_seconds: f32) {
@@ -659,6 +718,24 @@ impl GameState {
             particle.y -= 18.0 * delta_seconds;
         }
         self.dust_particles.retain(|particle| particle.life > 0.0);
+    }
+
+    fn update_hazards(&mut self, delta_seconds: f32) {
+        for cloud in &mut self.hazard_clouds {
+            cloud.life -= delta_seconds;
+            cloud.radius += 8.0 * delta_seconds;
+        }
+        self.hazard_clouds.retain(|cloud| cloud.life > 0.0);
+
+        let in_gas = self.hazard_clouds.iter().any(|cloud| {
+            let dx = self.player.x - cloud.x;
+            let dy = self.player.y - cloud.y;
+            dx.hypot(dy) <= cloud.radius
+        });
+        if in_gas {
+            self.player.hull = (self.player.hull - 4.0 * delta_seconds).max(0.0);
+            "Corrosive gas cloud eating hull plating!".clone_into(&mut self.message);
+        }
     }
 
     fn spawn_dust(&mut self) {
@@ -705,14 +782,20 @@ impl GameState {
     }
 
     fn apply_lava_damage(&mut self, delta_seconds: f32) {
-        if !collision_points(self.player.x, self.player.y)
-            .iter()
-            .any(|position| self.terrain.is_lava_at(*position))
-        {
+        let near_lava = (-2..=2).any(|dy| {
+            (-2..=2).any(|dx| {
+                let position = TilePosition {
+                    x: (self.player.x / TILE_SIZE) as i32 + dx,
+                    y: (self.player.y / TILE_SIZE) as i32 + dy,
+                };
+                self.terrain.is_lava_at(position)
+            })
+        });
+        if !near_lava {
             return;
         }
 
-        let damage = 24.0 * delta_seconds;
+        let damage = 9.0 * delta_seconds;
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
         "Lava heat is burning the hull!".clone_into(&mut self.message);
@@ -854,6 +937,13 @@ fn shop_prompt(player: &Player) -> String {
         let _ = write!(prompt, "{}:{}({label}) ", index + 1, offer.name);
     }
     prompt
+}
+
+const fn falling_rock_roll(position: TilePosition, seed: u64) -> bool {
+    let value = seed
+        ^ ((position.x as u64).wrapping_mul(0x9E37))
+        ^ ((position.y as u64).wrapping_mul(0x85EB));
+    value.is_multiple_of(9)
 }
 
 fn target_camera_offset(game: &GameState) -> (f32, f32) {

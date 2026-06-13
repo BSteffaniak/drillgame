@@ -19,6 +19,8 @@ pub struct PlayerInput {
     pub save: bool,
     pub load: bool,
     pub selected_upgrade: Option<usize>,
+    pub map: bool,
+    pub help: bool,
 }
 
 #[must_use]
@@ -49,6 +51,8 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
         load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
         selected_upgrade: selected_upgrade(raylib),
+        map: raylib.is_key_pressed(KeyboardKey::KEY_M),
+        help: raylib.is_key_pressed(KeyboardKey::KEY_H),
     }
 }
 
