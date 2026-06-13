@@ -1,0 +1,23 @@
+target/
+debug/
+
+# local environments
+.direnv/
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
+
+# generated/local data
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+
+# agent/editor state
+.aider*
+.cursor/
