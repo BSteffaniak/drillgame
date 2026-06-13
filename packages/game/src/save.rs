@@ -7,6 +7,7 @@ use crate::game_state::GameState;
 const SETTINGS_PATH: &str = "drillgame-settings.json";
 
 const SAVE_PATH: &str = "drillgame-save.json";
+const SAVE_SLOTS: usize = 3;
 const SAVE_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -44,16 +45,32 @@ struct SaveFile {
 }
 
 pub fn save_game(game: &GameState) -> Result<(), SaveError> {
+    save_game_to_path(game, SAVE_PATH)
+}
+
+pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
+    save_game_to_path(game, &slot_path(slot))
+}
+
+fn save_game_to_path(game: &GameState, path: &str) -> Result<(), SaveError> {
     let save = SaveFile {
         version: SAVE_VERSION,
         game: game.clone_for_save(),
     };
     let json = serde_json::to_string_pretty(&save).map_err(SaveError::Serialize)?;
-    fs::write(SAVE_PATH, json).map_err(SaveError::Io)
+    fs::write(path, json).map_err(SaveError::Io)
+}
+
+pub fn load_game_slot(slot: usize) -> Result<GameState, SaveError> {
+    load_game_from_path(&slot_path(slot))
 }
 
 pub fn load_game() -> Result<GameState, SaveError> {
-    let json = fs::read_to_string(SAVE_PATH).map_err(SaveError::Io)?;
+    load_game_from_path(SAVE_PATH)
+}
+
+fn load_game_from_path(path: &str) -> Result<GameState, SaveError> {
+    let json = fs::read_to_string(path).map_err(SaveError::Io)?;
     let mut save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
     if save.version != SAVE_VERSION && save.version != 1 {
         return Err(SaveError::UnsupportedVersion(save.version));
@@ -65,6 +82,20 @@ pub fn load_game() -> Result<GameState, SaveError> {
 #[must_use]
 pub fn save_exists() -> bool {
     Path::new(SAVE_PATH).exists()
+}
+
+#[must_use]
+pub fn save_slot_exists(slot: usize) -> bool {
+    Path::new(&slot_path(slot)).exists()
+}
+
+#[must_use]
+pub const fn save_slot_count() -> usize {
+    SAVE_SLOTS
+}
+
+fn slot_path(slot: usize) -> String {
+    format!("drillgame-save-slot-{}.json", slot + 1)
 }
 
 #[derive(Debug)]

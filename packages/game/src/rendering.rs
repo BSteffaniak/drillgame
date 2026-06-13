@@ -11,6 +11,7 @@ use raylib::prelude::*;
 use crate::{
     economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{DrillDirection, GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
+    save::{save_slot_count, save_slot_exists},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
@@ -195,6 +196,23 @@ fn draw_building(
 }
 
 fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+    if let (Some(x), Some(y)) = (game.lost_cargo_x, game.lost_cargo_y) {
+        draw.draw_rectangle(
+            (x - camera.x - 6.0) as i32,
+            (y - camera.y - 6.0) as i32,
+            12,
+            12,
+            Color::GOLD,
+        );
+        draw.draw_text(
+            "LOST",
+            (x - camera.x + 8.0) as i32,
+            (y - camera.y - 8.0) as i32,
+            12,
+            Color::GOLD,
+        );
+    }
+
     for particle in &game.dust_particles {
         let alpha = (particle.life / 0.35).clamp(0.0, 1.0);
         draw.draw_circle_v(
@@ -777,6 +795,9 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
         ModalScreen::DepotReceiptHistory => draw_depot_receipt_history(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
         ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
+        ModalScreen::Options => draw_options(draw, game),
+        ModalScreen::SaveSlots => draw_save_slots(draw, game, true),
+        ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
         ModalScreen::Map => draw_large_map(draw, game),
         ModalScreen::Help => draw_help(draw),
         ModalScreen::ExitConfirm => {
@@ -987,6 +1008,13 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     draw.draw_circle(player_x, player_y, 6.0, Color::SKYBLUE);
     draw.draw_text("YOU", player_x + 8, player_y - 7, 12, Color::SKYBLUE);
+
+    if let (Some(cargo_x), Some(cargo_y)) = (game.lost_cargo_x, game.lost_cargo_y) {
+        let marker_x = x + ((cargo_x / TILE_SIZE) as i32) * width / terrain_width;
+        let marker_y = y + ((cargo_y / TILE_SIZE) as i32) * height / terrain_height;
+        draw.draw_rectangle(marker_x - 4, marker_y - 4, 8, 8, Color::GOLD);
+        draw.draw_text("LOST", marker_x + 6, marker_y - 6, 12, Color::GOLD);
+    }
 
     let buildings = [
         (4, 4, "FUEL", Color::BLUE),
@@ -1213,6 +1241,72 @@ fn upgrade_stat_preview(game: &GameState, kind: UpgradeKind) -> String {
             game.player.radiator_level,
             game.player.radiator_level.saturating_add(1)
         ),
+    }
+}
+
+fn draw_options(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Options", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        "Enter/E changes selected option. F11 toggles fullscreen immediately.",
+        330,
+        198,
+        18,
+        Color::LIGHTGRAY,
+    );
+    let rows = [
+        format!("Volume up  | current {:.0}%", game.master_volume * 100.0),
+        format!("Volume down| current {:.0}%", game.master_volume * 100.0),
+        format!(
+            "Fullscreen preference: {}",
+            if game.fullscreen { "on" } else { "off" }
+        ),
+    ];
+    for (index, row) in rows.iter().enumerate() {
+        draw.draw_text(
+            row,
+            350,
+            255 + i32::try_from(index).unwrap_or(i32::MAX) * 42,
+            22,
+            if index == game.selected_menu_item {
+                Color::YELLOW
+            } else {
+                Color::RAYWHITE
+            },
+        );
+    }
+}
+
+fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bool) {
+    draw.draw_text(
+        if saving { "Save Slots" } else { "Load Slots" },
+        330,
+        150,
+        30,
+        Color::GOLD,
+    );
+    draw.draw_text(
+        "Up/Down choose slot | Enter/E confirm | Esc closes",
+        330,
+        198,
+        18,
+        Color::LIGHTGRAY,
+    );
+    for slot in 0..save_slot_count() {
+        let exists = save_slot_exists(slot);
+        let label = if exists { "occupied" } else { "empty" };
+        draw.draw_text(
+            &format!("Slot {} - {label}", slot + 1),
+            360,
+            255 + i32::try_from(slot).unwrap_or(i32::MAX) * 46,
+            24,
+            if slot == game.selected_menu_item {
+                Color::YELLOW
+            } else if exists || saving {
+                Color::RAYWHITE
+            } else {
+                Color::GRAY
+            },
+        );
     }
 }
 

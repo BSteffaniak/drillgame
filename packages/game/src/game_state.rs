@@ -18,7 +18,7 @@ use crate::{
     },
     input::PlayerInput,
     player::Player,
-    save::{load_game, save_exists, save_game},
+    save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
     terrain::{MineResult, Terrain, TileKind, TilePosition},
 };
 
@@ -84,6 +84,9 @@ pub enum ModalScreen {
     DepotReceiptHistory,
     Shop,
     ShopConfirm,
+    Options,
+    SaveSlots,
+    LoadSlots,
     ExitConfirm,
     Map,
     Help,
@@ -94,11 +97,18 @@ pub enum PauseOption {
     Resume,
     Save,
     Load,
+    Options,
     ExitToDesktop,
 }
 
 impl PauseOption {
-    pub const ALL: [Self; 4] = [Self::Resume, Self::Save, Self::Load, Self::ExitToDesktop];
+    pub const ALL: [Self; 5] = [
+        Self::Resume,
+        Self::Save,
+        Self::Load,
+        Self::Options,
+        Self::ExitToDesktop,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -106,6 +116,7 @@ impl PauseOption {
             Self::Resume => "Resume",
             Self::Save => "Save Game",
             Self::Load => "Load Game",
+            Self::Options => "Options",
             Self::ExitToDesktop => "Exit to Desktop",
         }
     }
@@ -205,6 +216,12 @@ pub struct GameState {
     pub last_rescue_y: Option<f32>,
     #[serde(default)]
     pub last_rescue_summary: String,
+    #[serde(default)]
+    pub lost_cargo_x: Option<f32>,
+    #[serde(default)]
+    pub lost_cargo_y: Option<f32>,
+    #[serde(default)]
+    pub lost_cargo_count: u32,
     pub camera_x: f32,
     pub camera_y: f32,
     pub drill_flash_seconds: f32,
@@ -275,6 +292,9 @@ impl GameState {
             last_rescue_x: None,
             last_rescue_y: None,
             last_rescue_summary: String::new(),
+            lost_cargo_x: None,
+            lost_cargo_y: None,
+            lost_cargo_count: 0,
             camera_x: 0.0,
             camera_y: 0.0,
             drill_flash_seconds: 0.0,
@@ -336,6 +356,7 @@ impl GameState {
         self.update_boulders(delta_seconds);
         self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
         self.update_hazards(delta_seconds);
+        self.recover_lost_cargo_if_near();
         self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
 
@@ -449,11 +470,18 @@ impl GameState {
 
         match PauseOption::ALL[self.selected_pause_item] {
             PauseOption::Resume => self.run_mode = RunMode::Playing,
-            PauseOption::Save => match save_game(self) {
-                Ok(()) => "Game saved.".clone_into(&mut self.message),
-                Err(error) => self.message = format!("Save failed: {error}"),
-            },
-            PauseOption::Load => self.load_into_self(),
+            PauseOption::Save => {
+                self.modal = Some(ModalScreen::SaveSlots);
+                self.selected_menu_item = 0;
+            }
+            PauseOption::Load => {
+                self.modal = Some(ModalScreen::LoadSlots);
+                self.selected_menu_item = 0;
+            }
+            PauseOption::Options => {
+                self.modal = Some(ModalScreen::Options);
+                self.selected_menu_item = 0;
+            }
             PauseOption::ExitToDesktop => self.modal = Some(ModalScreen::ExitConfirm),
         }
     }
@@ -531,7 +559,11 @@ impl GameState {
         }
         if input.menu_down {
             let max_item = match modal {
-                ModalScreen::Depot | ModalScreen::Fuel | ModalScreen::Repair => 2,
+                ModalScreen::Depot
+                | ModalScreen::Fuel
+                | ModalScreen::Repair
+                | ModalScreen::Options => 2,
+                ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -561,11 +593,55 @@ impl GameState {
                 ModalScreen::DepotReceiptHistory => self.modal = Some(ModalScreen::Depot),
                 ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
                 ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
+                ModalScreen::Options => self.confirm_options(),
+                ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
+                ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
                 ModalScreen::ExitConfirm | ModalScreen::Map | ModalScreen::Help => {}
             }
         }
 
         true
+    }
+
+    fn confirm_options(&mut self) {
+        match self.selected_menu_item {
+            0 => {
+                self.master_volume = (self.master_volume + 0.1).min(1.0);
+                self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            }
+            1 => {
+                self.master_volume = (self.master_volume - 0.1).max(0.0);
+                self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            }
+            _ => {
+                self.fullscreen = !self.fullscreen;
+                self.message = if self.fullscreen {
+                    "Fullscreen preference enabled; F11 toggles immediately.".to_owned()
+                } else {
+                    "Windowed preference enabled; F11 toggles immediately.".to_owned()
+                };
+            }
+        }
+    }
+
+    fn save_slot(&mut self, slot: usize) {
+        match save_game_slot(self, slot) {
+            Ok(()) => self.message = format!("Saved to slot {}.", slot + 1),
+            Err(error) => self.message = format!("Save slot failed: {error}"),
+        }
+        self.modal = Some(ModalScreen::SaveSlots);
+    }
+
+    fn load_slot(&mut self, slot: usize) {
+        match load_game_slot(slot) {
+            Ok(mut loaded) => {
+                loaded.master_volume = self.master_volume;
+                loaded.fullscreen = self.fullscreen;
+                *self = loaded;
+                self.message = format!("Loaded slot {}.", slot + 1);
+            }
+            Err(error) => self.message = format!("Load slot failed: {error}"),
+        }
     }
 
     const fn selected_service_fraction(&self) -> f32 {
@@ -1289,6 +1365,36 @@ impl GameState {
         }
     }
 
+    fn recover_lost_cargo_if_near(&mut self) {
+        let (Some(x), Some(y)) = (self.lost_cargo_x, self.lost_cargo_y) else {
+            return;
+        };
+        if self.lost_cargo_count == 0 {
+            return;
+        }
+        let dx = self.player.x - x;
+        let dy = self.player.y - y;
+        if dx.hypot(dy) > TILE_SIZE * 0.9 || !self.player.has_cargo_space() {
+            return;
+        }
+        let recovered =
+            (self.player.cargo_capacity - self.player.cargo_used()).min(self.lost_cargo_count);
+        if recovered == 0 {
+            return;
+        }
+        *self
+            .player
+            .cargo
+            .entry(crate::terrain::MineralKind::Iron)
+            .or_default() += recovered;
+        self.lost_cargo_count -= recovered;
+        self.message = format!("Recovered {recovered} lost cargo crates from rescue site.");
+        if self.lost_cargo_count == 0 {
+            self.lost_cargo_x = None;
+            self.lost_cargo_y = None;
+        }
+    }
+
     fn handle_rescue(&mut self, input: PlayerInput) {
         if !input.interact {
             return;
@@ -1300,6 +1406,11 @@ impl GameState {
         let lost_items = drop_half_cargo(&mut self.player);
         self.last_rescue_x = Some(self.player.x);
         self.last_rescue_y = Some(self.player.y);
+        if lost_items > 0 {
+            self.lost_cargo_x = Some(self.player.x);
+            self.lost_cargo_y = Some(self.player.y);
+            self.lost_cargo_count = lost_items;
+        }
         self.last_rescue_summary = format!("Fee: {fee} credits. Cargo lost: {lost_items}.");
         self.depot_receipts.push(format!(
             "RESCUE INVOICE\nDepth: {}m\nFee: {fee} cr\nCargo lost: {lost_items}",
