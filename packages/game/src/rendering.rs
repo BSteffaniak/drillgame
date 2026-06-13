@@ -1,6 +1,7 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
     clippy::suboptimal_flops,
     reason = "rendering APIs use integer pixels while camera math uses floats"
 )]
@@ -8,8 +9,8 @@
 use raylib::prelude::*;
 
 use crate::{
-    economy::{SurfaceZone, upgrade_offers},
-    game_state::{GameState, TILE_SIZE},
+    economy::upgrade_offers,
+    game_state::{GameState, ModalScreen, RunMode, TILE_SIZE},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
@@ -23,11 +24,18 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let camera = Vector2::new(game.camera_x, game.camera_y);
 
     draw_world(draw, game, camera);
+    draw_particles(draw, game, camera);
     draw_player(draw, game, camera);
     draw_hud(draw, game);
 
-    if game.current_zone == Some(SurfaceZone::Shop) {
-        draw_shop(draw, game);
+    if let Some(modal) = game.modal {
+        draw_modal(draw, game, modal);
+    }
+
+    if game.run_mode == RunMode::Title {
+        draw_title(draw);
+    } else if game.run_mode == RunMode::Paused {
+        draw_pause(draw);
     }
 
     if game.game_over {
@@ -92,6 +100,17 @@ fn draw_building(
 
     draw.draw_rectangle(x as i32, y as i32, width as i32, 64, color);
     draw.draw_text(label, x as i32 + 16, y as i32 + 20, 20, Color::WHITE);
+}
+
+fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+    for particle in &game.dust_particles {
+        let alpha = (particle.life / 0.35).clamp(0.0, 1.0);
+        draw.draw_circle_v(
+            Vector2::new(particle.x - camera.x, particle.y - camera.y),
+            4.0,
+            Color::new(190, 150, 105, (180.0 * alpha) as u8),
+        );
+    }
 }
 
 fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
@@ -171,8 +190,9 @@ fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
     draw.draw_text(
         &format!(
-            "Depth: {:.0}m | F5 save | F9 load",
-            (game.player.y / TILE_SIZE - 5.0).max(0.0)
+            "Depth: {:.0}m | Seed {:X} | F5 save | F9 load",
+            (game.player.y / TILE_SIZE - 5.0).max(0.0),
+            game.terrain.seed()
         ),
         24,
         158,
@@ -272,12 +292,80 @@ fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 }
 
-fn draw_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(780, 18, 480, 190, Color::new(0, 0, 0, 185));
-    draw.draw_text("Upgrade Shop", 800, 34, 24, Color::WHITE);
+fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScreen) {
+    draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
+    draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
 
+    match modal {
+        ModalScreen::Fuel => {
+            draw.draw_text("Fuel Station", 330, 150, 30, Color::GOLD);
+            draw.draw_text(
+                "Enter/E: buy as much fuel as credits allow",
+                330,
+                210,
+                22,
+                Color::WHITE,
+            );
+            draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
+        }
+        ModalScreen::Repair => {
+            draw.draw_text("Repair Garage", 330, 150, 30, Color::LIME);
+            draw.draw_text(
+                "Enter/E: repair as much hull as credits allow",
+                330,
+                210,
+                22,
+                Color::WHITE,
+            );
+            draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
+        }
+        ModalScreen::Depot => {
+            draw.draw_text("Ore Depot", 330, 150, 30, Color::GREEN);
+            draw.draw_text(
+                "Enter/E: complete contract if ready, otherwise sell cargo",
+                330,
+                210,
+                22,
+                Color::WHITE,
+            );
+            draw.draw_text(
+                &format!(
+                    "Contract: {}/{} {} for {} credits",
+                    game.contracts.active.progress(&game.player),
+                    game.contracts.active.required,
+                    game.contracts.active.target.name(),
+                    game.contracts.active.reward
+                ),
+                330,
+                248,
+                20,
+                Color::RAYWHITE,
+            );
+        }
+        ModalScreen::Shop => draw_modal_shop(draw, game),
+    }
+}
+
+fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Upgrade Shop", 330, 150, 30, Color::WHITE);
+    draw.draw_text(
+        "Up/Down select | Enter/E buy | Backspace/Esc close",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
     for (index, offer) in upgrade_offers(&game.player).iter().enumerate() {
-        let y = 70 + i32::try_from(index).unwrap_or(i32::MAX) * 26;
+        let y = 230 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
+        let selected = index == game.selected_menu_item;
+        let affordable = game.player.credits >= offer.cost;
+        let color = if selected {
+            Color::YELLOW
+        } else if affordable || offer.level >= crate::economy::MAX_UPGRADE_LEVEL {
+            Color::RAYWHITE
+        } else {
+            Color::GRAY
+        };
         let price = if offer.level >= crate::economy::MAX_UPGRADE_LEVEL {
             "MAX".to_owned()
         } else {
@@ -285,19 +373,40 @@ fn draw_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         };
         draw.draw_text(
             &format!(
-                "{}: {} L{} -> {} | {}",
-                index + 1,
-                offer.name,
-                offer.level,
-                price,
-                offer.description
+                "{} L{} -> {} | {}",
+                offer.name, offer.level, price, offer.description
             ),
-            800,
+            350,
             y,
-            18,
-            Color::RAYWHITE,
+            20,
+            color,
         );
     }
+}
+
+fn draw_title(draw: &mut RaylibDrawHandle<'_>) {
+    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 190));
+    draw.draw_text("DRILLGAME", 475, 250, 54, Color::GOLD);
+    draw.draw_text("Press Enter or E to start", 505, 325, 24, Color::RAYWHITE);
+    draw.draw_text(
+        "F5/F9 save-load once in game | P pause",
+        455,
+        365,
+        20,
+        Color::LIGHTGRAY,
+    );
+}
+
+fn draw_pause(draw: &mut RaylibDrawHandle<'_>) {
+    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
+    draw.draw_text("PAUSED", 545, 285, 44, Color::RAYWHITE);
+    draw.draw_text(
+        "Press P, Enter, E, or Backspace/Esc to resume",
+        395,
+        340,
+        22,
+        Color::LIGHTGRAY,
+    );
 }
 
 fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {

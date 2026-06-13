@@ -98,21 +98,28 @@ pub struct TilePosition {
     pub y: i32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Terrain {
     width: i32,
     height: i32,
+    seed: u64,
     tiles: Vec<Tile>,
 }
 
 impl Terrain {
+    #[cfg(test)]
     #[must_use]
     pub fn new(width: i32, height: i32) -> Self {
+        Self::new_seeded(width, height, 0xD1_11_6A_4E)
+    }
+
+    #[must_use]
+    pub fn new_seeded(width: i32, height: i32, seed: u64) -> Self {
         let mut tiles = Vec::with_capacity((width * height) as usize);
 
         for y in 0..height {
             for x in 0..width {
-                let kind = generated_tile_kind(x, y);
+                let kind = generated_tile_kind(x, y, seed);
                 tiles.push(Tile {
                     kind,
                     durability: tile_durability(kind),
@@ -123,6 +130,7 @@ impl Terrain {
         Self {
             width,
             height,
+            seed,
             tiles,
         }
     }
@@ -135,6 +143,11 @@ impl Terrain {
     #[must_use]
     pub const fn height(&self) -> i32 {
         self.height
+    }
+
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.seed
     }
 
     #[must_use]
@@ -201,20 +214,20 @@ pub enum MineResult {
     Mined(TileKind),
 }
 
-const fn generated_tile_kind(x: i32, y: i32) -> TileKind {
+const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
     if y <= 4 {
         return TileKind::Air;
     }
 
-    if cave_air(x, y) {
+    if cave_air(x, y, seed) {
         return TileKind::Air;
     }
 
-    if lava_pocket(x, y) {
+    if lava_pocket(x, y, seed) {
         return TileKind::Lava;
     }
 
-    if artifact_spot(x, y) {
+    if artifact_spot(x, y, seed) {
         return TileKind::Artifact(artifact_at_depth(x, y));
     }
 
@@ -225,30 +238,30 @@ const fn generated_tile_kind(x: i32, y: i32) -> TileKind {
         _ => TileKind::HardRock,
     };
 
-    ore_or_base_tile(x, y, base)
+    ore_or_base_tile(x, y, base, seed)
 }
 
-const fn cave_air(x: i32, y: i32) -> bool {
+const fn cave_air(x: i32, y: i32, seed: u64) -> bool {
     if y < 12 {
         return false;
     }
 
-    let cavern = ((x / 5) * 17 + (y / 4) * 13).rem_euclid(47);
-    let tunnel = (x * 3 + y * 5).rem_euclid(97);
+    let cavern = seeded_hash(x / 5, y / 4, seed) % 47;
+    let tunnel = seeded_hash(x, y, seed ^ 0xA5A5) % 97;
     cavern == 0 || tunnel == 0
 }
 
-const fn lava_pocket(x: i32, y: i32) -> bool {
+const fn lava_pocket(x: i32, y: i32, seed: u64) -> bool {
     if y < 48 {
         return false;
     }
 
-    let pocket = ((x / 4) * 29 + (y / 3) * 31).rem_euclid(61);
+    let pocket = seeded_hash(x / 4, y / 3, seed ^ 0x1A5A) % 61;
     pocket == 0 || (pocket == 1 && y > 68)
 }
 
-const fn artifact_spot(x: i32, y: i32) -> bool {
-    y > 20 && (x * 41 + y * 59).rem_euclid(211) == 0
+const fn artifact_spot(x: i32, y: i32, seed: u64) -> bool {
+    y > 20 && seeded_hash(x, y, seed ^ 0x5EED).is_multiple_of(211)
 }
 
 const fn artifact_at_depth(x: i32, y: i32) -> ArtifactKind {
@@ -266,8 +279,8 @@ const fn artifact_at_depth(x: i32, y: i32) -> ArtifactKind {
     }
 }
 
-const fn ore_or_base_tile(x: i32, y: i32, base: TileKind) -> TileKind {
-    if !patterned_ore(x, y) {
+const fn ore_or_base_tile(x: i32, y: i32, base: TileKind, seed: u64) -> TileKind {
+    if !patterned_ore(x, y, seed) {
         return base;
     }
 
@@ -296,11 +309,20 @@ const fn ore_or_base_tile(x: i32, y: i32, base: TileKind) -> TileKind {
     }
 }
 
-const fn patterned_ore(x: i32, y: i32) -> bool {
-    let vein_a = (x * 17 + y * 31).rem_euclid(37);
-    let vein_b = (x * 7 + y * 11).rem_euclid(53);
-    let pocket = ((x / 3) * 19 + (y / 3) * 23).rem_euclid(29);
+const fn patterned_ore(x: i32, y: i32, seed: u64) -> bool {
+    let vein_a = seeded_hash(x, y, seed ^ 0xC0DE) % 37;
+    let vein_b = seeded_hash(x, y, seed ^ 0xBEEF) % 53;
+    let pocket = seeded_hash(x / 3, y / 3, seed ^ 0xFACE) % 29;
     vein_a <= 2 || vein_b <= 1 || pocket == 0
+}
+
+const fn seeded_hash(x: i32, y: i32, seed: u64) -> u64 {
+    let mut value =
+        seed ^ ((x as u64).wrapping_mul(0x9E37_79B1)) ^ ((y as u64).wrapping_mul(0x85EB_CA77));
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7FEB_352D);
+    value ^= value >> 15;
+    value
 }
 
 const fn tile_hardness(kind: TileKind) -> u8 {

@@ -10,6 +10,11 @@ pub struct PlayerInput {
     pub thrust: bool,
     pub drill_down: bool,
     pub interact: bool,
+    pub confirm: bool,
+    pub cancel: bool,
+    pub pause: bool,
+    pub menu_up: bool,
+    pub menu_down: bool,
     pub save: bool,
     pub load: bool,
     pub selected_upgrade: Option<usize>,
@@ -30,6 +35,15 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         thrust: up,
         drill_down: down,
         interact: raylib.is_key_pressed(KeyboardKey::KEY_E),
+        confirm: raylib.is_key_pressed(KeyboardKey::KEY_ENTER)
+            || raylib.is_key_pressed(KeyboardKey::KEY_E),
+        cancel: raylib.is_key_pressed(KeyboardKey::KEY_BACKSPACE)
+            || raylib.is_key_pressed(KeyboardKey::KEY_ESCAPE),
+        pause: raylib.is_key_pressed(KeyboardKey::KEY_P),
+        menu_up: raylib.is_key_pressed(KeyboardKey::KEY_UP)
+            || raylib.is_key_pressed(KeyboardKey::KEY_W),
+        menu_down: raylib.is_key_pressed(KeyboardKey::KEY_DOWN)
+            || raylib.is_key_pressed(KeyboardKey::KEY_S),
         save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
         load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
         selected_upgrade: selected_upgrade(raylib),

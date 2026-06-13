@@ -23,8 +23,10 @@ nix develop -c cargo run --bin drillgame
 - `W` / up arrow / space: thrust upward
 - `S` / down arrow: drill downward
 - side movement drills sideways only while grounded
-- `E`: interact with surface buildings or rescue prompt
-- `1`-`6`: buy upgrades while parked at the shop
+- `E` / `Enter`: interact with surface buildings, confirm menus, or start game
+- `Backspace` / `Esc`: close menus
+- `P`: pause/resume
+- `1`-`6`: quick-select upgrades while the shop menu is open
 - `F5`: save to `drillgame-save.json`
 - `F9`: load from `drillgame-save.json`
 - `Esc`: quit
