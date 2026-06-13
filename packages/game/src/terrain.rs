@@ -82,6 +82,7 @@ pub enum TileKind {
     Stone,
     HardRock,
     Lava,
+    Gas,
     Ore(MineralKind),
     Artifact(ArtifactKind),
 }
@@ -181,6 +182,12 @@ impl Terrain {
             return MineResult::TooDangerous;
         }
 
+        if tile.kind == TileKind::Gas {
+            tile.kind = TileKind::Air;
+            tile.durability = 0;
+            return MineResult::Exploded;
+        }
+
         if tile_hardness(tile.kind) > drill_strength {
             return MineResult::TooHard;
         }
@@ -210,6 +217,7 @@ pub enum MineResult {
     Blocked,
     TooHard,
     TooDangerous,
+    Exploded,
     Chipped,
     Mined(TileKind),
 }
@@ -225,6 +233,10 @@ const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
 
     if lava_pocket(x, y, seed) {
         return TileKind::Lava;
+    }
+
+    if gas_pocket(x, y, seed) {
+        return TileKind::Gas;
     }
 
     if artifact_spot(x, y, seed) {
@@ -258,6 +270,14 @@ const fn lava_pocket(x: i32, y: i32, seed: u64) -> bool {
 
     let pocket = seeded_hash(x / 4, y / 3, seed ^ 0x1A5A) % 61;
     pocket == 0 || (pocket == 1 && y > 68)
+}
+
+const fn gas_pocket(x: i32, y: i32, seed: u64) -> bool {
+    if y < 24 || y > 74 {
+        return false;
+    }
+
+    seeded_hash(x / 3, y / 3, seed ^ 0x6A5).is_multiple_of(83)
 }
 
 const fn artifact_spot(x: i32, y: i32, seed: u64) -> bool {
@@ -327,7 +347,7 @@ const fn seeded_hash(x: i32, y: i32, seed: u64) -> u64 {
 
 const fn tile_hardness(kind: TileKind) -> u8 {
     match kind {
-        TileKind::Air | TileKind::Lava => 0,
+        TileKind::Air | TileKind::Lava | TileKind::Gas => 0,
         TileKind::Dirt | TileKind::Ore(MineralKind::Copper | MineralKind::Iron) => 1,
         TileKind::Clay | TileKind::Ore(MineralKind::Silver | MineralKind::Gold) => 2,
         TileKind::Stone
@@ -346,7 +366,7 @@ const fn tile_durability(kind: TileKind) -> u8 {
         TileKind::Clay => 4,
         TileKind::Stone => 7,
         TileKind::HardRock => 11,
-        TileKind::Lava => 1,
+        TileKind::Lava | TileKind::Gas => 1,
         TileKind::Ore(mineral) => tile_hardness(TileKind::Ore(mineral)) + 2,
         TileKind::Artifact(artifact) => tile_hardness(TileKind::Artifact(artifact)) + 5,
     }
@@ -361,6 +381,7 @@ mod tests {
         let terrain = Terrain::new(120, 90);
         let mut air_below_surface = 0;
         let mut lava = 0;
+        let mut gas = 0;
 
         for y in 8..terrain.height() {
             for x in 0..terrain.width() {
@@ -371,6 +392,7 @@ mod tests {
                 {
                     TileKind::Air => air_below_surface += 1,
                     TileKind::Lava => lava += 1,
+                    TileKind::Gas => gas += 1,
                     _ => {}
                 }
             }
@@ -378,5 +400,6 @@ mod tests {
 
         assert!(air_below_surface > 0);
         assert!(lava > 0);
+        assert!(gas > 0);
     }
 }

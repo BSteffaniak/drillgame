@@ -25,7 +25,7 @@ nix develop -c cargo run --bin drillgame
 - side movement drills sideways only while grounded
 - `E` / `Enter`: interact with surface buildings, confirm menus, or start game
 - `Backspace` / `Esc`: close menus, or pause from gameplay
-- `P`: pause/resume
+- `P`: pause/resume; pause menu includes save, load, and explicit exit confirmation
 - hold `Tab`: show detailed cargo/contract panel
 - `1`-`6`: quick-select upgrades while the shop menu is open
 - `F5`: save to `drillgame-save.json`

@@ -9,28 +9,40 @@ use crate::{
 pub struct ContractLog {
     pub active: Contract,
     pub completed: u32,
+    pub story_complete: bool,
 }
 
 impl ContractLog {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            active: Contract::new(ContractTarget::Mineral(MineralKind::Copper), 4, 90),
+            active: contract_for_index(0),
             completed: 0,
+            story_complete: false,
         }
     }
 
-    pub fn try_complete(&mut self, player: &mut Player) -> Option<u32> {
-        if !self.active.is_satisfied(player) {
+    pub fn try_complete(&mut self, player: &mut Player) -> Option<ContractCompletion> {
+        if self.story_complete || !self.active.is_satisfied(player) {
             return None;
         }
 
         self.active.consume(player);
         let reward = self.active.reward;
         player.credits += reward;
+        let completed_title = self.active.title.clone();
+        let finished_story = self.active.final_objective;
         self.completed += 1;
-        self.active = contract_for_index(self.completed);
-        Some(reward)
+        self.story_complete = finished_story;
+        if !finished_story {
+            self.active = contract_for_index(self.completed);
+        }
+
+        Some(ContractCompletion {
+            reward,
+            completed_title,
+            finished_story,
+        })
     }
 }
 
@@ -40,20 +52,37 @@ impl Default for ContractLog {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractCompletion {
+    pub reward: u32,
+    pub completed_title: String,
+    pub finished_story: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Contract {
+    pub title: String,
     pub target: ContractTarget,
     pub required: u32,
     pub reward: u32,
+    pub final_objective: bool,
 }
 
 impl Contract {
     #[must_use]
-    pub const fn new(target: ContractTarget, required: u32, reward: u32) -> Self {
+    pub fn new(
+        title: &str,
+        target: ContractTarget,
+        required: u32,
+        reward: u32,
+        final_objective: bool,
+    ) -> Self {
         Self {
+            title: title.to_owned(),
             target,
             required,
             reward,
+            final_objective,
         }
     }
 
@@ -100,14 +129,57 @@ impl ContractTarget {
     }
 }
 
-const fn contract_for_index(index: u32) -> Contract {
-    match index % 6 {
-        0 => Contract::new(ContractTarget::Mineral(MineralKind::Copper), 4, 90),
-        1 => Contract::new(ContractTarget::Mineral(MineralKind::Silver), 3, 180),
-        2 => Contract::new(ContractTarget::Artifact(ArtifactKind::Fossil), 1, 280),
-        3 => Contract::new(ContractTarget::Mineral(MineralKind::Gold), 4, 360),
-        4 => Contract::new(ContractTarget::Mineral(MineralKind::Ruby), 2, 520),
-        _ => Contract::new(ContractTarget::Artifact(ArtifactKind::BuriedIdol), 1, 700),
+fn contract_for_index(index: u32) -> Contract {
+    match index {
+        0 => Contract::new(
+            "Starter Stockpile",
+            ContractTarget::Mineral(MineralKind::Copper),
+            4,
+            90,
+            false,
+        ),
+        1 => Contract::new(
+            "Silver Survey",
+            ContractTarget::Mineral(MineralKind::Silver),
+            3,
+            180,
+            false,
+        ),
+        2 => Contract::new(
+            "First Relic",
+            ContractTarget::Artifact(ArtifactKind::Fossil),
+            1,
+            280,
+            false,
+        ),
+        3 => Contract::new(
+            "Gold Calibration",
+            ContractTarget::Mineral(MineralKind::Gold),
+            4,
+            360,
+            false,
+        ),
+        4 => Contract::new(
+            "Ruby Heat Test",
+            ContractTarget::Mineral(MineralKind::Ruby),
+            2,
+            520,
+            false,
+        ),
+        5 => Contract::new(
+            "Idol Below",
+            ContractTarget::Artifact(ArtifactKind::BuriedIdol),
+            1,
+            700,
+            false,
+        ),
+        _ => Contract::new(
+            "The Star Core",
+            ContractTarget::Artifact(ArtifactKind::StarCore),
+            1,
+            1_500,
+            true,
+        ),
     }
 }
 
@@ -124,11 +196,7 @@ fn consume_count<K: Ord>(items: &mut std::collections::BTreeMap<K, u32>, key: &K
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        contract::{ContractLog, ContractTarget},
-        player::Player,
-        terrain::MineralKind,
-    };
+    use crate::{contract::ContractLog, player::Player, terrain::MineralKind};
 
     #[test]
     fn contract_completion_consumes_items_and_pays_reward() {
@@ -138,14 +206,13 @@ mod tests {
         }
 
         let mut contracts = ContractLog::new();
-        let reward = contracts.try_complete(&mut player);
+        let completion = contracts
+            .try_complete(&mut player)
+            .expect("contract complete");
 
-        assert_eq!(reward, Some(90));
+        assert_eq!(completion.reward, 90);
         assert_eq!(player.credits, 90);
         assert_eq!(player.cargo_used(), 0);
-        assert!(matches!(
-            contracts.active.target,
-            ContractTarget::Mineral(_)
-        ));
+        assert_eq!(contracts.active.title, "Silver Survey");
     }
 }

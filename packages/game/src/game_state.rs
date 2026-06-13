@@ -53,6 +53,29 @@ pub enum ModalScreen {
     Repair,
     Depot,
     Shop,
+    ExitConfirm,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PauseOption {
+    Resume,
+    Save,
+    Load,
+    ExitToDesktop,
+}
+
+impl PauseOption {
+    pub const ALL: [Self; 4] = [Self::Resume, Self::Save, Self::Load, Self::ExitToDesktop];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Resume => "Resume",
+            Self::Save => "Save Game",
+            Self::Load => "Load Game",
+            Self::ExitToDesktop => "Exit to Desktop",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -71,6 +94,10 @@ pub enum SoundCue {
     Milestone,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "game state tracks several orthogonal UI/progression flags"
+)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GameState {
     pub terrain: Terrain,
@@ -81,7 +108,10 @@ pub struct GameState {
     pub run_mode: RunMode,
     pub modal: Option<ModalScreen>,
     pub selected_menu_item: usize,
+    pub selected_pause_item: usize,
     pub show_details: bool,
+    pub request_exit: bool,
+    pub won_game: bool,
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
     pub game_over: bool,
@@ -98,6 +128,7 @@ impl GameState {
         let mut saved = self.clone();
         saved.run_mode = RunMode::Playing;
         saved.modal = None;
+        saved.request_exit = false;
         saved.show_details = false;
         saved.sound_cues.clear();
         saved
@@ -115,7 +146,10 @@ impl GameState {
             run_mode: RunMode::Title,
             modal: None,
             selected_menu_item: 0,
+            selected_pause_item: 0,
             show_details: false,
+            request_exit: false,
+            won_game: false,
             deepest_tile_reached: 0,
             next_milestone_tile: 20,
             game_over: false,
@@ -144,9 +178,7 @@ impl GameState {
                 return;
             }
             RunMode::Paused => {
-                if input.pause || input.cancel || input.confirm {
-                    self.run_mode = RunMode::Playing;
-                }
+                self.handle_pause_menu(input);
                 return;
             }
             RunMode::Playing => {}
@@ -180,6 +212,46 @@ impl GameState {
         self.update_camera(delta_seconds);
     }
 
+    fn handle_pause_menu(&mut self, input: PlayerInput) {
+        if self.modal == Some(ModalScreen::ExitConfirm) {
+            if input.cancel {
+                self.modal = None;
+                return;
+            }
+            if input.confirm {
+                self.request_exit = true;
+            }
+            return;
+        }
+
+        if input.menu_up {
+            self.selected_pause_item = self.selected_pause_item.saturating_sub(1);
+        }
+        if input.menu_down {
+            self.selected_pause_item =
+                (self.selected_pause_item + 1).min(PauseOption::ALL.len() - 1);
+        }
+
+        if input.pause || input.cancel {
+            self.run_mode = RunMode::Playing;
+            return;
+        }
+
+        if !input.confirm {
+            return;
+        }
+
+        match PauseOption::ALL[self.selected_pause_item] {
+            PauseOption::Resume => self.run_mode = RunMode::Playing,
+            PauseOption::Save => match save_game(self) {
+                Ok(()) => "Game saved.".clone_into(&mut self.message),
+                Err(error) => self.message = format!("Save failed: {error}"),
+            },
+            PauseOption::Load => self.load_into_self(),
+            PauseOption::ExitToDesktop => self.modal = Some(ModalScreen::ExitConfirm),
+        }
+    }
+
     fn handle_save_load(&mut self, input: PlayerInput) {
         if input.save {
             match save_game(self) {
@@ -189,18 +261,22 @@ impl GameState {
         }
 
         if input.load {
-            if !save_exists() {
-                "No save file found.".clone_into(&mut self.message);
-                return;
-            }
+            self.load_into_self();
+        }
+    }
 
-            match load_game() {
-                Ok(mut loaded) => {
-                    "Game loaded.".clone_into(&mut loaded.message);
-                    *self = loaded;
-                }
-                Err(error) => self.message = format!("Load failed: {error}"),
+    fn load_into_self(&mut self) {
+        if !save_exists() {
+            "No save file found.".clone_into(&mut self.message);
+            return;
+        }
+
+        match load_game() {
+            Ok(mut loaded) => {
+                "Game loaded.".clone_into(&mut loaded.message);
+                *self = loaded;
             }
+            Err(error) => self.message = format!("Load failed: {error}"),
         }
     }
 
@@ -262,6 +338,7 @@ impl GameState {
                 ModalScreen::Repair => self.confirm_repair(),
                 ModalScreen::Depot => self.confirm_depot(),
                 ModalScreen::Shop => self.try_buy_upgrade(self.selected_menu_item),
+                ModalScreen::ExitConfirm => {}
             }
         }
 
@@ -287,9 +364,20 @@ impl GameState {
     }
 
     fn confirm_depot(&mut self) {
-        if let Some(reward) = self.contracts.try_complete(&mut self.player) {
+        if let Some(completion) = self.contracts.try_complete(&mut self.player) {
             self.sound_cues.push(SoundCue::Sell);
-            self.message = format!("Contract complete! Bonus paid: {reward} credits.");
+            if completion.finished_story {
+                self.won_game = true;
+                self.message = format!(
+                    "{} complete! Star Core secured. You win! Bonus: {} credits.",
+                    completion.completed_title, completion.reward
+                );
+            } else {
+                self.message = format!(
+                    "{} complete! Bonus paid: {} credits.",
+                    completion.completed_title, completion.reward
+                );
+            }
             return;
         }
 
@@ -326,10 +414,16 @@ impl GameState {
 
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
         let can_burn_fuel = self.player.fuel > 0.0;
+        let grounded = self.is_grounded();
         let engine_multiplier = 1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.18;
+        let horizontal_acceleration = if grounded {
+            HORIZONTAL_ACCELERATION * 1.35
+        } else {
+            HORIZONTAL_ACCELERATION * 0.65
+        };
 
         self.player.velocity_x +=
-            input.horizontal * HORIZONTAL_ACCELERATION * engine_multiplier * delta_seconds;
+            input.horizontal * horizontal_acceleration * engine_multiplier * delta_seconds;
 
         if input.thrust && can_burn_fuel {
             self.player.velocity_y -= THRUST_ACCELERATION * engine_multiplier * delta_seconds;
@@ -337,7 +431,8 @@ impl GameState {
         }
 
         self.player.velocity_y += GRAVITY * delta_seconds;
-        self.player.velocity_x *= DRAG.powf(delta_seconds * 60.0);
+        let drag = if grounded { 0.78 } else { DRAG };
+        self.player.velocity_x *= drag.powf(delta_seconds * 60.0);
         self.player.velocity_x = self.player.velocity_x.clamp(
             -MAX_HORIZONTAL_SPEED * engine_multiplier,
             MAX_HORIZONTAL_SPEED * engine_multiplier,
@@ -420,6 +515,7 @@ impl GameState {
                 self.sound_cues.push(SoundCue::Damage);
                 "Lava pocket! Hull scorched.".clone_into(&mut self.message);
             }
+            MineResult::Exploded => self.trigger_gas_explosion(),
             MineResult::Chipped => {
                 self.player.fuel -= DRILL_FUEL_COST;
                 self.sound_cues.push(SoundCue::Drill);
@@ -429,6 +525,19 @@ impl GameState {
             }
             MineResult::Mined(mined) => self.collect_mined_tile(mined),
         }
+    }
+
+    fn trigger_gas_explosion(&mut self) {
+        self.player.fuel = (self.player.fuel - DRILL_FUEL_COST).max(0.0);
+        self.player.hull = (self.player.hull - 18.0).max(0.0);
+        self.player.velocity_x *= -0.45;
+        self.player.velocity_y = -220.0;
+        self.sound_cues.push(SoundCue::Damage);
+        self.drill_flash_seconds = 0.2;
+        for _ in 0..5 {
+            self.spawn_dust();
+        }
+        "Gas pocket exploded! Hull damaged.".clone_into(&mut self.message);
     }
 
     fn collect_mined_tile(&mut self, mined: TileKind) {

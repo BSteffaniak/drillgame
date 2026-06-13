@@ -10,7 +10,7 @@ use raylib::prelude::*;
 
 use crate::{
     economy::upgrade_offers,
-    game_state::{GameState, ModalScreen, RunMode, TILE_SIZE},
+    game_state::{GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
@@ -27,15 +27,16 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw_particles(draw, game, camera);
     draw_player(draw, game, camera);
     draw_hud(draw, game);
-
-    if let Some(modal) = game.modal {
-        draw_modal(draw, game, modal);
-    }
+    draw_depth_ruler(draw, game);
 
     if game.run_mode == RunMode::Title {
         draw_title(draw);
     } else if game.run_mode == RunMode::Paused {
-        draw_pause(draw);
+        draw_pause(draw, game);
+    }
+
+    if let Some(modal) = game.modal {
+        draw_modal(draw, game, modal);
     }
 
     if game.game_over {
@@ -195,7 +196,8 @@ fn draw_compact_status(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
     draw.draw_text(
         &format!(
-            "Contract {}/{} {}",
+            "Contract {}: {}/{} {}",
+            game.contracts.active.title,
             game.contracts.active.progress(&game.player),
             game.contracts.active.required,
             game.contracts.active.target.name()
@@ -331,6 +333,24 @@ fn draw_detail_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 }
 
+fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let x = SCREEN_WIDTH - 30;
+    let top = 80;
+    let height = SCREEN_HEIGHT - 150;
+    draw.draw_rectangle(x, top, 10, height, Color::new(0, 0, 0, 120));
+    draw.draw_rectangle_lines(x, top, 10, height, Color::new(255, 255, 255, 120));
+
+    for marker in (0..=80).step_by(20) {
+        let y = top + (marker * height / 80);
+        draw.draw_line(x - 8, y, x + 18, y, Color::LIGHTGRAY);
+        draw.draw_text(&format!("{marker}m"), x - 58, y - 8, 14, Color::LIGHTGRAY);
+    }
+
+    let depth = (game.player.y / TILE_SIZE - 5.0).max(0.0);
+    let marker_y = top + ((depth / 80.0).clamp(0.0, 1.0) * height as f32) as i32;
+    draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
+}
+
 fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScreen) {
     draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
     draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
@@ -382,6 +402,16 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
             );
         }
         ModalScreen::Shop => draw_modal_shop(draw, game),
+        ModalScreen::ExitConfirm => {
+            draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
+            draw.draw_text(
+                "Enter/E confirms. Backspace/Esc cancels.",
+                330,
+                210,
+                22,
+                Color::WHITE,
+            );
+        }
     }
 }
 
@@ -436,14 +466,27 @@ fn draw_title(draw: &mut RaylibDrawHandle<'_>) {
     );
 }
 
-fn draw_pause(draw: &mut RaylibDrawHandle<'_>) {
+fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
-    draw.draw_text("PAUSED", 545, 285, 44, Color::RAYWHITE);
+    draw.draw_rectangle(430, 190, 420, 310, Color::new(0, 0, 0, 220));
+    draw.draw_rectangle_lines(430, 190, 420, 310, Color::RAYWHITE);
+    draw.draw_text("PAUSED", 548, 220, 44, Color::RAYWHITE);
+
+    for (index, option) in PauseOption::ALL.iter().enumerate() {
+        let y = 300 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
+        let color = if index == game.selected_pause_item {
+            Color::YELLOW
+        } else {
+            Color::WHITE
+        };
+        draw.draw_text(option.label(), 520, y, 24, color);
+    }
+
     draw.draw_text(
-        "Press P, Enter, E, or Backspace/Esc to resume",
-        395,
-        340,
-        22,
+        "Up/Down select | Enter/E confirm | Esc/P resume",
+        455,
+        455,
+        18,
         Color::LIGHTGRAY,
     );
 }
@@ -470,6 +513,7 @@ const fn tile_color(kind: TileKind) -> Color {
         TileKind::Stone => Color::new(92, 92, 96, 255),
         TileKind::HardRock => Color::new(54, 54, 60, 255),
         TileKind::Lava => Color::new(255, 84, 28, 255),
+        TileKind::Gas => Color::new(100, 210, 120, 180),
         TileKind::Ore(mineral) => mineral_color(mineral),
         TileKind::Artifact(artifact) => artifact_color(artifact),
     }

@@ -15,7 +15,7 @@ pub fn run() {
 
     let mut game = GameState::new();
 
-    while !raylib.window_should_close() {
+    while !raylib.window_should_close() && !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
         let input = read_input(&raylib);
 
