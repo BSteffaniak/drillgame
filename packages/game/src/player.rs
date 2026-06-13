@@ -5,9 +5,11 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::terrain::{MineralKind, TilePosition};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Player {
     pub x: f32,
     pub y: f32,
@@ -24,6 +26,7 @@ pub struct Player {
     pub drill_strength: u8,
     pub engine_level: u8,
     pub hull_level: u8,
+    pub radiator_level: u8,
 }
 
 #[allow(
@@ -49,6 +52,7 @@ impl Player {
             drill_strength: 1,
             engine_level: 1,
             hull_level: 1,
+            radiator_level: 1,
         }
     }
 

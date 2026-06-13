@@ -8,12 +8,15 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     economy::{
         PurchaseError, SurfaceZone, buy_upgrade, refuel, repair, sell_cargo, upgrade_offers,
     },
     input::PlayerInput,
     player::Player,
+    save::{load_game, save_exists, save_game},
     terrain::{MineResult, Terrain, TileKind, TilePosition},
 };
 
@@ -31,14 +34,20 @@ const DRILL_FUEL_COST: f32 = 0.45;
 const PLAYER_RADIUS: f32 = 12.0;
 const SAFE_LANDING_SPEED: f32 = 330.0;
 const CRASH_DAMAGE_SCALE: f32 = 0.11;
+const HEAT_START_DEPTH: f32 = 18.0 * TILE_SIZE;
+const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
+const CAMERA_SMOOTHING: f32 = 8.0;
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GameState {
     pub terrain: Terrain,
     pub player: Player,
     pub message: String,
     pub current_zone: Option<SurfaceZone>,
     pub game_over: bool,
+    pub camera_x: f32,
+    pub camera_y: f32,
+    pub drill_flash_seconds: f32,
 }
 
 impl GameState {
@@ -51,12 +60,18 @@ impl GameState {
                 .to_owned(),
             current_zone: None,
             game_over: false,
+            camera_x: 0.0,
+            camera_y: 0.0,
+            drill_flash_seconds: 0.0,
         }
     }
 
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
+        self.handle_save_load(input);
+
         if self.game_over {
             self.handle_rescue(input);
+            self.update_camera(delta_seconds);
             return;
         }
 
@@ -64,8 +79,35 @@ impl GameState {
         self.handle_interaction(input);
         self.apply_movement(input, delta_seconds);
         self.try_mine(input);
+        self.apply_depth_pressure(delta_seconds);
         self.update_status_messages();
         self.check_failure();
+        self.update_camera(delta_seconds);
+        self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
+    }
+
+    fn handle_save_load(&mut self, input: PlayerInput) {
+        if input.save {
+            match save_game(self) {
+                Ok(()) => "Game saved to drillgame-save.json.".clone_into(&mut self.message),
+                Err(error) => self.message = format!("Save failed: {error}"),
+            }
+        }
+
+        if input.load {
+            if !save_exists() {
+                "No save file found.".clone_into(&mut self.message);
+                return;
+            }
+
+            match load_game() {
+                Ok(mut loaded) => {
+                    "Game loaded.".clone_into(&mut loaded.message);
+                    *self = loaded;
+                }
+                Err(error) => self.message = format!("Load failed: {error}"),
+            }
+        }
     }
 
     fn handle_interaction(&mut self, input: PlayerInput) {
@@ -80,12 +122,20 @@ impl GameState {
 
         match self.current_zone {
             Some(SurfaceZone::Fuel) => {
-                refuel(&mut self.player);
-                "Fuel tank filled.".clone_into(&mut self.message);
+                let cost = refuel(&mut self.player);
+                self.message = if cost == 0 {
+                    "Fuel already full or no credits available.".to_owned()
+                } else {
+                    format!("Fuel topped up for {cost} credits.")
+                };
             }
             Some(SurfaceZone::Repair) => {
-                repair(&mut self.player);
-                "Hull repaired.".clone_into(&mut self.message);
+                let cost = repair(&mut self.player);
+                self.message = if cost == 0 {
+                    "Hull already repaired or no credits available.".to_owned()
+                } else {
+                    format!("Hull repaired for {cost} credits.")
+                };
             }
             Some(SurfaceZone::Depot) => {
                 let payout = sell_cargo(&mut self.player);
@@ -202,6 +252,7 @@ impl GameState {
             }
             MineResult::Chipped => {
                 self.player.fuel -= DRILL_FUEL_COST;
+                self.drill_flash_seconds = 0.08;
                 "Drilling...".clone_into(&mut self.message);
             }
             MineResult::Mined(mined) => self.collect_mined_tile(mined),
@@ -210,6 +261,7 @@ impl GameState {
 
     fn collect_mined_tile(&mut self, mined: TileKind) {
         self.player.fuel -= DRILL_FUEL_COST;
+        self.drill_flash_seconds = 0.12;
 
         if let TileKind::Ore(mineral) = mined {
             if self.player.add_cargo(mineral) {
@@ -222,11 +274,35 @@ impl GameState {
         }
     }
 
+    fn apply_depth_pressure(&mut self, delta_seconds: f32) {
+        let safe_depth = HEAT_START_DEPTH
+            + f32::from(self.player.radiator_level.saturating_sub(1)) * 12.0 * TILE_SIZE;
+        if self.player.y <= safe_depth {
+            return;
+        }
+
+        let depth_factor = ((self.player.y - safe_depth) / (12.0 * TILE_SIZE)).max(1.0);
+        let damage = HEAT_DAMAGE_PER_SECOND * depth_factor * delta_seconds;
+        self.player.hull = (self.player.hull - damage).max(0.0);
+        "Depth pressure overheating hull. Upgrade radiator.".clone_into(&mut self.message);
+    }
+
+    fn update_camera(&mut self, delta_seconds: f32) {
+        let (target_x, target_y) = target_camera_offset(self);
+        let blend = (delta_seconds * CAMERA_SMOOTHING).clamp(0.0, 1.0);
+        self.camera_x += (target_x - self.camera_x) * blend;
+        self.camera_y += (target_y - self.camera_y) * blend;
+    }
+
     fn update_status_messages(&mut self) {
         if let Some(zone) = self.current_zone {
             self.message = match zone {
-                SurfaceZone::Fuel => "Fuel Station: press E to refuel.".to_owned(),
-                SurfaceZone::Repair => "Repair Garage: press E to repair hull.".to_owned(),
+                SurfaceZone::Fuel => {
+                    "Fuel Station: press E to buy fuel (1 credit/unit).".to_owned()
+                }
+                SurfaceZone::Repair => {
+                    "Repair Garage: press E to repair hull (2 credits/unit).".to_owned()
+                }
                 SurfaceZone::Depot => "Ore Depot: press E to sell cargo.".to_owned(),
                 SurfaceZone::Shop => shop_prompt(&self.player),
             };
@@ -312,6 +388,18 @@ fn shop_prompt(player: &Player) -> String {
         let _ = write!(prompt, "{}:{}({label}) ", index + 1, offer.name);
     }
     prompt
+}
+
+fn target_camera_offset(game: &GameState) -> (f32, f32) {
+    let screen_width = 1280.0;
+    let screen_height = 720.0;
+    let max_x = game.terrain.width() as f32 * TILE_SIZE - screen_width;
+    let max_y = game.terrain.height() as f32 * TILE_SIZE - screen_height;
+
+    (
+        (game.player.x - screen_width / 2.0).clamp(0.0, max_x),
+        (game.player.y - screen_height / 2.0).clamp(0.0, max_y),
+    )
 }
 
 fn collision_points(x: f32, y: f32) -> [TilePosition; 4] {

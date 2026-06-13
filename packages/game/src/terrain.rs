@@ -3,7 +3,9 @@
     reason = "terrain bounds are validated before indexing"
 )]
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum MineralKind {
     Copper,
     Iron,
@@ -42,7 +44,7 @@ impl MineralKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TileKind {
     Air,
     Dirt,
@@ -52,19 +54,19 @@ pub enum TileKind {
     Ore(MineralKind),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Tile {
     pub kind: TileKind,
     pub durability: u8,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TilePosition {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Terrain {
     width: i32,
     height: i32,
@@ -197,7 +199,10 @@ const fn ore_or_base_tile(x: i32, y: i32, base: TileKind) -> TileKind {
 }
 
 const fn patterned_ore(x: i32, y: i32) -> bool {
-    (x * 17 + y * 31).rem_euclid(23) == 0 || (x * 7 + y * 11).rem_euclid(41) == 0
+    let vein_a = (x * 17 + y * 31).rem_euclid(37);
+    let vein_b = (x * 7 + y * 11).rem_euclid(53);
+    let pocket = ((x / 3) * 19 + (y / 3) * 23).rem_euclid(29);
+    vein_a <= 2 || vein_b <= 1 || pocket == 0
 }
 
 const fn tile_hardness(kind: TileKind) -> u8 {

@@ -23,7 +23,9 @@ nix develop -c cargo run --bin drillgame
 - `W` / up arrow / space: thrust upward
 - `S` / down arrow: drill downward
 - `E`: interact with surface buildings or rescue prompt
-- `1`-`5`: buy upgrades while parked at the shop
+- `1`-`6`: buy upgrades while parked at the shop
+- `F5`: save to `drillgame-save.json`
+- `F9`: load from `drillgame-save.json`
 - `Esc`: quit
 
 ## Surface Buildings
@@ -31,4 +33,4 @@ nix develop -c cargo run --bin drillgame
 - Fuel Station: refills fuel
 - Repair Garage: repairs hull
 - Ore Depot: sells cargo by mineral value
-- Upgrade Shop: sells drill, fuel tank, cargo bay, engine, and hull upgrades
+- Upgrade Shop: sells drill, fuel tank, cargo bay, engine, hull, and radiator upgrades

@@ -20,7 +20,7 @@ const PLAYER_DRAW_RADIUS: f32 = 12.0;
 pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.clear_background(Color::new(105, 190, 235, 255));
 
-    let camera = camera_offset(game);
+    let camera = Vector2::new(game.camera_x, game.camera_y);
 
     draw_world(draw, game, camera);
     draw_player(draw, game, camera);
@@ -109,10 +109,17 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
         Vector2::new(screen_x, screen_y + 22.0),
         Color::ORANGE,
     );
+    if game.drill_flash_seconds > 0.0 {
+        draw.draw_circle_v(
+            Vector2::new(screen_x, screen_y + 20.0),
+            7.0,
+            Color::new(255, 230, 80, 210),
+        );
+    }
 }
 
 fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(12, 12, 460, 190, Color::new(0, 0, 0, 175));
+    draw.draw_rectangle(12, 12, 500, 216, Color::new(0, 0, 0, 175));
     draw_bar(
         draw,
         24,
@@ -151,15 +158,28 @@ fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
     draw.draw_text(
         &format!(
-            "Drill {} | Engine {} | Hull {}",
-            game.player.drill_strength, game.player.engine_level, game.player.hull_level
+            "Drill {} | Engine {} | Hull {} | Radiator {}",
+            game.player.drill_strength,
+            game.player.engine_level,
+            game.player.hull_level,
+            game.player.radiator_level
         ),
         24,
         134,
         18,
         Color::RAYWHITE,
     );
-    draw.draw_text(&game.message, 24, 164, 18, Color::RAYWHITE);
+    draw.draw_text(
+        &format!(
+            "Depth: {:.0}m | F5 save | F9 load",
+            (game.player.y / TILE_SIZE - 5.0).max(0.0)
+        ),
+        24,
+        158,
+        18,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(&game.message, 24, 188, 18, Color::RAYWHITE);
 
     draw_cargo_manifest(draw, game);
 }
@@ -262,16 +282,6 @@ fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::RAYWHITE,
     );
-}
-
-fn camera_offset(game: &GameState) -> Vector2 {
-    let max_x = game.terrain.width() as f32 * TILE_SIZE - SCREEN_WIDTH as f32;
-    let max_y = game.terrain.height() as f32 * TILE_SIZE - SCREEN_HEIGHT as f32;
-
-    Vector2::new(
-        (game.player.x - SCREEN_WIDTH as f32 / 2.0).clamp(0.0, max_x),
-        (game.player.y - SCREEN_HEIGHT as f32 / 2.0).clamp(0.0, max_y),
-    )
 }
 
 const fn tile_color(kind: TileKind) -> Color {

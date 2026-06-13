@@ -1,6 +1,15 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    reason = "service pricing intentionally converts small fuel/hull unit counts"
+)]
+
+use serde::{Deserialize, Serialize};
+
 use crate::player::Player;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum SurfaceZone {
     Fuel,
     Repair,
@@ -15,6 +24,7 @@ pub enum UpgradeKind {
     CargoBay,
     Engine,
     Hull,
+    Radiator,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,28 +37,41 @@ pub struct UpgradeOffer {
 }
 
 pub const MAX_UPGRADE_LEVEL: u8 = 5;
+pub const REFUEL_UNIT_COST: u32 = 1;
+pub const REPAIR_UNIT_COST: u32 = 2;
 
 #[must_use]
-pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 5] {
+pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 6] {
     [
         offer(UpgradeKind::Drill, player.drill_strength),
         offer(UpgradeKind::FuelTank, player.fuel_tank_level),
         offer(UpgradeKind::CargoBay, player.cargo_bay_level),
         offer(UpgradeKind::Engine, player.engine_level),
         offer(UpgradeKind::Hull, player.hull_level),
+        offer(UpgradeKind::Radiator, player.radiator_level),
     ]
 }
 
-pub const fn refuel(player: &mut Player) {
-    player.fuel = player.fuel_capacity;
+pub fn refuel(player: &mut Player) -> u32 {
+    let missing = (player.fuel_capacity - player.fuel).ceil().max(0.0);
+    let cost = affordable_service_cost(missing, REFUEL_UNIT_COST, player.credits);
+    let fuel_added = cost / REFUEL_UNIT_COST;
+    player.credits -= cost;
+    player.fuel = (player.fuel + fuel_added as f32).min(player.fuel_capacity);
+    cost
 }
 
 #[allow(
     clippy::missing_const_for_fn,
     reason = "uses player max hull calculation"
 )]
-pub fn repair(player: &mut Player) {
-    player.hull = player.max_hull();
+pub fn repair(player: &mut Player) -> u32 {
+    let missing = (player.max_hull() - player.hull).ceil().max(0.0);
+    let cost = affordable_service_cost(missing, REPAIR_UNIT_COST, player.credits);
+    let hull_added = cost / REPAIR_UNIT_COST;
+    player.credits -= cost;
+    player.hull = (player.hull + hull_added as f32).min(player.max_hull());
+    cost
 }
 
 pub fn sell_cargo(player: &mut Player) -> u32 {
@@ -105,6 +128,7 @@ fn apply_upgrade(player: &mut Player, kind: UpgradeKind) {
             player.hull_level += 1;
             player.hull = player.max_hull();
         }
+        UpgradeKind::Radiator => player.radiator_level += 1,
     }
 }
 
@@ -126,6 +150,7 @@ const fn upgrade_name(kind: UpgradeKind) -> &'static str {
         UpgradeKind::CargoBay => "Cargo Bay",
         UpgradeKind::Engine => "Engine",
         UpgradeKind::Hull => "Hull Plating",
+        UpgradeKind::Radiator => "Radiator",
     }
 }
 
@@ -136,6 +161,7 @@ const fn upgrade_description(kind: UpgradeKind) -> &'static str {
         UpgradeKind::CargoBay => "Carry more ore",
         UpgradeKind::Engine => "Stronger lift and handling",
         UpgradeKind::Hull => "Survive harder impacts",
+        UpgradeKind::Radiator => "Resist deep heat pressure",
     }
 }
 
@@ -146,6 +172,16 @@ fn upgrade_cost(kind: UpgradeKind, next_level: u8) -> u32 {
         UpgradeKind::CargoBay => 80,
         UpgradeKind::Engine => 85,
         UpgradeKind::Hull => 75,
+        UpgradeKind::Radiator => 95,
     };
     base * u32::from(next_level) * u32::from(next_level)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "service amount is bounded by small fuel/hull capacities"
+)]
+fn affordable_service_cost(missing: f32, unit_cost: u32, credits: u32) -> u32 {
+    let requested = missing as u32 * unit_cost;
+    requested.min(credits)
 }

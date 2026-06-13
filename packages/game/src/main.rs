@@ -8,6 +8,7 @@ mod game_state;
 mod input;
 mod player;
 mod rendering;
+mod save;
 mod terrain;
 
 use app::run;

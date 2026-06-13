@@ -19,4 +19,6 @@ name = "drillgame"
 path = "src/main.rs"
 
 [dependencies]
-raylib = { workspace = true }
+raylib     = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }

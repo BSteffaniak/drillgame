@@ -1,11 +1,17 @@
 use raylib::prelude::*;
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "input snapshots are simple edge/level booleans"
+)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerInput {
     pub horizontal: f32,
     pub thrust: bool,
     pub drill_down: bool,
     pub interact: bool,
+    pub save: bool,
+    pub load: bool,
     pub selected_upgrade: Option<usize>,
 }
 
@@ -24,6 +30,8 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         thrust: up,
         drill_down: down,
         interact: raylib.is_key_pressed(KeyboardKey::KEY_E),
+        save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
+        load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
         selected_upgrade: selected_upgrade(raylib),
     }
 }
@@ -39,6 +47,8 @@ fn selected_upgrade(raylib: &RaylibHandle) -> Option<usize> {
         Some(3)
     } else if raylib.is_key_pressed(KeyboardKey::KEY_FIVE) {
         Some(4)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_SIX) {
+        Some(5)
     } else {
         None
     }
