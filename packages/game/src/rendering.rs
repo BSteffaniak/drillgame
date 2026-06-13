@@ -63,20 +63,20 @@ impl GameRenderer {
         if game.run_mode == RunMode::Interior {
             draw_interior(draw, game);
         } else {
-            draw_world(draw, game, camera, &self.terrain);
-            draw_particles(draw, game, camera);
-            draw_placed_bombs(draw, game, camera);
-            draw_scanner_marks(draw, game, camera);
+            let mut world_draw = draw.begin_mode2D(world_camera(camera));
+            draw_world(&mut world_draw, game, camera, &self.terrain);
+            draw_particles(&mut world_draw, game);
+            draw_placed_bombs(&mut world_draw, game);
+            draw_scanner_marks(&mut world_draw, game);
             for cloud in &game.hazard_clouds {
-                draw.draw_circle(
-                    (cloud.x - camera.x) as i32,
-                    (cloud.y - camera.y) as i32,
+                world_draw.draw_circle_v(
+                    Vector2::new(cloud.x, cloud.y),
                     cloud.radius,
                     Color::new(90, 190, 80, 70),
                 );
             }
 
-            draw_player(draw, game, camera);
+            draw_player(&mut world_draw, game);
         }
         if game.screen_flash_seconds > 0.0 {
             let alpha = (game.screen_flash_seconds * 500.0).clamp(0.0, 180.0) as u8;
@@ -271,25 +271,27 @@ fn render_camera(game: &GameState) -> Vector2 {
     camera
 }
 
-fn draw_world(
-    draw: &mut RaylibDrawHandle<'_>,
-    game: &GameState,
-    camera: Vector2,
-    terrain: &TerrainRenderer,
-) {
-    draw_surface_buildings(draw, camera);
-    let mut world_draw = draw.begin_mode2D(Camera2D {
+fn world_camera(camera: Vector2) -> Camera2D {
+    Camera2D {
         offset: Vector2::zero(),
         target: camera,
         rotation: 0.0,
         zoom: 1.0,
-    });
-    terrain.draw(&mut world_draw, camera);
-    drop(world_draw);
+    }
+}
+
+fn draw_world(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+    camera: Vector2,
+    terrain: &TerrainRenderer,
+) {
+    draw_surface_buildings(draw);
+    terrain.draw(draw, camera);
 
     if let Some(drill) = game.active_drill {
-        let x = (drill.target.x as f32 * TILE_SIZE - camera.x) as i32;
-        let y = (drill.target.y as f32 * TILE_SIZE - camera.y) as i32;
+        let x = (drill.target.x as f32 * TILE_SIZE) as i32;
+        let y = (drill.target.y as f32 * TILE_SIZE) as i32;
         let current_durability = game
             .terrain
             .tile(drill.target)
@@ -346,24 +348,23 @@ fn draw_world(
     }
 }
 
-fn draw_surface_buildings(draw: &mut RaylibDrawHandle<'_>, camera: Vector2) {
-    draw_building(draw, camera, 0.0, 8.0, Color::DARKBLUE, "FUEL");
-    draw_building(draw, camera, 8.0, 8.0, Color::MAROON, "REPAIR");
-    draw_building(draw, camera, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
-    draw_building(draw, camera, 24.0, 8.0, Color::DARKPURPLE, "HQ");
-    draw_building(draw, camera, 32.0, 12.0, Color::PURPLE, "SHOP");
+fn draw_surface_buildings(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>) {
+    draw_building(draw, 0.0, 8.0, Color::DARKBLUE, "FUEL");
+    draw_building(draw, 8.0, 8.0, Color::MAROON, "REPAIR");
+    draw_building(draw, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
+    draw_building(draw, 24.0, 8.0, Color::DARKPURPLE, "HQ");
+    draw_building(draw, 32.0, 12.0, Color::PURPLE, "SHOP");
 }
 
 fn draw_building(
-    draw: &mut RaylibDrawHandle<'_>,
-    camera: Vector2,
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
     tile_x: f32,
     tile_width: f32,
     color: Color,
     label: &str,
 ) {
-    let x = tile_x * TILE_SIZE - camera.x;
-    let y = 3.0 * TILE_SIZE - camera.y;
+    let x = tile_x * TILE_SIZE;
+    let y = 3.0 * TILE_SIZE;
     let width = tile_width * TILE_SIZE;
 
     draw.draw_rectangle(x as i32, y as i32, width as i32, 64, color);
@@ -427,42 +428,24 @@ fn draw_building(
     draw.draw_text(label, x as i32 + 16, y as i32 + 40, 20, Color::WHITE);
 }
 
-fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+fn draw_particles(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
     if let (Some(x), Some(y)) = (game.lost_cargo_x, game.lost_cargo_y) {
-        draw.draw_rectangle(
-            (x - camera.x - 8.0) as i32,
-            (y - camera.y - 7.0) as i32,
-            16,
-            14,
-            Color::GOLD,
-        );
-        draw.draw_rectangle_lines(
-            (x - camera.x - 8.0) as i32,
-            (y - camera.y - 7.0) as i32,
-            16,
-            14,
-            Color::BROWN,
-        );
+        draw.draw_rectangle((x - 8.0) as i32, (y - 7.0) as i32, 16, 14, Color::GOLD);
+        draw.draw_rectangle_lines((x - 8.0) as i32, (y - 7.0) as i32, 16, 14, Color::BROWN);
         draw.draw_line(
-            (x - camera.x - 8.0) as i32,
-            (y - camera.y) as i32,
-            (x - camera.x + 8.0) as i32,
-            (y - camera.y) as i32,
+            (x - 8.0) as i32,
+            y as i32,
+            (x + 8.0) as i32,
+            y as i32,
             Color::BROWN,
         );
-        draw.draw_text(
-            "LOST",
-            (x - camera.x + 8.0) as i32,
-            (y - camera.y - 8.0) as i32,
-            12,
-            Color::GOLD,
-        );
+        draw.draw_text("LOST", (x + 8.0) as i32, (y - 8.0) as i32, 12, Color::GOLD);
     }
 
     for particle in &game.dust_particles {
         let alpha = (particle.life / 0.35).clamp(0.0, 1.0);
         draw.draw_circle_v(
-            Vector2::new(particle.x - camera.x, particle.y - camera.y),
+            Vector2::new(particle.x, particle.y),
             4.0,
             Color::new(190, 150, 105, (180.0 * alpha) as u8),
         );
@@ -478,22 +461,13 @@ fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vec
         } else {
             Color::new(95, 80, 70, 255)
         };
-        draw.draw_circle_v(
-            Vector2::new(boulder.x - camera.x + wobble, boulder.y - camera.y),
-            8.0,
-            color,
-        );
-        draw.draw_circle_lines(
-            (boulder.x - camera.x) as i32,
-            (boulder.y - camera.y) as i32,
-            8.0,
-            Color::DARKGRAY,
-        );
+        draw.draw_circle_v(Vector2::new(boulder.x + wobble, boulder.y), 8.0, color);
+        draw.draw_circle_lines(boulder.x as i32, boulder.y as i32, 8.0, Color::DARKGRAY);
     }
     for spark in &game.spark_particles {
         let alpha = (spark.life / 0.45).clamp(0.0, 1.0);
         draw.draw_circle_v(
-            Vector2::new(spark.x - camera.x, spark.y - camera.y),
+            Vector2::new(spark.x, spark.y),
             2.5,
             Color::new(255, 190, 60, (220.0 * alpha) as u8),
         );
@@ -512,10 +486,10 @@ fn drill_visual_offset(game: &GameState) -> (f32, f32) {
     }
 }
 
-fn draw_placed_bombs(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+fn draw_placed_bombs(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
     for bomb in &game.placed_bombs {
-        let x = (bomb.x - camera.x) as i32;
-        let y = (bomb.y - camera.y) as i32;
+        let x = bomb.x as i32;
+        let y = bomb.y as i32;
         draw.draw_circle(x, y, 7.0, Color::BLACK);
         draw.draw_circle_lines(x, y, 8.0, Color::RED);
         draw.draw_text(
@@ -528,7 +502,7 @@ fn draw_placed_bombs(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: 
     }
 }
 
-fn draw_scanner_marks(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+fn draw_scanner_marks(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
     if game.player.scanner_level == 0 {
         return;
     }
@@ -552,9 +526,11 @@ fn draw_scanner_marks(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera:
                 | TileKind::PressurePocket => Color::RED,
                 _ => continue,
             };
-            draw.draw_circle(
-                (x as f32 * TILE_SIZE + TILE_SIZE * 0.5 - camera.x) as i32,
-                (y as f32 * TILE_SIZE + TILE_SIZE * 0.5 - camera.y) as i32,
+            draw.draw_circle_v(
+                Vector2::new(
+                    x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+                    y as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+                ),
                 3.0,
                 color,
             );
@@ -566,10 +542,10 @@ fn draw_scanner_marks(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera:
     clippy::too_many_lines,
     reason = "player rendering includes upgrade visual variants"
 )]
-fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+fn draw_player(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
     let (offset_x, offset_y) = drill_visual_offset(game);
-    let screen_x = game.player.x - camera.x + offset_x;
-    let screen_y = game.player.y - camera.y + offset_y;
+    let screen_x = game.player.x + offset_x;
+    let screen_y = game.player.y + offset_y;
 
     let hull_color = if game.player.hull < game.player.max_hull() * 0.3 {
         Color::new(210, 95, 60, 255)
