@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, fs, io, path::Path};
+use std::{error::Error, fmt, fs, io, path::Path, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,8 @@ pub struct SaveSlotMetadata {
     pub cargo_used: u32,
     pub cargo_capacity: u32,
     pub contracts_completed: u32,
+    pub play_seconds: f32,
+    pub modified_unix_seconds: Option<u64>,
     pub won_game: bool,
 }
 
@@ -94,13 +96,21 @@ fn load_game_from_path(path: &str) -> Result<GameState, SaveError> {
     reason = "save slot depth is displayed as an integral tile depth"
 )]
 pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
-    let game = load_game_slot(slot).ok()?;
+    let path = slot_path(slot);
+    let modified_unix_seconds = fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    let game = load_game_from_path(&path).ok()?;
     Some(SaveSlotMetadata {
         depth: (game.player.y / crate::game_state::TILE_SIZE).floor() as i32,
         credits: game.player.credits,
         cargo_used: game.player.cargo_used(),
         cargo_capacity: game.player.cargo_capacity,
         contracts_completed: game.contracts.completed,
+        play_seconds: game.play_seconds,
+        modified_unix_seconds,
         won_game: game.won_game,
     })
 }

@@ -202,17 +202,88 @@ fn draw_building(
     let width = tile_width * TILE_SIZE;
 
     draw.draw_rectangle(x as i32, y as i32, width as i32, 64, color);
-    draw.draw_text(label, x as i32 + 16, y as i32 + 20, 20, Color::WHITE);
+    draw.draw_triangle(
+        Vector2::new(x, y),
+        Vector2::new(x + width * 0.5, y - 24.0),
+        Vector2::new(x + width, y),
+        Color::new(35, 35, 45, 255),
+    );
+    draw.draw_rectangle(
+        (x + width - 22.0) as i32,
+        (y + 18.0) as i32,
+        14,
+        46,
+        Color::new(35, 25, 18, 255),
+    );
+    draw.draw_rectangle((x + 10.0) as i32, (y + 12.0) as i32, 22, 18, Color::SKYBLUE);
+    match label {
+        "FUEL" => draw.draw_circle(
+            (x + width - 42.0) as i32,
+            (y + 28.0) as i32,
+            10.0,
+            Color::GOLD,
+        ),
+        "REPAIR" => {
+            draw.draw_rectangle(
+                (x + width - 50.0) as i32,
+                (y + 23.0) as i32,
+                24,
+                8,
+                Color::RAYWHITE,
+            );
+            draw.draw_rectangle(
+                (x + width - 42.0) as i32,
+                (y + 15.0) as i32,
+                8,
+                24,
+                Color::RAYWHITE,
+            );
+        }
+        "DEPOT" => draw.draw_rectangle(
+            (x + width - 54.0) as i32,
+            (y + 23.0) as i32,
+            28,
+            20,
+            Color::BROWN,
+        ),
+        "HQ" => draw.draw_triangle(
+            Vector2::new(x + width - 52.0, y + 42.0),
+            Vector2::new(x + width - 38.0, y + 14.0),
+            Vector2::new(x + width - 24.0, y + 42.0),
+            Color::SKYBLUE,
+        ),
+        _ => draw.draw_circle_lines(
+            (x + width - 40.0) as i32,
+            (y + 30.0) as i32,
+            13.0,
+            Color::MAGENTA,
+        ),
+    }
+    draw.draw_text(label, x as i32 + 16, y as i32 + 40, 20, Color::WHITE);
 }
 
 fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
     if let (Some(x), Some(y)) = (game.lost_cargo_x, game.lost_cargo_y) {
         draw.draw_rectangle(
-            (x - camera.x - 6.0) as i32,
-            (y - camera.y - 6.0) as i32,
-            12,
-            12,
+            (x - camera.x - 8.0) as i32,
+            (y - camera.y - 7.0) as i32,
+            16,
+            14,
             Color::GOLD,
+        );
+        draw.draw_rectangle_lines(
+            (x - camera.x - 8.0) as i32,
+            (y - camera.y - 7.0) as i32,
+            16,
+            14,
+            Color::BROWN,
+        );
+        draw.draw_line(
+            (x - camera.x - 8.0) as i32,
+            (y - camera.y) as i32,
+            (x - camera.x + 8.0) as i32,
+            (y - camera.y) as i32,
+            Color::BROWN,
         );
         draw.draw_text(
             "LOST",
@@ -1355,12 +1426,15 @@ fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bo
             || label.to_owned(),
             |meta| {
                 format!(
-                    "depth {}m | {} cr | cargo {}/{} | contracts {}{}",
+                    "depth {}m | {} cr | cargo {}/{} | contracts {} | time {}m | saved {}{}",
                     meta.depth,
                     meta.credits,
                     meta.cargo_used,
                     meta.cargo_capacity,
                     meta.contracts_completed,
+                    (meta.play_seconds / 60.0).floor() as u32,
+                    meta.modified_unix_seconds
+                        .map_or_else(|| "unknown".to_owned(), |seconds| format!("unix {seconds}")),
                     if meta.won_game { " | core secured" } else { "" }
                 )
             },

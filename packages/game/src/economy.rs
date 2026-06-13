@@ -234,12 +234,12 @@ pub const fn upgrade_effect(kind: UpgradeKind) -> &'static str {
 
 fn upgrade_cost(kind: UpgradeKind, next_level: u8) -> u32 {
     let base = match kind {
-        UpgradeKind::Drill => 120,
-        UpgradeKind::FuelTank => 95,
-        UpgradeKind::CargoBay => 110,
-        UpgradeKind::Engine => 115,
-        UpgradeKind::Hull => 105,
-        UpgradeKind::Radiator => 130,
+        UpgradeKind::Drill => 105,
+        UpgradeKind::FuelTank => 85,
+        UpgradeKind::CargoBay => 95,
+        UpgradeKind::Engine => 100,
+        UpgradeKind::Hull => 90,
+        UpgradeKind::Radiator => 115,
     };
     base * u32::from(next_level) * u32::from(next_level)
 }

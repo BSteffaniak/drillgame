@@ -205,6 +205,8 @@ pub struct GameState {
     pub trip_best_depth: i32,
     #[serde(default)]
     pub return_streak: u32,
+    #[serde(default)]
+    pub play_seconds: f32,
     pub next_milestone_tile: i32,
     #[serde(default)]
     pub current_layer_band: i32,
@@ -294,6 +296,7 @@ impl GameState {
             artifacts_found: 0,
             trip_best_depth: 0,
             return_streak: 0,
+            play_seconds: 0.0,
             next_milestone_tile: 20,
             current_layer_band: 0,
             game_over: false,
@@ -378,6 +381,9 @@ impl GameState {
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
+        if self.run_mode == RunMode::Playing && !self.game_over && !self.won_game {
+            self.play_seconds += delta_seconds;
+        }
 
         match self.run_mode {
             RunMode::Title => {
@@ -1676,5 +1682,22 @@ mod tests {
         game.recover_lost_cargo_if_near();
         assert_eq!(game.lost_cargo_count, 0);
         assert_eq!(game.player.cargo_used(), 2);
+    }
+
+    #[test]
+    fn options_changes_mark_settings_dirty() {
+        let mut game = GameState::new();
+        game.selected_menu_item = 0;
+        game.confirm_options();
+        assert!(game.take_settings_dirty());
+        assert!(!game.take_settings_dirty());
+    }
+
+    #[test]
+    fn explosive_pocket_sets_flash_and_cave_in() {
+        let mut game = GameState::new();
+        game.trigger_explosive_pocket();
+        assert!(game.screen_flash_seconds > 0.0);
+        assert!(!game.falling_boulders.is_empty());
     }
 }
