@@ -14,6 +14,7 @@ pub enum SurfaceZone {
     Fuel,
     Repair,
     Depot,
+    Headquarters,
     Shop,
 }
 

@@ -187,6 +187,10 @@ pub struct GameState {
     pub rescue_count: u32,
     #[serde(default)]
     pub artifacts_found: u32,
+    #[serde(default)]
+    pub trip_best_depth: i32,
+    #[serde(default)]
+    pub return_streak: u32,
     pub next_milestone_tile: i32,
     #[serde(default)]
     pub current_layer_band: i32,
@@ -261,6 +265,8 @@ impl GameState {
             total_earnings: 0,
             rescue_count: 0,
             artifacts_found: 0,
+            trip_best_depth: 0,
+            return_streak: 0,
             next_milestone_tile: 20,
             current_layer_band: 0,
             game_over: false,
@@ -374,6 +380,7 @@ impl GameState {
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
         self.update_layer_band();
+        self.award_return_bonus();
         self.update_warning_messages();
         self.update_status_messages();
         self.check_failure();
@@ -494,6 +501,10 @@ impl GameState {
                 self.selected_menu_item = 0;
             }
             Some(SurfaceZone::Depot) => {
+                self.modal = Some(ModalScreen::Depot);
+                self.selected_menu_item = 1;
+            }
+            Some(SurfaceZone::Headquarters) => {
                 self.modal = Some(ModalScreen::Depot);
                 self.selected_menu_item = 0;
             }
@@ -690,7 +701,7 @@ impl GameState {
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
         let can_burn_fuel = self.player.fuel > 0.0;
         let grounded = self.is_grounded();
-        let engine_multiplier = 1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.18;
+        let engine_multiplier = 1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.28;
         let horizontal_acceleration = if grounded {
             HORIZONTAL_ACCELERATION * 1.35
         } else {
@@ -882,11 +893,24 @@ impl GameState {
                     self.active_drill = None;
                     self.player.hull = (self.player.hull - 8.0).max(0.0);
                     self.sound_cues.push(SoundCue::Damage);
-                    "Lava pocket! Hull scorched.".clone_into(&mut self.message);
+                    let warning = if self
+                        .terrain
+                        .tile(target)
+                        .is_some_and(|tile| tile.kind == TileKind::MagmaVent)
+                    {
+                        "Magma vent! Hull scorched and heat rising."
+                    } else {
+                        "Lava pocket! Hull scorched."
+                    };
+                    warning.clone_into(&mut self.message);
                 }
                 MineResult::Exploded => {
                     self.active_drill = None;
                     self.trigger_gas_explosion();
+                }
+                MineResult::Blast => {
+                    self.active_drill = None;
+                    self.trigger_explosive_pocket();
                 }
                 MineResult::Chipped => {}
                 MineResult::Mined(mined) => {
@@ -925,6 +949,23 @@ impl GameState {
             .clone_into(&mut self.message);
     }
 
+    fn trigger_explosive_pocket(&mut self) {
+        self.player.fuel = (self.player.fuel - DRILL_FUEL_COST * 2.0).max(0.0);
+        self.player.hull = (self.player.hull - 24.0).max(0.0);
+        self.player.velocity_x *= -0.7;
+        self.player.velocity_y = -260.0;
+        self.sound_cues.push(SoundCue::Damage);
+        self.drill_flash_seconds = 0.35;
+        self.shake_camera(0.45, 14.0);
+        for _ in 0..12 {
+            self.spawn_dust();
+            self.spawn_sparks();
+        }
+        "Explosive pocket detonated! Hull damaged and tunnel destabilized."
+            .clone_into(&mut self.message);
+        self.spawn_cave_in();
+    }
+
     fn collect_mined_tile(&mut self, mined: TileKind, target: TilePosition) {
         self.player.fuel -= DRILL_FUEL_COST;
         self.sound_cues.push(SoundCue::Drill);
@@ -948,6 +989,14 @@ impl GameState {
             } else {
                 "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
             }
+        } else if mined == TileKind::PressurePocket {
+            self.player.velocity_y = -360.0;
+            self.player.velocity_x *= 1.4;
+            self.player.hull = (self.player.hull - 10.0).max(0.0);
+            self.shake_camera(0.3, 9.0);
+            self.sound_cues.push(SoundCue::Damage);
+            "Pressure pocket ruptured! The blast shoved the rig upward."
+                .clone_into(&mut self.message);
         } else {
             "Tunnel opened.".clone_into(&mut self.message);
         }
@@ -964,6 +1013,18 @@ impl GameState {
             self.sound_cues.push(SoundCue::Damage);
             self.shake_camera(0.18, 4.0);
             self.message.push_str(" Unstable rock falling!");
+        }
+    }
+
+    fn spawn_cave_in(&mut self) {
+        for offset in -1_i32..=1 {
+            self.falling_boulders.push(FallingBoulder {
+                x: self.player.x + offset as f32 * TILE_SIZE,
+                y: self.player.y - TILE_SIZE * 2.0,
+                velocity_y: 0.0,
+                warning_seconds: 0.45 + offset.unsigned_abs() as f32 * 0.15,
+                life: 4.0,
+            });
         }
     }
 
@@ -1080,6 +1141,9 @@ impl GameState {
     fn update_depth_milestones(&mut self) {
         let current_tile = (self.player.y / TILE_SIZE).floor() as i32;
         self.deepest_tile_reached = self.deepest_tile_reached.max(current_tile);
+        if current_tile > 6 {
+            self.trip_best_depth = self.trip_best_depth.max(current_tile);
+        }
         if self.deepest_tile_reached < self.next_milestone_tile {
             return;
         }
@@ -1168,6 +1232,22 @@ impl GameState {
         self.message = format!("Entering {layer}. Hazards and ore density increased.");
     }
 
+    fn award_return_bonus(&mut self) {
+        if self.current_zone.is_none() || self.trip_best_depth < 15 {
+            return;
+        }
+        self.return_streak += 1;
+        let depth = u32::try_from(self.trip_best_depth).unwrap_or(0);
+        let reward = (depth / 4).saturating_mul(self.return_streak.min(5));
+        self.player.credits += reward;
+        self.total_earnings += reward;
+        self.message = format!(
+            "Successful return from {}m. Trip streak x{} bonus: {reward} credits.",
+            self.trip_best_depth, self.return_streak
+        );
+        self.trip_best_depth = 0;
+    }
+
     fn update_status_messages(&mut self) {
         if self.message.starts_with("Warning:") || self.message.starts_with("CRITICAL:") {
             return;
@@ -1190,7 +1270,10 @@ impl GameState {
                 SurfaceZone::Repair => {
                     "Repair Garage: press E to repair hull (2 credits/unit).".to_owned()
                 }
-                SurfaceZone::Depot => depot_prompt(self),
+                SurfaceZone::Depot => {
+                    "Ore Depot: press E to sell cargo or review receipts.".to_owned()
+                }
+                SurfaceZone::Headquarters => depot_prompt(self),
                 SurfaceZone::Shop => shop_prompt(&self.player),
             };
         }
@@ -1218,6 +1301,13 @@ impl GameState {
         self.last_rescue_x = Some(self.player.x);
         self.last_rescue_y = Some(self.player.y);
         self.last_rescue_summary = format!("Fee: {fee} credits. Cargo lost: {lost_items}.");
+        self.depot_receipts.push(format!(
+            "RESCUE INVOICE\nDepth: {}m\nFee: {fee} cr\nCargo lost: {lost_items}",
+            (self.player.y / TILE_SIZE).floor() as i32
+        ));
+        if self.depot_receipts.len() > 5 {
+            self.depot_receipts.remove(0);
+        }
         self.player.x = 12.0 * TILE_SIZE;
         self.player.y = 4.0 * TILE_SIZE;
         self.player.velocity_x = 0.0;
@@ -1264,11 +1354,15 @@ fn drill_seconds_per_chip(kind: TileKind, drill_strength: u8, direction: DrillDi
         TileKind::Clay => 0.12,
         TileKind::Stone => 0.15,
         TileKind::HardRock => 0.19,
-        TileKind::Lava | TileKind::Gas => 0.08,
+        TileKind::Lava
+        | TileKind::Gas
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket
+        | TileKind::MagmaVent => 0.08,
         TileKind::Ore(_) => 0.16,
         TileKind::Artifact(_) => 0.21,
     };
-    let drill_bonus = 1.0 + f32::from(drill_strength.saturating_sub(1)) * 0.28;
+    let drill_bonus = 1.0 + f32::from(drill_strength.saturating_sub(1)) * 0.4;
     let direction_penalty = if direction == DrillDirection::Down {
         1.0
     } else {
@@ -1316,7 +1410,8 @@ fn surface_zone_at(x: f32, y: f32) -> Option<SurfaceZone> {
         0..=7 => Some(SurfaceZone::Fuel),
         8..=15 => Some(SurfaceZone::Repair),
         16..=23 => Some(SurfaceZone::Depot),
-        24..=35 => Some(SurfaceZone::Shop),
+        24..=31 => Some(SurfaceZone::Headquarters),
+        32..=43 => Some(SurfaceZone::Shop),
         _ => None,
     }
 }

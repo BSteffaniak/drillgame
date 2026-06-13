@@ -174,7 +174,8 @@ fn draw_surface_buildings(draw: &mut RaylibDrawHandle<'_>, camera: Vector2) {
     draw_building(draw, camera, 0.0, 8.0, Color::DARKBLUE, "FUEL");
     draw_building(draw, camera, 8.0, 8.0, Color::MAROON, "REPAIR");
     draw_building(draw, camera, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
-    draw_building(draw, camera, 24.0, 12.0, Color::PURPLE, "SHOP");
+    draw_building(draw, camera, 24.0, 8.0, Color::DARKPURPLE, "HQ");
+    draw_building(draw, camera, 32.0, 12.0, Color::PURPLE, "SHOP");
 }
 
 fn draw_building(
@@ -620,8 +621,10 @@ fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             let py = y + ty * height / terrain_height;
             let color = match tile.kind {
                 TileKind::Air => Color::new(35, 35, 45, 180),
-                TileKind::Lava => Color::RED,
+                TileKind::Lava | TileKind::MagmaVent => Color::RED,
                 TileKind::Gas => Color::GREEN,
+                TileKind::ExplosivePocket => Color::ORANGE,
+                TileKind::PressurePocket => Color::SKYBLUE,
                 TileKind::Ore(_) | TileKind::Artifact(_) => Color::GOLD,
                 _ => Color::new(105, 80, 55, 220),
             };
@@ -967,8 +970,10 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             let py = y + ty * height / terrain_height;
             let color = match tile.kind {
                 TileKind::Air => Color::new(40, 42, 55, 255),
-                TileKind::Lava => Color::RED,
+                TileKind::Lava | TileKind::MagmaVent => Color::RED,
                 TileKind::Gas => Color::GREEN,
+                TileKind::ExplosivePocket => Color::ORANGE,
+                TileKind::PressurePocket => Color::SKYBLUE,
                 TileKind::Ore(mineral) if mineral.value() >= 78 => Color::ORANGE,
                 TileKind::Ore(_) => Color::GOLD,
                 TileKind::Artifact(_) => Color::MAGENTA,
@@ -987,7 +992,8 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         (4, 4, "FUEL", Color::BLUE),
         (12, 4, "FIX", Color::MAROON),
         (20, 4, "DEPOT", Color::GREEN),
-        (30, 4, "SHOP", Color::PURPLE),
+        (28, 4, "HQ", Color::DARKPURPLE),
+        (38, 4, "SHOP", Color::PURPLE),
     ];
     for (tx, ty, label, color) in buildings {
         let px = x + tx * width / terrain_width;
@@ -1318,6 +1324,9 @@ const fn tile_color(kind: TileKind) -> Color {
         TileKind::HardRock => Color::new(54, 54, 60, 255),
         TileKind::Lava => Color::new(255, 84, 28, 255),
         TileKind::Gas => Color::new(100, 210, 120, 180),
+        TileKind::ExplosivePocket => Color::ORANGE,
+        TileKind::PressurePocket => Color::SKYBLUE,
+        TileKind::MagmaVent => Color::new(255, 36, 12, 255),
         TileKind::Ore(mineral) => mineral_color(mineral),
         TileKind::Artifact(artifact) => artifact_color(artifact),
     }

@@ -83,6 +83,9 @@ pub enum TileKind {
     HardRock,
     Lava,
     Gas,
+    ExplosivePocket,
+    PressurePocket,
+    MagmaVent,
     Ore(MineralKind),
     Artifact(ArtifactKind),
 }
@@ -98,6 +101,9 @@ impl TileKind {
             Self::HardRock => "hard rock",
             Self::Lava => "lava",
             Self::Gas => "gas",
+            Self::ExplosivePocket => "explosive pocket",
+            Self::PressurePocket => "pressure pocket",
+            Self::MagmaVent => "magma vent",
             Self::Ore(mineral) => mineral.name(),
             Self::Artifact(artifact) => artifact.name(),
         }
@@ -200,7 +206,7 @@ impl Terrain {
             return MineResult::Blocked;
         }
 
-        if tile.kind == TileKind::Lava {
+        if matches!(tile.kind, TileKind::Lava | TileKind::MagmaVent) {
             return MineResult::TooDangerous;
         }
 
@@ -208,6 +214,12 @@ impl Terrain {
             tile.kind = TileKind::Air;
             tile.durability = 0;
             return MineResult::Exploded;
+        }
+
+        if tile.kind == TileKind::ExplosivePocket {
+            tile.kind = TileKind::Air;
+            tile.durability = 0;
+            return MineResult::Blast;
         }
 
         tile.durability = tile.durability.saturating_sub(1);
@@ -235,6 +247,7 @@ pub enum MineResult {
     Blocked,
     TooDangerous,
     Exploded,
+    Blast,
     Chipped,
     Mined(TileKind),
 }
@@ -246,6 +259,18 @@ const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
 
     if cave_air(x, y, seed) {
         return TileKind::Air;
+    }
+
+    if explosive_pocket(x, y, seed) {
+        return TileKind::ExplosivePocket;
+    }
+
+    if pressure_pocket(x, y, seed) {
+        return TileKind::PressurePocket;
+    }
+
+    if magma_vent(x, y, seed) {
+        return TileKind::MagmaVent;
     }
 
     if lava_pocket(x, y, seed) {
@@ -282,6 +307,18 @@ const fn cave_air(x: i32, y: i32, seed: u64) -> bool {
     let cavern = seeded_hash(x / 5, y / 4, seed) % 47;
     let tunnel = seeded_hash(x, y, seed ^ 0xA5A5) % 97;
     cavern == 0 || tunnel == 0
+}
+
+const fn explosive_pocket(x: i32, y: i32, seed: u64) -> bool {
+    y > 28 && seeded_hash(x / 2, y / 2, seed ^ 0xE770).is_multiple_of(173)
+}
+
+const fn pressure_pocket(x: i32, y: i32, seed: u64) -> bool {
+    y > 34 && y < 76 && seeded_hash(x / 3, y / 2, seed ^ 0x9A5).is_multiple_of(149)
+}
+
+const fn magma_vent(x: i32, y: i32, seed: u64) -> bool {
+    y > 54 && (x + y).rem_euclid(7) == 0 && seeded_hash(x, y / 4, seed ^ 0xA11).is_multiple_of(41)
 }
 
 const fn lava_pocket(x: i32, y: i32, seed: u64) -> bool {
@@ -369,7 +406,12 @@ const fn seeded_hash(x: i32, y: i32, seed: u64) -> u64 {
 
 const fn tile_hardness(kind: TileKind) -> u8 {
     match kind {
-        TileKind::Air | TileKind::Lava | TileKind::Gas => 0,
+        TileKind::Air
+        | TileKind::Lava
+        | TileKind::Gas
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket
+        | TileKind::MagmaVent => 0,
         TileKind::Dirt | TileKind::Ore(MineralKind::Copper | MineralKind::Iron) => 1,
         TileKind::Clay | TileKind::Ore(MineralKind::Silver | MineralKind::Gold) => 2,
         TileKind::Stone
@@ -388,7 +430,11 @@ const fn tile_durability(kind: TileKind) -> u8 {
         TileKind::Clay => 4,
         TileKind::Stone => 7,
         TileKind::HardRock => 11,
-        TileKind::Lava | TileKind::Gas => 1,
+        TileKind::Lava
+        | TileKind::Gas
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket
+        | TileKind::MagmaVent => 1,
         TileKind::Ore(mineral) => tile_hardness(TileKind::Ore(mineral)) + 2,
         TileKind::Artifact(artifact) => tile_hardness(TileKind::Artifact(artifact)) + 5,
     }
