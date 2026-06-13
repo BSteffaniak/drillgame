@@ -28,6 +28,7 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw_player(draw, game, camera);
     draw_hud(draw, game);
     draw_depth_ruler(draw, game);
+    draw_minimap(draw, game);
 
     if game.run_mode == RunMode::Title {
         draw_title(draw);
@@ -42,6 +43,10 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.game_over {
         draw_game_over(draw, game);
     }
+
+    if game.won_game {
+        draw_ending(draw, game);
+    }
 }
 
 fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
@@ -55,7 +60,8 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
                 continue;
             };
 
-            if tile.kind == TileKind::Air {
+            let explored = game.is_explored(position);
+            if explored && tile.kind == TileKind::Air {
                 continue;
             }
 
@@ -64,10 +70,14 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
                 (y as f32 * TILE_SIZE - camera.y) as i32,
                 TILE_SIZE as i32,
                 TILE_SIZE as i32,
-                tile_color(tile.kind),
+                if explored {
+                    tile_color(tile.kind)
+                } else {
+                    Color::new(18, 14, 18, 255)
+                },
             );
 
-            if tile.durability > 0 {
+            if explored && tile.durability > 0 {
                 draw.draw_rectangle_lines(
                     (x as f32 * TILE_SIZE - camera.x) as i32,
                     (y as f32 * TILE_SIZE - camera.y) as i32,
@@ -333,6 +343,49 @@ fn draw_detail_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 }
 
+fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let x = SCREEN_WIDTH - 168;
+    let y = SCREEN_HEIGHT - 166;
+    let width = 130;
+    let height = 96;
+    draw.draw_rectangle(
+        x - 8,
+        y - 24,
+        width + 16,
+        height + 32,
+        Color::new(0, 0, 0, 150),
+    );
+    draw.draw_text("Mine Map", x, y - 20, 16, Color::WHITE);
+
+    let terrain_width = game.terrain.width().max(1);
+    let terrain_height = game.terrain.height().max(1);
+    for ty in 0..terrain_height {
+        for tx in 0..terrain_width {
+            let position = TilePosition { x: tx, y: ty };
+            if !game.is_explored(position) {
+                continue;
+            }
+            let Some(tile) = game.terrain.tile(position) else {
+                continue;
+            };
+            let px = x + tx * width / terrain_width;
+            let py = y + ty * height / terrain_height;
+            let color = match tile.kind {
+                TileKind::Air => Color::new(35, 35, 45, 180),
+                TileKind::Lava => Color::RED,
+                TileKind::Gas => Color::GREEN,
+                TileKind::Ore(_) | TileKind::Artifact(_) => Color::GOLD,
+                _ => Color::new(105, 80, 55, 220),
+            };
+            draw.draw_pixel(px, py, color);
+        }
+    }
+
+    let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
+    let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
+    draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
+}
+
 fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let x = SCREEN_WIDTH - 30;
     let top = 80;
@@ -378,29 +431,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
             );
             draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
         }
-        ModalScreen::Depot => {
-            draw.draw_text("Ore Depot", 330, 150, 30, Color::GREEN);
-            draw.draw_text(
-                "Enter/E: complete contract if ready, otherwise sell cargo",
-                330,
-                210,
-                22,
-                Color::WHITE,
-            );
-            draw.draw_text(
-                &format!(
-                    "Contract: {}/{} {} for {} credits",
-                    game.contracts.active.progress(&game.player),
-                    game.contracts.active.required,
-                    game.contracts.active.target.name(),
-                    game.contracts.active.reward
-                ),
-                330,
-                248,
-                20,
-                Color::RAYWHITE,
-            );
-        }
+        ModalScreen::Depot => draw_modal_depot(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
@@ -410,6 +441,56 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 210,
                 22,
                 Color::WHITE,
+            );
+        }
+    }
+}
+
+fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Ore Depot", 330, 150, 30, Color::GREEN);
+    draw.draw_text(
+        "Up/Down select | Enter/E confirm | Backspace/Esc close",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
+
+    let options = ["Complete active contract", "Sell loose cargo"];
+    for (index, option) in options.iter().enumerate() {
+        let y = 230 + i32::try_from(index).unwrap_or(i32::MAX) * 36;
+        let color = if index == game.selected_menu_item {
+            Color::YELLOW
+        } else {
+            Color::WHITE
+        };
+        draw.draw_text(option, 350, y, 22, color);
+    }
+
+    draw.draw_text(
+        &format!(
+            "{}: {}/{} {} for {} credits",
+            game.contracts.active.title,
+            game.contracts.active.progress(&game.player),
+            game.contracts.active.required,
+            game.contracts.active.target.name(),
+            game.contracts.active.reward
+        ),
+        330,
+        320,
+        20,
+        Color::RAYWHITE,
+    );
+
+    if !game.last_depot_receipt.is_empty() {
+        draw.draw_text("Last receipt:", 330, 360, 18, Color::LIGHTGRAY);
+        for (index, line) in game.last_depot_receipt.lines().take(5).enumerate() {
+            draw.draw_text(
+                line,
+                350,
+                386 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+                16,
+                Color::RAYWHITE,
             );
         }
     }
@@ -487,6 +568,21 @@ fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         455,
         455,
         18,
+        Color::LIGHTGRAY,
+    );
+}
+
+fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(5, 8, 18, 205));
+    draw.draw_rectangle(300, 220, 680, 240, Color::new(0, 0, 0, 230));
+    draw.draw_rectangle_lines(300, 220, 680, 240, Color::GOLD);
+    draw.draw_text("STAR CORE RECOVERED", 392, 255, 40, Color::GOLD);
+    draw.draw_text(&game.message, 340, 325, 20, Color::RAYWHITE);
+    draw.draw_text(
+        "You can keep mining, save, or exit from the pause menu.",
+        382,
+        380,
+        20,
         Color::LIGHTGRAY,
     );
 }

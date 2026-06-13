@@ -112,6 +112,8 @@ pub struct GameState {
     pub show_details: bool,
     pub request_exit: bool,
     pub won_game: bool,
+    pub explored_tiles: Vec<bool>,
+    pub last_depot_receipt: String,
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
     pub game_over: bool,
@@ -150,6 +152,8 @@ impl GameState {
             show_details: false,
             request_exit: false,
             won_game: false,
+            explored_tiles: vec![false; (WORLD_WIDTH * WORLD_HEIGHT) as usize],
+            last_depot_receipt: String::new(),
             deepest_tile_reached: 0,
             next_milestone_tile: 20,
             game_over: false,
@@ -166,6 +170,7 @@ impl GameState {
         self.show_details = input.details;
         self.handle_save_load(input);
         self.update_particles(delta_seconds);
+        self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
 
         match self.run_mode {
@@ -210,6 +215,37 @@ impl GameState {
         self.update_status_messages();
         self.check_failure();
         self.update_camera(delta_seconds);
+    }
+
+    fn reveal_near_player(&mut self) {
+        let center_x = (self.player.x / TILE_SIZE).floor() as i32;
+        let center_y = (self.player.y / TILE_SIZE).floor() as i32;
+        for y in center_y - 3..=center_y + 3 {
+            for x in center_x - 4..=center_x + 4 {
+                if let Some(index) = self.tile_index(TilePosition { x, y }) {
+                    self.explored_tiles[index] = true;
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_explored(&self, position: TilePosition) -> bool {
+        self.tile_index(position)
+            .and_then(|index| self.explored_tiles.get(index))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    const fn tile_index(&self, position: TilePosition) -> Option<usize> {
+        if position.x < 0
+            || position.y < 0
+            || position.x >= self.terrain.width()
+            || position.y >= self.terrain.height()
+        {
+            return None;
+        }
+        Some((position.y * self.terrain.width() + position.x) as usize)
     }
 
     fn handle_pause_menu(&mut self, input: PlayerInput) {
@@ -320,10 +356,10 @@ impl GameState {
             self.selected_menu_item = self.selected_menu_item.saturating_sub(1);
         }
         if input.menu_down {
-            let max_item = if modal == ModalScreen::Shop {
-                upgrade_offers(&self.player).len() - 1
-            } else {
-                0
+            let max_item = match modal {
+                ModalScreen::Shop => upgrade_offers(&self.player).len() - 1,
+                ModalScreen::Depot => 1,
+                ModalScreen::Fuel | ModalScreen::Repair | ModalScreen::ExitConfirm => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
         }
@@ -364,6 +400,14 @@ impl GameState {
     }
 
     fn confirm_depot(&mut self) {
+        if self.selected_menu_item == 0 {
+            self.confirm_contract();
+        } else {
+            self.confirm_sell_cargo();
+        }
+    }
+
+    fn confirm_contract(&mut self) {
         if let Some(completion) = self.contracts.try_complete(&mut self.player) {
             self.sound_cues.push(SoundCue::Sell);
             if completion.finished_story {
@@ -378,7 +422,30 @@ impl GameState {
                     completion.completed_title, completion.reward
                 );
             }
-            return;
+        } else {
+            "Contract target not ready.".clone_into(&mut self.message);
+        }
+    }
+
+    fn confirm_sell_cargo(&mut self) {
+        self.last_depot_receipt.clear();
+        for (mineral, count) in &self.player.cargo {
+            let _ = writeln!(
+                &mut self.last_depot_receipt,
+                "{} x{} = {} cr",
+                mineral.name(),
+                count,
+                mineral.value() * count
+            );
+        }
+        for (artifact, count) in &self.player.artifacts {
+            let _ = writeln!(
+                &mut self.last_depot_receipt,
+                "{} x{} = {} cr",
+                artifact.name(),
+                count,
+                artifact.value() * count
+            );
         }
 
         let payout = sell_cargo(&mut self.player);

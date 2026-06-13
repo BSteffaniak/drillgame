@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::game_state::GameState;
 
 const SAVE_PATH: &str = "drillgame-save.json";
-const SAVE_VERSION: u32 = 1;
+const SAVE_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SaveFile {
@@ -65,13 +65,13 @@ mod tests {
     fn game_state_round_trips_through_versioned_json() {
         let game = GameState::new();
         let save = SaveFile {
-            version: 1,
+            version: 2,
             game: game.clone_for_save(),
         };
         let json = serde_json::to_string(&save).expect("serialize game");
         let loaded: SaveFile = serde_json::from_str(&json).expect("deserialize game");
 
-        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.version, 2);
         assert_eq!(
             loaded.game.player.cargo_capacity,
             game.player.cargo_capacity

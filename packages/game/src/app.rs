@@ -1,4 +1,4 @@
-use crate::{game_state::GameState, input::read_input, rendering::render};
+use crate::{audio::AudioBus, game_state::GameState, input::read_input, rendering::render};
 
 const WINDOW_WIDTH: i32 = 1280;
 const WINDOW_HEIGHT: i32 = 720;
@@ -14,12 +14,14 @@ pub fn run() {
     raylib.set_exit_key(None);
 
     let mut game = GameState::new();
+    let _audio = AudioBus::new();
 
     while !raylib.window_should_close() && !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
         let input = read_input(&raylib);
 
         game.update(input, delta_seconds);
+        AudioBus::play(&game.sound_cues);
 
         let mut draw = raylib.begin_drawing(&thread);
         render(&mut draw, &game);
