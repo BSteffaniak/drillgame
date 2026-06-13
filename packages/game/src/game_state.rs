@@ -140,6 +140,19 @@ pub struct HazardCloud {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct PlacedBomb {
+    pub x: f32,
+    pub y: f32,
+    pub timer_seconds: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ServiceAnimation {
+    Fuel,
+    Repair,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct FallingBoulder {
     pub x: f32,
     pub y: f32,
@@ -250,6 +263,14 @@ pub struct GameState {
     #[serde(default)]
     pub hazard_clouds: Vec<HazardCloud>,
     #[serde(default)]
+    pub placed_bombs: Vec<PlacedBomb>,
+    #[serde(default)]
+    pub service_animation: Option<ServiceAnimation>,
+    #[serde(default)]
+    pub service_animation_seconds: f32,
+    #[serde(default)]
+    pub market_salt: u32,
+    #[serde(default)]
     pub falling_boulders: Vec<FallingBoulder>,
     #[serde(default)]
     pub spark_particles: Vec<SparkParticle>,
@@ -336,6 +357,10 @@ impl GameState {
             active_drill: None,
             dust_particles: Vec::new(),
             hazard_clouds: Vec::new(),
+            placed_bombs: Vec::new(),
+            service_animation: None,
+            service_animation_seconds: 0.0,
+            market_salt: 0,
             falling_boulders: Vec::new(),
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
@@ -402,6 +427,8 @@ impl GameState {
             self.sound_cues.push(SoundCue::Ui);
         }
         self.update_particles(delta_seconds);
+        self.update_placed_bombs(delta_seconds);
+        self.update_service_animation(delta_seconds);
         self.update_boulders(delta_seconds);
         self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
         self.screen_flash_seconds = (self.screen_flash_seconds - delta_seconds).max(0.0);
@@ -795,6 +822,8 @@ impl GameState {
         };
         if cost > 0 {
             self.sound_cues.push(SoundCue::Upgrade);
+            self.service_animation = Some(ServiceAnimation::Fuel);
+            self.service_animation_seconds = 1.4;
         }
         self.modal = Some(ModalScreen::Fuel);
     }
@@ -809,6 +838,8 @@ impl GameState {
         };
         if cost > 0 {
             self.sound_cues.push(SoundCue::Upgrade);
+            self.service_animation = Some(ServiceAnimation::Repair);
+            self.service_animation_seconds = 1.4;
         }
         self.modal = Some(ModalScreen::Repair);
     }
@@ -893,20 +924,31 @@ impl GameState {
             );
         }
 
+        let factor = market_factor(self.market_salt);
         let payout = sell_cargo(&mut self.player);
-        if payout > 0 {
-            self.total_earnings += payout;
-            let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {payout} cr");
+        let adjusted = payout.saturating_mul(factor) / 100;
+        if adjusted != payout {
+            self.player.credits = self
+                .player
+                .credits
+                .saturating_sub(payout)
+                .saturating_add(adjusted);
+        }
+        self.market_salt = self.market_salt.wrapping_add(1);
+        if adjusted > 0 {
+            self.total_earnings += adjusted;
+            let _ = writeln!(&mut self.last_depot_receipt, "MARKET {factor}%");
+            let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {adjusted} cr");
             self.depot_receipts.push(self.last_depot_receipt.clone());
             if self.depot_receipts.len() > 5 {
                 self.depot_receipts.remove(0);
             }
         }
-        if payout == 0 {
+        if adjusted == 0 {
             "No cargo to sell.".clone_into(&mut self.message);
         } else {
             self.sound_cues.push(SoundCue::Sell);
-            self.message = format!("Sold cargo for {payout} credits.");
+            self.message = format!("Sold cargo for {adjusted} credits at {factor}% market.");
         }
     }
 
@@ -945,16 +987,16 @@ impl GameState {
             return;
         }
         self.player.bombs -= 1;
-        let cleared = self
-            .terrain
-            .blast_radius(self.player.tile_position(TILE_SIZE), 2);
-        self.sound_cues.push(SoundCue::Explosion);
-        self.screen_flash_seconds = self.screen_flash_seconds.max(0.18);
+        self.placed_bombs.push(PlacedBomb {
+            x: self.player.x,
+            y: self.player.y + TILE_SIZE * 0.4,
+            timer_seconds: 2.4,
+        });
+        self.sound_cues.push(SoundCue::Ui);
         self.message = format!(
-            "Bomb detonated. Cleared {cleared} tiles. {} bombs left.",
+            "Bomb armed: 2.4 seconds. {} bombs left. Clear out!",
             self.player.bombs
         );
-        self.reveal_near_player();
     }
 
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
@@ -1294,6 +1336,74 @@ impl GameState {
                 warning_seconds: 0.45 + offset.unsigned_abs() as f32 * 0.15,
                 life: 4.0,
             });
+        }
+    }
+
+    fn update_service_animation(&mut self, delta_seconds: f32) {
+        self.service_animation_seconds = (self.service_animation_seconds - delta_seconds).max(0.0);
+        if self.service_animation_seconds == 0.0 {
+            self.service_animation = None;
+        }
+    }
+
+    fn update_placed_bombs(&mut self, delta_seconds: f32) {
+        let mut detonations = Vec::new();
+        for bomb in &mut self.placed_bombs {
+            bomb.timer_seconds -= delta_seconds;
+            if bomb.timer_seconds <= 0.0 {
+                detonations.push(TilePosition {
+                    x: (bomb.x / TILE_SIZE).floor() as i32,
+                    y: (bomb.y / TILE_SIZE).floor() as i32,
+                });
+            }
+        }
+        self.placed_bombs.retain(|bomb| bomb.timer_seconds > 0.0);
+        for center in detonations {
+            self.detonate_bomb(center, 2);
+        }
+    }
+
+    fn detonate_bomb(&mut self, center: TilePosition, radius: i32) {
+        let cleared = self.terrain.blast_radius(center, radius);
+        self.sound_cues.push(SoundCue::Explosion);
+        self.screen_flash_seconds = self.screen_flash_seconds.max(0.22);
+        self.shake_camera(0.45, 13.0);
+        for _ in 0..14 {
+            self.spawn_dust();
+            self.spawn_sparks();
+        }
+        let distance = ((self.player.x / TILE_SIZE - center.x as f32).abs()
+            + (self.player.y / TILE_SIZE - center.y as f32).abs())
+        .max(0.0);
+        if distance <= radius as f32 + 1.0 {
+            self.player.hull = (self.player.hull - 22.0).max(0.0);
+        }
+        self.chain_react_near(center, radius + 2);
+        self.message =
+            format!("Bomb detonated. Cleared {cleared} tiles and rattled nearby pockets.");
+        self.reveal_near_player();
+    }
+
+    fn chain_react_near(&mut self, center: TilePosition, radius: i32) {
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if (x - center.x).abs() + (y - center.y).abs() > radius {
+                    continue;
+                }
+                let position = TilePosition { x, y };
+                if matches!(
+                    self.terrain.tile(position).map(|tile| tile.kind),
+                    Some(TileKind::Gas | TileKind::ExplosivePocket | TileKind::PressurePocket)
+                ) {
+                    let _ = self.terrain.blast_radius(position, 1);
+                    self.hazard_clouds.push(HazardCloud {
+                        x: x as f32 * TILE_SIZE,
+                        y: y as f32 * TILE_SIZE,
+                        life: 6.0,
+                        radius: 18.0,
+                    });
+                }
+            }
         }
     }
 
@@ -1742,6 +1852,10 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
             },
         )
     })
+}
+
+const fn market_factor(salt: u32) -> u32 {
+    85 + salt.wrapping_mul(37).wrapping_add(11) % 41
 }
 
 const fn surface_zone_label(zone: SurfaceZone) -> &'static str {

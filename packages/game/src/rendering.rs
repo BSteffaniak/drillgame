@@ -10,7 +10,9 @@ use raylib::prelude::*;
 
 use crate::{
     economy::{SurfaceZone, UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
-    game_state::{DrillDirection, GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
+    game_state::{
+        DrillDirection, GameState, ModalScreen, PauseOption, RunMode, ServiceAnimation, TILE_SIZE,
+    },
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
@@ -37,6 +39,8 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     } else {
         draw_world(draw, game, camera);
         draw_particles(draw, game, camera);
+        draw_placed_bombs(draw, game, camera);
+        draw_scanner_marks(draw, game, camera);
         for cloud in &game.hazard_clouds {
             draw.draw_circle(
                 (cloud.x - camera.x) as i32,
@@ -108,6 +112,7 @@ fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("EXIT", 55, 310, 18, Color::GOLD);
 
     draw_interior_props(draw, zone);
+    draw_service_animation(draw, game, zone);
     let service_x = interior_screen_x(interior_service_x_render(zone));
     draw.draw_text("Press E", (service_x - 42.0) as i32, 292, 18, Color::YELLOW);
 
@@ -123,6 +128,30 @@ fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         20,
         Color::LIGHTGRAY,
     );
+}
+
+fn draw_service_animation(draw: &mut RaylibDrawHandle<'_>, game: &GameState, zone: SurfaceZone) {
+    let Some(animation) = game.service_animation else {
+        return;
+    };
+    let pulse = (game.service_animation_seconds * 18.0) as i32;
+    match animation {
+        ServiceAnimation::Fuel if zone == SurfaceZone::Fuel => {
+            draw.draw_line_ex(
+                Vector2::new(820.0, 372.0),
+                Vector2::new(620.0, 420.0),
+                5.0,
+                Color::YELLOW,
+            );
+            draw.draw_circle(620, 420, 10.0 + (pulse.rem_euclid(6)) as f32, Color::GOLD);
+            draw.draw_text("FUELING", 610, 365, 24, Color::GOLD);
+        }
+        ServiceAnimation::Repair if zone == SurfaceZone::Repair => {
+            draw.draw_rectangle(672, 392 - pulse.rem_euclid(12), 235, 8, Color::ORANGE);
+            draw.draw_text("REPAIR CREW", 615, 365, 24, Color::ORANGE);
+        }
+        _ => {}
+    }
 }
 
 fn draw_interior_props(draw: &mut RaylibDrawHandle<'_>, zone: SurfaceZone) {
@@ -510,6 +539,60 @@ fn drill_visual_offset(game: &GameState) -> (f32, f32) {
     }
 }
 
+fn draw_placed_bombs(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+    for bomb in &game.placed_bombs {
+        let x = (bomb.x - camera.x) as i32;
+        let y = (bomb.y - camera.y) as i32;
+        draw.draw_circle(x, y, 7.0, Color::BLACK);
+        draw.draw_circle_lines(x, y, 8.0, Color::RED);
+        draw.draw_text(
+            &format!("{:.1}", bomb.timer_seconds.max(0.0)),
+            x - 11,
+            y - 24,
+            14,
+            Color::YELLOW,
+        );
+    }
+}
+
+fn draw_scanner_marks(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+    if game.player.scanner_level == 0 {
+        return;
+    }
+    let center = game.player.tile_position(TILE_SIZE);
+    let radius = 3 + i32::from(game.player.scanner_level) * 2;
+    for y in center.y - radius..=center.y + radius {
+        for x in center.x - radius..=center.x + radius {
+            if (x - center.x).abs() + (y - center.y).abs() > radius {
+                continue;
+            }
+            let Some(tile) = game.terrain.tile(TilePosition { x, y }) else {
+                continue;
+            };
+            let color = match tile.kind {
+                TileKind::Ore(_) => Color::GOLD,
+                TileKind::Artifact(_) => Color::MAGENTA,
+                TileKind::Gas
+                | TileKind::Lava
+                | TileKind::MagmaVent
+                | TileKind::ExplosivePocket
+                | TileKind::PressurePocket => Color::RED,
+                _ => continue,
+            };
+            draw.draw_circle(
+                (x as f32 * TILE_SIZE + TILE_SIZE * 0.5 - camera.x) as i32,
+                (y as f32 * TILE_SIZE + TILE_SIZE * 0.5 - camera.y) as i32,
+                3.0,
+                color,
+            );
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "player rendering includes upgrade visual variants"
+)]
 fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
     let (offset_x, offset_y) = drill_visual_offset(game);
     let screen_x = game.player.x - camera.x + offset_x;
@@ -598,6 +681,41 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
             (screen_y - 25.0) as i32,
             7.0,
             Color::new(45, 45, 45, smoke_alpha.saturating_sub(25)),
+        );
+    }
+    if game.player.scanner_level > 0 {
+        draw.draw_circle_lines(
+            screen_x as i32,
+            (screen_y - 24.0) as i32,
+            8.0 + f32::from(game.player.scanner_level) * 2.0,
+            Color::SKYBLUE,
+        );
+        draw.draw_line(
+            screen_x as i32,
+            (screen_y - 16.0) as i32,
+            screen_x as i32,
+            (screen_y - 30.0) as i32,
+            Color::SKYBLUE,
+        );
+    }
+    if game.player.radiator_level > 1 {
+        for fin in 0..game.player.radiator_level {
+            draw.draw_rectangle(
+                (screen_x + 16.0) as i32,
+                (screen_y - 14.0 + f32::from(fin) * 5.0) as i32,
+                10,
+                2,
+                Color::ORANGE,
+            );
+        }
+    }
+    if game.player.hull_level > 2 {
+        draw.draw_rectangle_lines(
+            (screen_x - 19.0) as i32,
+            (screen_y - 18.0) as i32,
+            38,
+            36,
+            Color::GOLD,
         );
     }
     if game.drill_flash_seconds > 0.0 {
@@ -1752,6 +1870,11 @@ fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         format!("Deepest depth: {}m", game.deepest_tile_reached),
         format!("Rescues: {}", game.rescue_count),
         format!("Artifacts found: {}", game.artifacts_found),
+        format!("Debt remaining: {} cr", game.player.loan_debt),
+        format!(
+            "Bombs left / scanner tier: {} / {}",
+            game.player.bombs, game.player.scanner_level
+        ),
     ];
     for (index, stat) in stats.iter().enumerate() {
         draw.draw_text(
