@@ -14,6 +14,7 @@ pub(super) fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(35, 130, 1210, 380, Color::new(18, 18, 24, 220));
     draw.draw_rectangle_lines(35, 130, 1210, 380, trim);
     draw.draw_text(title, 65, 150, 30, Color::RAYWHITE);
+    draw.draw_text(npc_line(zone, game), 65, 188, 18, Color::LIGHTGRAY);
 
     draw.draw_rectangle(58, 338, 48, 118, Color::new(55, 32, 20, 255));
     draw.draw_rectangle_lines(58, 338, 48, 118, Color::GOLD);
@@ -36,6 +37,28 @@ pub(super) fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         20,
         Color::LIGHTGRAY,
     );
+}
+
+fn npc_line(zone: SurfaceZone, game: &GameState) -> &'static str {
+    match zone {
+        SurfaceZone::Fuel if game.player.fuel < game.player.fuel_capacity * 0.25 => {
+            "Pip: You came in on fumes. Try leaving with more than courage."
+        }
+        SurfaceZone::Fuel => "Pip: Fuel sale rumors start as soon as miners stop exploding.",
+        SurfaceZone::Repair if game.rescue_count > 0 => {
+            "Iona: I patched your rescue dents. The drill keeps receipts."
+        }
+        SurfaceZone::Repair => "Iona: Slow landings are cheaper than heroic ones.",
+        SurfaceZone::Depot => "Kade: Market's twitchy. Sell jackpots before the buyers blink.",
+        SurfaceZone::Headquarters => "Director Vale: Bring contracts, not ghost stories.",
+        SurfaceZone::Shop => "Bolt: If it still rattles, upgrade the part making the noise.",
+        SurfaceZone::Bank if game.player.loan_debt > 0 => {
+            "Ledger: Debt compounds faster than tunnels collapse."
+        }
+        SurfaceZone::Bank => "Ledger: Credit is just fuel with paperwork.",
+        SurfaceZone::Explosives => "Nix: Set it, run, then brag from a safer zip code.",
+        SurfaceZone::Salvage => "Mara: Everything lost underground becomes inventory eventually.",
+    }
 }
 
 fn draw_service_animation(draw: &mut RaylibDrawHandle<'_>, game: &GameState, zone: SurfaceZone) {
@@ -95,6 +118,23 @@ fn draw_interior_props(draw: &mut RaylibDrawHandle<'_>, zone: SurfaceZone) {
             }
             draw.draw_text("UPGRADE WALL", 705, 265, 22, Color::MAGENTA);
         }
+        SurfaceZone::Bank => {
+            draw.draw_rectangle(690, 315, 260, 95, Color::new(20, 70, 45, 255));
+            draw.draw_rectangle_lines(690, 315, 260, 95, Color::GOLD);
+            draw.draw_text("CREDIT / DEBT", 715, 278, 22, Color::GOLD);
+        }
+        SurfaceZone::Explosives => {
+            draw.draw_rectangle(690, 330, 280, 85, Color::MAROON);
+            for index in 0..4 {
+                draw.draw_circle(725 + index * 55, 372, 16.0, Color::BLACK);
+            }
+            draw.draw_text("TIMED CHARGES", 708, 292, 22, Color::RED);
+        }
+        SurfaceZone::Salvage => {
+            draw.draw_rectangle(675, 390, 320, 25, Color::GRAY);
+            draw.draw_rectangle(735, 325, 120, 70, Color::BROWN);
+            draw.draw_text("SCRAP / RECOVERY", 690, 288, 22, Color::LIME);
+        }
     }
 }
 
@@ -109,6 +149,9 @@ const fn interior_service_x_render(zone: SurfaceZone) -> f32 {
         SurfaceZone::Depot => 455.0,
         SurfaceZone::Headquarters => 390.0,
         SurfaceZone::Shop => 450.0,
+        SurfaceZone::Bank => 380.0,
+        SurfaceZone::Explosives => 431.0,
+        SurfaceZone::Salvage => 410.0,
     }
 }
 
@@ -138,6 +181,17 @@ const fn interior_theme(zone: SurfaceZone) -> (Color, Color, &'static str) {
             Color::new(34, 20, 42, 255),
             Color::MAGENTA,
             "Upgrade Shop Interior",
+        ),
+        SurfaceZone::Bank => (Color::new(16, 38, 29, 255), Color::GOLD, "Iron Ledger Bank"),
+        SurfaceZone::Explosives => (
+            Color::new(48, 22, 18, 255),
+            Color::RED,
+            "Nix's Explosive Shack",
+        ),
+        SurfaceZone::Salvage => (
+            Color::new(25, 32, 28, 255),
+            Color::LIME,
+            "Mara's Salvage Yard",
         ),
     }
 }

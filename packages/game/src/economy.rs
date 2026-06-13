@@ -16,6 +16,9 @@ pub enum SurfaceZone {
     Depot,
     Headquarters,
     Shop,
+    Bank,
+    Explosives,
+    Salvage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

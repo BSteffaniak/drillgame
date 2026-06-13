@@ -64,6 +64,8 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::RAYWHITE,
     );
 
+    draw.draw_text(&game.town_event, 22, 96, 16, Color::LIGHTGRAY);
+
     if game.show_details || game.modal == Some(ModalScreen::Depot) {
         draw_detail_panel(draw, game);
     }
@@ -180,7 +182,7 @@ fn draw_compact_status(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
     draw.draw_text(
         &format!(
-            "D{} E{} H{} R{} S{} B{} Debt{} | Tab",
+            "D{} E{} H{} R{} S{} B{} Debt{} | C scan",
             game.player.drill_strength,
             game.player.engine_level,
             game.player.hull_level,
@@ -366,10 +368,21 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw_map_marker(draw, &projection, 4, 7, Color::BLUE);
     draw_map_marker(draw, &projection, 12, 7, Color::MAROON);
     draw_map_marker(draw, &projection, 20, 7, Color::GREEN);
-    draw_map_marker(draw, &projection, 28, 11, Color::PURPLE);
-
+    draw_map_marker(draw, &projection, 28, 7, Color::PURPLE);
+    draw_map_marker(draw, &projection, 36, 7, Color::MAGENTA);
+    draw_map_marker(draw, &projection, 44, 7, Color::GOLD);
+    draw_map_marker(draw, &projection, 52, 7, Color::RED);
+    draw_map_marker(draw, &projection, 60, 7, Color::BROWN);
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
+    if game.scanner_pulse_seconds > 0.0 {
+        draw.draw_circle_lines(
+            player_x,
+            player_y,
+            10.0 + game.scanner_pulse_seconds * 12.0,
+            Color::SKYBLUE,
+        );
+    }
     draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
 }
 

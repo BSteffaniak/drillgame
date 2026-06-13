@@ -99,7 +99,10 @@ fn draw_surface_buildings(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>) {
     draw_building(draw, 8.0, 8.0, Color::MAROON, "REPAIR");
     draw_building(draw, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
     draw_building(draw, 24.0, 8.0, Color::DARKPURPLE, "HQ");
-    draw_building(draw, 32.0, 12.0, Color::PURPLE, "SHOP");
+    draw_building(draw, 32.0, 8.0, Color::PURPLE, "SHOP");
+    draw_building(draw, 40.0, 8.0, Color::DARKGREEN, "BANK");
+    draw_building(draw, 48.0, 8.0, Color::RED, "BOOM");
+    draw_building(draw, 56.0, 8.0, Color::BROWN, "SALVAGE");
 }
 
 fn draw_building(

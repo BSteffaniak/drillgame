@@ -277,6 +277,14 @@ pub struct GameState {
     #[serde(default)]
     pub market_salt: u32,
     #[serde(default)]
+    pub scanner_pulse_seconds: f32,
+    #[serde(default)]
+    pub scanner_cooldown_seconds: f32,
+    #[serde(default)]
+    pub town_event_day: u32,
+    #[serde(default)]
+    pub town_event: String,
+    #[serde(default)]
     pub falling_boulders: Vec<FallingBoulder>,
     #[serde(default)]
     pub spark_particles: Vec<SparkParticle>,
@@ -370,6 +378,10 @@ impl GameState {
             service_animation: None,
             service_animation_seconds: 0.0,
             market_salt: 0,
+            scanner_pulse_seconds: 0.0,
+            scanner_cooldown_seconds: 0.0,
+            town_event_day: 0,
+            town_event: "Normal market conditions.".to_owned(),
             falling_boulders: Vec::new(),
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
@@ -465,6 +477,7 @@ impl GameState {
         self.update_particles(delta_seconds);
         self.update_placed_bombs(delta_seconds);
         self.update_service_animation(delta_seconds);
+        self.update_scanner_timers(delta_seconds);
         self.update_boulders(delta_seconds);
         self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
         self.screen_flash_seconds = (self.screen_flash_seconds - delta_seconds).max(0.0);
@@ -520,6 +533,7 @@ impl GameState {
         }
 
         self.handle_interaction(input);
+        self.handle_scanner(input);
         self.handle_bomb(input);
         self.apply_movement(input, delta_seconds);
         self.update_drilling(input, delta_seconds);
@@ -741,6 +755,9 @@ impl GameState {
             }
             SurfaceZone::Headquarters => self.modal = Some(ModalScreen::Headquarters),
             SurfaceZone::Shop => self.modal = Some(ModalScreen::Shop),
+            SurfaceZone::Bank => self.confirm_finance(),
+            SurfaceZone::Explosives => self.buy_explosive_shack_pack(),
+            SurfaceZone::Salvage => self.salvage_yard_service(),
         }
         self.sound_cues.push(SoundCue::Ui);
     }
@@ -919,6 +936,34 @@ impl GameState {
         self.sound_cues.push(SoundCue::Sell);
     }
 
+    fn buy_explosive_shack_pack(&mut self) {
+        let cost = 55;
+        if self.player.credits < cost {
+            self.message = format!("Explosive Shack: bomb bundle costs {cost} credits.");
+            return;
+        }
+        self.player.credits -= cost;
+        self.player.bombs += 3;
+        self.sound_cues.push(SoundCue::Upgrade);
+        "Nix at the Explosive Shack sold you 3 timed charges. Don't hug them."
+            .clone_into(&mut self.message);
+    }
+
+    fn salvage_yard_service(&mut self) {
+        let recovered = self.lost_cargo_count;
+        if recovered == 0 {
+            let patch = (self.player.max_hull() * 0.12).ceil();
+            self.player.hull = (self.player.hull + patch).min(self.player.max_hull());
+            self.message = format!("Salvage Yard patch job restored {patch:.0} hull.");
+        } else {
+            self.lost_cargo_count = 0;
+            self.message = format!(
+                "Salvage Yard beaconed your lost cargo field: {recovered} items marked on map."
+            );
+        }
+        self.sound_cues.push(SoundCue::Upgrade);
+    }
+
     fn confirm_depot(&mut self) {
         match self.selected_menu_item {
             0 => self.confirm_complete_contract(),
@@ -1022,6 +1067,30 @@ impl GameState {
             }
         }
         self.modal = Some(ModalScreen::Shop);
+    }
+
+    fn handle_scanner(&mut self, input: PlayerInput) {
+        if !input.scan {
+            return;
+        }
+        if self.player.scanner_level == 0 {
+            "No scanner installed. Buy one at the upgrade shop.".clone_into(&mut self.message);
+            return;
+        }
+        if self.scanner_cooldown_seconds > 0.0 {
+            self.message = format!("Scanner recharging: {:.1}s.", self.scanner_cooldown_seconds);
+            return;
+        }
+        self.scanner_pulse_seconds = 1.2;
+        self.scanner_cooldown_seconds = (7.0 - f32::from(self.player.scanner_level)).max(2.0);
+        self.reveal_scanner_area();
+        self.sound_cues.push(SoundCue::Ui);
+        "Scanner pulse mapped ore, hazards, and artifacts nearby.".clone_into(&mut self.message);
+    }
+
+    fn update_scanner_timers(&mut self, delta_seconds: f32) {
+        self.scanner_pulse_seconds = (self.scanner_pulse_seconds - delta_seconds).max(0.0);
+        self.scanner_cooldown_seconds = (self.scanner_cooldown_seconds - delta_seconds).max(0.0);
     }
 
     fn handle_bomb(&mut self, input: PlayerInput) {
@@ -1658,6 +1727,16 @@ impl GameState {
             self.escape_sequence_seconds = 0.0;
             return;
         }
+        if self.update_ticks.is_multiple_of(45) {
+            self.spawn_cave_in();
+            self.shake_camera(
+                0.25,
+                6.0 + (120.0 - self.escape_sequence_seconds).max(0.0) * 0.05,
+            );
+        }
+        if self.update_ticks.is_multiple_of(120) {
+            "CORE CASCADE: tunnels are sealing. Climb now!".clone_into(&mut self.message);
+        }
         if self.escape_sequence_seconds == 0.0 {
             self.player.hull = 0.0;
             self.game_over = true;
@@ -1698,6 +1777,18 @@ impl GameState {
             self.trip_best_depth, self.return_streak
         );
         self.trip_best_depth = 0;
+        self.advance_town_event();
+    }
+
+    fn advance_town_event(&mut self) {
+        self.town_event_day = self.town_event_day.saturating_add(1);
+        self.town_event = match self.town_event_day % 5 {
+            0 => "Fuel sale: mechanics whisper about cheaper surface fuel.".to_owned(),
+            1 => "Gold boom: depot buyers are bidding aggressively.".to_owned(),
+            2 => "Repair backlog: Iona says don't dent anything expensive today.".to_owned(),
+            3 => "Cave instability warning: HQ predicts more falling rock.".to_owned(),
+            _ => "Explosive Shack overstock: Nix is pushing bomb bundles.".to_owned(),
+        };
     }
 
     fn update_status_messages(&mut self) {
@@ -1727,6 +1818,13 @@ impl GameState {
                 }
                 SurfaceZone::Headquarters => depot_prompt(self),
                 SurfaceZone::Shop => shop_prompt(&self.player),
+                SurfaceZone::Bank => "Bank: press E for loan/debt service.".to_owned(),
+                SurfaceZone::Explosives => {
+                    "Explosive Shack: press E to buy 3 timed charges for 55 credits.".to_owned()
+                }
+                SurfaceZone::Salvage => {
+                    "Salvage Yard: press E for cargo beacon or hull patch.".to_owned()
+                }
             };
         }
     }
@@ -1918,6 +2016,9 @@ const fn surface_zone_label(zone: SurfaceZone) -> &'static str {
         SurfaceZone::Depot => "Ore Depot",
         SurfaceZone::Headquarters => "HQ",
         SurfaceZone::Shop => "Upgrade Shop",
+        SurfaceZone::Bank => "Bank",
+        SurfaceZone::Explosives => "Explosive Shack",
+        SurfaceZone::Salvage => "Salvage Yard",
     }
 }
 
@@ -1928,6 +2029,9 @@ const fn interior_service_x(zone: SurfaceZone) -> f32 {
         SurfaceZone::Depot => 455.0,
         SurfaceZone::Headquarters => 390.0,
         SurfaceZone::Shop => 450.0,
+        SurfaceZone::Bank => 380.0,
+        SurfaceZone::Explosives => 431.0,
+        SurfaceZone::Salvage => 410.0,
     }
 }
 
@@ -1941,7 +2045,10 @@ fn surface_zone_at(x: f32, y: f32) -> Option<SurfaceZone> {
         8..=15 => Some(SurfaceZone::Repair),
         16..=23 => Some(SurfaceZone::Depot),
         24..=31 => Some(SurfaceZone::Headquarters),
-        32..=43 => Some(SurfaceZone::Shop),
+        32..=39 => Some(SurfaceZone::Shop),
+        40..=47 => Some(SurfaceZone::Bank),
+        48..=55 => Some(SurfaceZone::Explosives),
+        56..=63 => Some(SurfaceZone::Salvage),
         _ => None,
     }
 }
