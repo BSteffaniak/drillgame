@@ -1,0 +1,428 @@
+use raylib::prelude::*;
+
+use super::terrain::TerrainRenderer;
+use crate::{
+    game_state::{DrillDirection, GameState, TILE_SIZE},
+    terrain::{TileKind, TilePosition},
+};
+
+pub(super) fn render_camera(game: &GameState) -> Vector2 {
+    let mut camera = Vector2::new(game.camera_x, game.camera_y);
+    if game.camera_shake_seconds > 0.0 {
+        let pulse = (game.camera_shake_seconds * 70.0).sin();
+        camera.x += pulse * game.camera_shake_strength;
+        camera.y += (game.camera_shake_seconds * 53.0).cos() * game.camera_shake_strength * 0.7;
+    }
+    camera
+}
+
+pub(super) fn world_camera(camera: Vector2) -> Camera2D {
+    Camera2D {
+        offset: Vector2::zero(),
+        target: camera,
+        rotation: 0.0,
+        zoom: 1.0,
+    }
+}
+
+pub(super) fn draw_world(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+    camera: Vector2,
+    terrain: &TerrainRenderer,
+) {
+    draw_surface_buildings(draw);
+    terrain.draw(draw, camera);
+
+    if let Some(drill) = game.active_drill {
+        let x = (drill.target.x as f32 * TILE_SIZE) as i32;
+        let y = (drill.target.y as f32 * TILE_SIZE) as i32;
+        let current_durability = game
+            .terrain
+            .tile(drill.target)
+            .map_or(drill.initial_durability, |tile| tile.durability);
+        let chipped = drill.initial_durability.saturating_sub(current_durability);
+        let progress = ((f32::from(chipped) + drill.progress.clamp(0.0, 1.0))
+            / f32::from(drill.initial_durability.max(1)))
+        .clamp(0.0, 1.0);
+        draw.draw_rectangle_lines(
+            x - 2,
+            y - 2,
+            TILE_SIZE as i32 + 4,
+            TILE_SIZE as i32 + 4,
+            Color::YELLOW,
+        );
+        if drill.direction == DrillDirection::Down {
+            let pulse = (game.update_ticks as f32 * 0.4).sin().abs();
+            draw.draw_circle(
+                x + TILE_SIZE as i32 / 2,
+                y + TILE_SIZE as i32 / 2,
+                10.0 + pulse * 8.0,
+                Color::new(255, 180, 70, 85),
+            );
+        }
+        if matches!(game.terrain.tile(drill.target), Some(tile) if tile.kind == TileKind::Gas) {
+            let pulse = (game.update_ticks as f32 * 0.22).sin().abs();
+            draw.draw_circle(
+                x + TILE_SIZE as i32 / 2,
+                y + TILE_SIZE as i32 / 2,
+                10.0 + pulse * 8.0,
+                Color::new(95, 230, 90, 80),
+            );
+            draw.draw_text("GAS", x + 4, y + 4, 12, Color::GREEN);
+        }
+        let bar_width = (TILE_SIZE * progress) as i32;
+        draw.draw_rectangle(
+            x + 4,
+            y + TILE_SIZE as i32 - 7,
+            TILE_SIZE as i32 - 8,
+            3,
+            Color::new(0, 0, 0, 120),
+        );
+        draw.draw_rectangle(
+            x + 4,
+            y + TILE_SIZE as i32 - 7,
+            bar_width.min(TILE_SIZE as i32 - 8),
+            3,
+            Color::new(255, 215, 90, 220),
+        );
+        draw.draw_circle(x + 10, y + 11, 2.0, Color::new(255, 235, 150, 170));
+        if progress > 0.45 {
+            draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
+        }
+    }
+}
+
+fn draw_surface_buildings(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>) {
+    draw_building(draw, 0.0, 8.0, Color::DARKBLUE, "FUEL");
+    draw_building(draw, 8.0, 8.0, Color::MAROON, "REPAIR");
+    draw_building(draw, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
+    draw_building(draw, 24.0, 8.0, Color::DARKPURPLE, "HQ");
+    draw_building(draw, 32.0, 12.0, Color::PURPLE, "SHOP");
+}
+
+fn draw_building(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    tile_x: f32,
+    tile_width: f32,
+    color: Color,
+    label: &str,
+) {
+    let x = tile_x * TILE_SIZE;
+    let y = 3.0 * TILE_SIZE;
+    let width = tile_width * TILE_SIZE;
+
+    draw.draw_rectangle(x as i32, y as i32, width as i32, 64, color);
+    draw.draw_triangle(
+        Vector2::new(x, y),
+        Vector2::new(x + width * 0.5, y - 24.0),
+        Vector2::new(x + width, y),
+        Color::new(35, 35, 45, 255),
+    );
+    draw.draw_rectangle(
+        (x + width - 22.0) as i32,
+        (y + 18.0) as i32,
+        14,
+        46,
+        Color::new(35, 25, 18, 255),
+    );
+    draw.draw_rectangle((x + 10.0) as i32, (y + 12.0) as i32, 22, 18, Color::SKYBLUE);
+    match label {
+        "FUEL" => draw.draw_circle(
+            (x + width - 42.0) as i32,
+            (y + 28.0) as i32,
+            10.0,
+            Color::GOLD,
+        ),
+        "REPAIR" => {
+            draw.draw_rectangle(
+                (x + width - 50.0) as i32,
+                (y + 23.0) as i32,
+                24,
+                8,
+                Color::RAYWHITE,
+            );
+            draw.draw_rectangle(
+                (x + width - 42.0) as i32,
+                (y + 15.0) as i32,
+                8,
+                24,
+                Color::RAYWHITE,
+            );
+        }
+        "DEPOT" => draw.draw_rectangle(
+            (x + width - 54.0) as i32,
+            (y + 23.0) as i32,
+            28,
+            20,
+            Color::BROWN,
+        ),
+        "HQ" => draw.draw_triangle(
+            Vector2::new(x + width - 52.0, y + 42.0),
+            Vector2::new(x + width - 38.0, y + 14.0),
+            Vector2::new(x + width - 24.0, y + 42.0),
+            Color::SKYBLUE,
+        ),
+        _ => draw.draw_circle_lines(
+            (x + width - 40.0) as i32,
+            (y + 30.0) as i32,
+            13.0,
+            Color::MAGENTA,
+        ),
+    }
+    draw.draw_text(label, x as i32 + 16, y as i32 + 40, 20, Color::WHITE);
+}
+
+pub(super) fn draw_particles(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
+    if let (Some(x), Some(y)) = (game.lost_cargo_x, game.lost_cargo_y) {
+        draw.draw_rectangle((x - 8.0) as i32, (y - 7.0) as i32, 16, 14, Color::GOLD);
+        draw.draw_rectangle_lines((x - 8.0) as i32, (y - 7.0) as i32, 16, 14, Color::BROWN);
+        draw.draw_line(
+            (x - 8.0) as i32,
+            y as i32,
+            (x + 8.0) as i32,
+            y as i32,
+            Color::BROWN,
+        );
+        draw.draw_text("LOST", (x + 8.0) as i32, (y - 8.0) as i32, 12, Color::GOLD);
+    }
+
+    for particle in &game.dust_particles {
+        let alpha = (particle.life / 0.35).clamp(0.0, 1.0);
+        draw.draw_circle_v(
+            Vector2::new(particle.x, particle.y),
+            4.0,
+            Color::new(190, 150, 105, (180.0 * alpha) as u8),
+        );
+    }
+    for boulder in &game.falling_boulders {
+        let wobble = if boulder.warning_seconds > 0.0 {
+            (boulder.warning_seconds * 60.0).sin() * 3.0
+        } else {
+            0.0
+        };
+        let color = if boulder.warning_seconds > 0.0 {
+            Color::new(180, 80, 55, 255)
+        } else {
+            Color::new(95, 80, 70, 255)
+        };
+        draw.draw_circle_v(Vector2::new(boulder.x + wobble, boulder.y), 8.0, color);
+        draw.draw_circle_lines(boulder.x as i32, boulder.y as i32, 8.0, Color::DARKGRAY);
+    }
+    for spark in &game.spark_particles {
+        let alpha = (spark.life / 0.45).clamp(0.0, 1.0);
+        draw.draw_circle_v(
+            Vector2::new(spark.x, spark.y),
+            2.5,
+            Color::new(255, 190, 60, (220.0 * alpha) as u8),
+        );
+    }
+}
+
+fn drill_visual_offset(game: &GameState) -> (f32, f32) {
+    let Some(drill) = game.active_drill else {
+        return (0.0, 0.0);
+    };
+    let pulse = (drill.progress * std::f32::consts::TAU * 3.0).sin() * 1.8;
+    match drill.direction {
+        DrillDirection::Down => (0.0, pulse.abs()),
+        DrillDirection::Left => (-pulse.abs(), 0.0),
+        DrillDirection::Right => (pulse.abs(), 0.0),
+    }
+}
+
+pub(super) fn draw_placed_bombs(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+) {
+    for bomb in &game.placed_bombs {
+        let x = bomb.x as i32;
+        let y = bomb.y as i32;
+        draw.draw_circle(x, y, 7.0, Color::BLACK);
+        draw.draw_circle_lines(x, y, 8.0, Color::RED);
+        draw.draw_text(
+            &format!("{:.1}", bomb.timer_seconds.max(0.0)),
+            x - 11,
+            y - 24,
+            14,
+            Color::YELLOW,
+        );
+    }
+}
+
+pub(super) fn draw_scanner_marks(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+) {
+    if game.player.scanner_level == 0 {
+        return;
+    }
+    let center = game.player.tile_position(TILE_SIZE);
+    let radius = 3 + i32::from(game.player.scanner_level) * 2;
+    for y in center.y - radius..=center.y + radius {
+        for x in center.x - radius..=center.x + radius {
+            if (x - center.x).abs() + (y - center.y).abs() > radius {
+                continue;
+            }
+            let Some(tile) = game.terrain.tile(TilePosition { x, y }) else {
+                continue;
+            };
+            let color = match tile.kind {
+                TileKind::Ore(_) => Color::GOLD,
+                TileKind::Artifact(_) => Color::MAGENTA,
+                TileKind::Gas
+                | TileKind::Lava
+                | TileKind::MagmaVent
+                | TileKind::ExplosivePocket
+                | TileKind::PressurePocket => Color::RED,
+                _ => continue,
+            };
+            draw.draw_circle_v(
+                Vector2::new(
+                    x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+                    y as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+                ),
+                3.0,
+                color,
+            );
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "player rendering includes upgrade visual variants"
+)]
+pub(super) fn draw_player(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
+    let (offset_x, offset_y) = drill_visual_offset(game);
+    let screen_x = game.player.x + offset_x;
+    let screen_y = game.player.y + offset_y;
+
+    let hull_color = if game.player.hull < game.player.max_hull() * 0.3 {
+        Color::new(210, 95, 60, 255)
+    } else {
+        Color::new(235, 190, 45, 255)
+    };
+    draw.draw_rectangle(
+        (screen_x - 14.0) as i32,
+        (screen_y - 10.0) as i32,
+        28,
+        22,
+        hull_color,
+    );
+    draw.draw_rectangle_lines(
+        (screen_x - 14.0) as i32,
+        (screen_y - 10.0) as i32,
+        28,
+        22,
+        Color::BROWN,
+    );
+    draw.draw_rectangle(
+        (screen_x - 7.0) as i32,
+        (screen_y - 17.0) as i32,
+        14,
+        8,
+        Color::SKYBLUE,
+    );
+    draw.draw_circle(
+        (screen_x - 10.0) as i32,
+        (screen_y + 13.0) as i32,
+        4.0,
+        Color::DARKGRAY,
+    );
+    draw.draw_circle(
+        (screen_x + 10.0) as i32,
+        (screen_y + 13.0) as i32,
+        4.0,
+        Color::DARKGRAY,
+    );
+
+    let direction = game
+        .active_drill
+        .map_or(DrillDirection::Down, |drill| drill.direction);
+    match direction {
+        DrillDirection::Down => draw.draw_triangle(
+            Vector2::new(screen_x - 6.0, screen_y + 13.0),
+            Vector2::new(screen_x + 6.0, screen_y + 13.0),
+            Vector2::new(screen_x, screen_y + 28.0),
+            Color::ORANGE,
+        ),
+        DrillDirection::Left => draw.draw_triangle(
+            Vector2::new(screen_x - 15.0, screen_y - 4.0),
+            Vector2::new(screen_x - 15.0, screen_y + 8.0),
+            Vector2::new(screen_x - 29.0, screen_y + 2.0),
+            Color::ORANGE,
+        ),
+        DrillDirection::Right => draw.draw_triangle(
+            Vector2::new(screen_x + 15.0, screen_y - 4.0),
+            Vector2::new(screen_x + 15.0, screen_y + 8.0),
+            Vector2::new(screen_x + 29.0, screen_y + 2.0),
+            Color::ORANGE,
+        ),
+    }
+    if game.player.velocity_y < -40.0 {
+        draw.draw_triangle(
+            Vector2::new(screen_x - 8.0, screen_y + 16.0),
+            Vector2::new(screen_x + 8.0, screen_y + 16.0),
+            Vector2::new(screen_x, screen_y + 34.0),
+            Color::new(255, 95, 20, 220),
+        );
+    }
+    if game.player.hull < game.player.max_hull() * 0.35 {
+        let smoke_alpha = 90 + ((game.player.hull as i32).rem_euclid(40) as u8);
+        draw.draw_circle(
+            (screen_x - 16.0) as i32,
+            (screen_y - 18.0) as i32,
+            5.0,
+            Color::new(60, 60, 60, smoke_alpha),
+        );
+        draw.draw_circle(
+            (screen_x - 22.0) as i32,
+            (screen_y - 25.0) as i32,
+            7.0,
+            Color::new(45, 45, 45, smoke_alpha.saturating_sub(25)),
+        );
+    }
+    if game.player.scanner_level > 0 {
+        draw.draw_circle_lines(
+            screen_x as i32,
+            (screen_y - 24.0) as i32,
+            8.0 + f32::from(game.player.scanner_level) * 2.0,
+            Color::SKYBLUE,
+        );
+        draw.draw_line(
+            screen_x as i32,
+            (screen_y - 16.0) as i32,
+            screen_x as i32,
+            (screen_y - 30.0) as i32,
+            Color::SKYBLUE,
+        );
+    }
+    if game.player.radiator_level > 1 {
+        for fin in 0..game.player.radiator_level {
+            draw.draw_rectangle(
+                (screen_x + 16.0) as i32,
+                (screen_y - 14.0 + f32::from(fin) * 5.0) as i32,
+                10,
+                2,
+                Color::ORANGE,
+            );
+        }
+    }
+    if game.player.hull_level > 2 {
+        draw.draw_rectangle_lines(
+            (screen_x - 19.0) as i32,
+            (screen_y - 18.0) as i32,
+            38,
+            36,
+            Color::GOLD,
+        );
+    }
+    if game.drill_flash_seconds > 0.0 {
+        draw.draw_circle_v(
+            Vector2::new(screen_x, screen_y + 20.0),
+            7.0,
+            Color::new(255, 230, 80, 210),
+        );
+    }
+}

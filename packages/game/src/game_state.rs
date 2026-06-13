@@ -396,14 +396,11 @@ impl GameState {
         self.visual_changes.changed_tiles.push(position);
     }
 
-    fn mark_radius_visual_changed(&mut self, center: TilePosition, radius: i32) {
-        for y in center.y - radius..=center.y + radius {
-            for x in center.x - radius..=center.x + radius {
-                if (x - center.x).abs() + (y - center.y).abs() <= radius {
-                    self.mark_tile_visual_changed(TilePosition { x, y });
-                }
-            }
-        }
+    fn mark_tiles_visual_changed<I>(&mut self, positions: I)
+    where
+        I: IntoIterator<Item = TilePosition>,
+    {
+        self.visual_changes.changed_tiles.extend(positions);
     }
 
     pub fn migrate_after_load(&mut self) {
@@ -1417,8 +1414,9 @@ impl GameState {
     }
 
     fn detonate_bomb(&mut self, center: TilePosition, radius: i32) {
-        self.mark_radius_visual_changed(center, radius);
-        let cleared = self.terrain.blast_radius(center, radius);
+        let blast = self.terrain.blast_radius(center, radius);
+        self.mark_tiles_visual_changed(blast.changed_tiles);
+        let cleared = blast.cleared;
         self.sound_cues.push(SoundCue::Explosion);
         self.screen_flash_seconds = self.screen_flash_seconds.max(0.22);
         self.shake_camera(0.45, 13.0);
@@ -1449,8 +1447,8 @@ impl GameState {
                     self.terrain.tile(position).map(|tile| tile.kind),
                     Some(TileKind::Gas | TileKind::ExplosivePocket | TileKind::PressurePocket)
                 ) {
-                    self.mark_radius_visual_changed(position, 1);
-                    let _ = self.terrain.blast_radius(position, 1);
+                    let blast = self.terrain.blast_radius(position, 1);
+                    self.mark_tiles_visual_changed(blast.changed_tiles);
                     self.hazard_clouds.push(HazardCloud {
                         x: x as f32 * TILE_SIZE,
                         y: y as f32 * TILE_SIZE,
