@@ -192,6 +192,7 @@ impl GameState {
             RunMode::Title => {
                 if input.confirm {
                     self.run_mode = RunMode::Playing;
+                    self.sound_cues.push(SoundCue::Milestone);
                     "Welcome to the dig site. Visit the depot for contracts."
                         .clone_into(&mut self.message);
                 }

@@ -14,7 +14,13 @@ pub fn run() {
     raylib.set_exit_key(None);
 
     let mut game = GameState::new();
-    let audio = AudioBus::new().ok();
+    let audio = match AudioBus::new() {
+        Ok(audio) => Some(audio),
+        Err(error) => {
+            eprintln!("Audio disabled: {error}");
+            None
+        }
+    };
 
     while !raylib.window_should_close() && !game.request_exit {
         let delta_seconds = raylib.get_frame_time();

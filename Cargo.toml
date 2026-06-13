@@ -16,6 +16,7 @@ raylib = { version = "6.0.0", default-features = false, features = [
     "SUPPORT_MODULE_RTEXT",
     "SUPPORT_MODULE_RTEXTURES",
     "SUPPORT_MODULE_RAUDIO",
+    "SUPPORT_FILEFORMAT_WAV",
 ] }
 serde = { version = "1.0.228", default-features = false, features = [
     "derive",

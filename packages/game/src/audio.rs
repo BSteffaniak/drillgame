@@ -5,6 +5,8 @@
     reason = "procedural audio converts bounded sample positions to PCM values"
 )]
 
+use std::{fs, path::PathBuf};
+
 use raylib::prelude::*;
 
 use crate::game_state::SoundCue;
@@ -23,14 +25,14 @@ impl AudioBus {
         let audio = Box::leak(Box::new(
             RaylibAudio::init_audio_device().map_err(|error| error.to_string())?,
         ));
-        audio.set_master_volume(0.35);
+        audio.set_master_volume(0.8);
         Ok(Self {
             _audio: audio,
-            drill: sound(audio, 130.0, 0.045).ok_or("generated drill sound failed")?,
-            sell: sound(audio, 680.0, 0.09).ok_or("generated sell sound failed")?,
-            upgrade: sound(audio, 880.0, 0.11).ok_or("generated upgrade sound failed")?,
-            damage: sound(audio, 90.0, 0.12).ok_or("generated damage sound failed")?,
-            milestone: sound(audio, 520.0, 0.16).ok_or("generated milestone sound failed")?,
+            drill: sound(audio, 130.0, 0.09).ok_or("generated drill sound failed")?,
+            sell: sound(audio, 680.0, 0.16).ok_or("generated sell sound failed")?,
+            upgrade: sound(audio, 880.0, 0.18).ok_or("generated upgrade sound failed")?,
+            damage: sound(audio, 90.0, 0.22).ok_or("generated damage sound failed")?,
+            milestone: sound(audio, 520.0, 0.28).ok_or("generated milestone sound failed")?,
         })
     }
 
@@ -49,8 +51,21 @@ impl AudioBus {
 
 fn sound(audio: &'static RaylibAudio, frequency: f32, seconds: f32) -> Option<Sound<'static>> {
     let wave_bytes = wav_bytes(frequency, seconds);
-    let wave = audio.new_wave_from_memory("wav", &wave_bytes).ok()?;
-    audio.new_sound_from_wave(&wave).ok()
+    let path = sound_path(frequency, seconds);
+    fs::write(&path, wave_bytes).ok()?;
+    audio.new_sound(path.to_str()?).ok()
+}
+
+fn sound_path(frequency: f32, seconds: f32) -> PathBuf {
+    let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    path.push("target");
+    path.push("drillgame-audio");
+    let _ = fs::create_dir_all(&path);
+    path.push(format!(
+        "drillgame-{frequency:.0}hz-{duration_ms:.0}ms.wav",
+        duration_ms = seconds * 1_000.0
+    ));
+    path
 }
 
 fn wav_bytes(frequency: f32, seconds: f32) -> Vec<u8> {
