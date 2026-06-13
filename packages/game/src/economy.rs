@@ -172,6 +172,53 @@ const fn upgrade_description(kind: UpgradeKind) -> &'static str {
     }
 }
 
+pub fn upgrade_tier_name(kind: UpgradeKind, level: u8) -> &'static str {
+    let next_level = level.saturating_add(1).min(MAX_UPGRADE_LEVEL);
+    match (kind, next_level) {
+        (UpgradeKind::Drill, 1) => "Steel Drill",
+        (UpgradeKind::Drill, 2) => "Carbide Drill",
+        (UpgradeKind::Drill, 3) => "Diamond Drill",
+        (UpgradeKind::Drill, 4) => "Plasma Drill",
+        (UpgradeKind::Drill, _) => "Star Drill",
+        (UpgradeKind::FuelTank, 1) => "Aux Fuel Tank",
+        (UpgradeKind::FuelTank, 2) => "Twin Fuel Tank",
+        (UpgradeKind::FuelTank, 3) => "Pressure Fuel Tank",
+        (UpgradeKind::FuelTank, 4) => "Deep Fuel Tank",
+        (UpgradeKind::FuelTank, _) => "Endurance Fuel Tank",
+        (UpgradeKind::CargoBay, 1) => "Ore Basket",
+        (UpgradeKind::CargoBay, 2) => "Cargo Bay",
+        (UpgradeKind::CargoBay, 3) => "Expanded Cargo Bay",
+        (UpgradeKind::CargoBay, 4) => "Industrial Cargo Bay",
+        (UpgradeKind::CargoBay, _) => "Vault Cargo Bay",
+        (UpgradeKind::Engine, 1) => "Lift Engine",
+        (UpgradeKind::Engine, 2) => "Tuned Engine",
+        (UpgradeKind::Engine, 3) => "Turbo Engine",
+        (UpgradeKind::Engine, 4) => "Vector Engine",
+        (UpgradeKind::Engine, _) => "Fusion Engine",
+        (UpgradeKind::Hull, 1) => "Riveted Hull",
+        (UpgradeKind::Hull, 2) => "Reinforced Hull",
+        (UpgradeKind::Hull, 3) => "Titanium Hull",
+        (UpgradeKind::Hull, 4) => "Ablative Hull",
+        (UpgradeKind::Hull, _) => "Star Hull",
+        (UpgradeKind::Radiator, 1) => "Basic Radiator",
+        (UpgradeKind::Radiator, 2) => "Copper Radiator",
+        (UpgradeKind::Radiator, 3) => "Liquid Radiator",
+        (UpgradeKind::Radiator, 4) => "Cryo Radiator",
+        (UpgradeKind::Radiator, _) => "Magma Radiator",
+    }
+}
+
+pub const fn upgrade_effect(kind: UpgradeKind) -> &'static str {
+    match kind {
+        UpgradeKind::Drill => "+1 drill tier; unlocks harder strata",
+        UpgradeKind::FuelTank => "+50 fuel and full refill",
+        UpgradeKind::CargoBay => "+8 cargo slots",
+        UpgradeKind::Engine => "+18% thrust/handling",
+        UpgradeKind::Hull => "+40 max hull and full repair",
+        UpgradeKind::Radiator => "reduces deep heat damage",
+    }
+}
+
 fn upgrade_cost(kind: UpgradeKind, next_level: u8) -> u32 {
     let base = match kind {
         UpgradeKind::Drill => 120,

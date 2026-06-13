@@ -14,6 +14,7 @@ use crate::{
     contract::ContractLog,
     economy::{
         PurchaseError, SurfaceZone, buy_upgrade, refuel, repair, sell_cargo, upgrade_offers,
+        upgrade_tier_name,
     },
     input::PlayerInput,
     player::Player,
@@ -108,11 +109,16 @@ pub struct GameState {
     pub run_mode: RunMode,
     pub modal: Option<ModalScreen>,
     pub selected_menu_item: usize,
+    #[serde(default)]
     pub selected_pause_item: usize,
     pub show_details: bool,
+    #[serde(default)]
     pub request_exit: bool,
+    #[serde(default)]
     pub won_game: bool,
+    #[serde(default)]
     pub explored_tiles: Vec<bool>,
+    #[serde(default)]
     pub last_depot_receipt: String,
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
@@ -163,6 +169,15 @@ impl GameState {
             dust_particles: Vec::new(),
             sound_cues: Vec::new(),
         }
+    }
+
+    pub fn migrate_after_load(&mut self) {
+        let expected_tiles = (self.terrain.width() * self.terrain.height()) as usize;
+        if self.explored_tiles.len() != expected_tiles {
+            self.explored_tiles = vec![false; expected_tiles];
+        }
+        self.request_exit = false;
+        self.contracts.migrate_after_load();
     }
 
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
@@ -465,7 +480,10 @@ impl GameState {
         match buy_upgrade(&mut self.player, index) {
             Ok(offer) => {
                 self.sound_cues.push(SoundCue::Upgrade);
-                self.message = format!("Bought {} upgrade.", offer.name);
+                self.message = format!(
+                    "Bought {}.",
+                    upgrade_tier_name(offer.kind, offer.level.saturating_sub(1))
+                );
             }
             Err(PurchaseError::InvalidSelection) => {
                 "Unknown upgrade selection.".clone_into(&mut self.message);

@@ -14,14 +14,16 @@ pub fn run() {
     raylib.set_exit_key(None);
 
     let mut game = GameState::new();
-    let _audio = AudioBus::new();
+    let audio = AudioBus::new().ok();
 
     while !raylib.window_should_close() && !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
         let input = read_input(&raylib);
 
         game.update(input, delta_seconds);
-        AudioBus::play(&game.sound_cues);
+        if let Some(audio) = &audio {
+            audio.play(&game.sound_cues);
+        }
 
         let mut draw = raylib.begin_drawing(&thread);
         render(&mut draw, &game);

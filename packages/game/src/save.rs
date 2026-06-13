@@ -24,10 +24,11 @@ pub fn save_game(game: &GameState) -> Result<(), SaveError> {
 
 pub fn load_game() -> Result<GameState, SaveError> {
     let json = fs::read_to_string(SAVE_PATH).map_err(SaveError::Io)?;
-    let save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
-    if save.version != SAVE_VERSION {
+    let mut save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
+    if save.version != SAVE_VERSION && save.version != 1 {
         return Err(SaveError::UnsupportedVersion(save.version));
     }
+    save.game.migrate_after_load();
     Ok(save.game)
 }
 

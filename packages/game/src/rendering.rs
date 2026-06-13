@@ -9,7 +9,7 @@
 use raylib::prelude::*;
 
 use crate::{
-    economy::upgrade_offers,
+    economy::{upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
@@ -17,6 +17,15 @@ use crate::{
 const SCREEN_WIDTH: i32 = 1280;
 const SCREEN_HEIGHT: i32 = 720;
 const PLAYER_DRAW_RADIUS: f32 = 12.0;
+
+struct MinimapProjection {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    terrain_width: i32,
+    terrain_height: i32,
+}
 
 pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.clear_background(Color::new(105, 190, 235, 255));
@@ -359,6 +368,14 @@ fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
     let terrain_width = game.terrain.width().max(1);
     let terrain_height = game.terrain.height().max(1);
+    let projection = MinimapProjection {
+        x,
+        y,
+        width,
+        height,
+        terrain_width,
+        terrain_height,
+    };
     for ty in 0..terrain_height {
         for tx in 0..terrain_width {
             let position = TilePosition { x: tx, y: ty };
@@ -381,9 +398,26 @@ fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         }
     }
 
+    draw_map_marker(draw, &projection, 4, 7, Color::BLUE);
+    draw_map_marker(draw, &projection, 12, 7, Color::MAROON);
+    draw_map_marker(draw, &projection, 20, 7, Color::GREEN);
+    draw_map_marker(draw, &projection, 28, 11, Color::PURPLE);
+
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
+}
+
+fn draw_map_marker(
+    draw: &mut RaylibDrawHandle<'_>,
+    projection: &MinimapProjection,
+    tile_x: i32,
+    tile_y: i32,
+    color: Color,
+) {
+    let x = projection.x + tile_x * projection.width / projection.terrain_width;
+    let y = projection.y + tile_y * projection.height / projection.terrain_height;
+    draw.draw_rectangle(x - 1, y - 1, 3, 3, color);
 }
 
 fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -524,7 +558,10 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(
             &format!(
                 "{} L{} -> {} | {}",
-                offer.name, offer.level, price, offer.description
+                upgrade_tier_name(offer.kind, offer.level),
+                offer.level,
+                price,
+                upgrade_effect(offer.kind)
             ),
             350,
             y,

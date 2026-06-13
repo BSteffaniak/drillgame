@@ -9,6 +9,7 @@ use crate::{
 pub struct ContractLog {
     pub active: Contract,
     pub completed: u32,
+    #[serde(default)]
     pub story_complete: bool,
 }
 
@@ -44,6 +45,13 @@ impl ContractLog {
             finished_story,
         })
     }
+    pub fn migrate_after_load(&mut self) {
+        let canonical = contract_for_index(self.completed);
+        if self.active.title.is_empty() {
+            self.active.title = canonical.title;
+            self.active.final_objective = canonical.final_objective;
+        }
+    }
 }
 
 impl Default for ContractLog {
@@ -61,10 +69,12 @@ pub struct ContractCompletion {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Contract {
+    #[serde(default)]
     pub title: String,
     pub target: ContractTarget,
     pub required: u32,
     pub reward: u32,
+    #[serde(default)]
     pub final_objective: bool,
 }
 
