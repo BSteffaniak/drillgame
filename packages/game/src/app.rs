@@ -2,7 +2,7 @@ use crate::{
     audio::AudioBus,
     game_state::GameState,
     input::read_input,
-    rendering::render,
+    rendering::GameRenderer,
     save::{SettingsFile, load_settings, save_settings},
 };
 
@@ -34,6 +34,8 @@ pub fn run() {
         }
     };
 
+    let mut renderer = GameRenderer::new(&mut raylib, &thread, &game);
+
     while !raylib.window_should_close() && !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
         let input = read_input(&raylib);
@@ -55,7 +57,9 @@ pub fn run() {
             audio.play(&game.sound_cues);
         }
 
+        renderer.sync(&mut raylib, &thread, &mut game);
+
         let mut draw = raylib.begin_drawing(&thread);
-        render(&mut draw, &game);
+        renderer.render(&mut draw, &game);
     }
 }

@@ -8,13 +8,17 @@
 
 use raylib::prelude::*;
 
+mod terrain;
+
+use terrain::{TerrainRenderer, artifact_color, mineral_color};
+
 use crate::{
     economy::{SurfaceZone, UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{
         DrillDirection, GameState, ModalScreen, PauseOption, RunMode, ServiceAnimation, TILE_SIZE,
     },
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
-    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
+    terrain::{TileKind, TilePosition},
 };
 
 const SCREEN_WIDTH: i32 = 1280;
@@ -29,72 +33,95 @@ struct MinimapProjection {
     terrain_height: i32,
 }
 
-pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.clear_background(Color::new(105, 190, 235, 255));
+pub struct GameRenderer {
+    terrain: TerrainRenderer,
+}
 
-    let camera = render_camera(game);
+impl GameRenderer {
+    pub fn new(raylib: &mut RaylibHandle, thread: &RaylibThread, game: &GameState) -> Self {
+        Self {
+            terrain: TerrainRenderer::new(raylib, thread, game),
+        }
+    }
 
-    if game.run_mode == RunMode::Interior {
-        draw_interior(draw, game);
-    } else {
-        draw_world(draw, game, camera);
-        draw_particles(draw, game, camera);
-        draw_placed_bombs(draw, game, camera);
-        draw_scanner_marks(draw, game, camera);
-        for cloud in &game.hazard_clouds {
-            draw.draw_circle(
-                (cloud.x - camera.x) as i32,
-                (cloud.y - camera.y) as i32,
-                cloud.radius,
-                Color::new(90, 190, 80, 70),
+    pub fn sync(&mut self, raylib: &mut RaylibHandle, thread: &RaylibThread, game: &mut GameState) {
+        let visual_changes = game.take_visual_changes();
+        if visual_changes.full_terrain_refresh {
+            self.terrain.mark_all_dirty();
+        }
+        for tile in visual_changes.changed_tiles {
+            self.terrain.mark_tile_dirty(tile);
+        }
+        self.terrain.sync(raylib, thread, game);
+    }
+
+    pub fn render(&self, draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+        draw.clear_background(Color::new(105, 190, 235, 255));
+
+        let camera = render_camera(game);
+
+        if game.run_mode == RunMode::Interior {
+            draw_interior(draw, game);
+        } else {
+            draw_world(draw, game, camera, &self.terrain);
+            draw_particles(draw, game, camera);
+            draw_placed_bombs(draw, game, camera);
+            draw_scanner_marks(draw, game, camera);
+            for cloud in &game.hazard_clouds {
+                draw.draw_circle(
+                    (cloud.x - camera.x) as i32,
+                    (cloud.y - camera.y) as i32,
+                    cloud.radius,
+                    Color::new(90, 190, 80, 70),
+                );
+            }
+
+            draw_player(draw, game, camera);
+        }
+        if game.screen_flash_seconds > 0.0 {
+            let alpha = (game.screen_flash_seconds * 500.0).clamp(0.0, 180.0) as u8;
+            draw.draw_rectangle(
+                0,
+                0,
+                SCREEN_WIDTH,
+                SCREEN_HEIGHT,
+                Color::new(255, 70, 30, alpha),
             );
         }
+        if game.run_mode != RunMode::Interior {
+            draw_heat_warning(draw, game);
+        }
+        draw_hud(draw, game);
+        if game.run_mode != RunMode::Interior {
+            draw_depth_ruler(draw, game);
+            draw_minimap(draw, game);
+        }
 
-        draw_player(draw, game, camera);
-    }
-    if game.screen_flash_seconds > 0.0 {
-        let alpha = (game.screen_flash_seconds * 520.0).clamp(0.0, 120.0) as u8;
-        draw.draw_rectangle(
-            0,
-            0,
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
-            Color::new(255, 220, 150, alpha),
+        if game.run_mode == RunMode::Title {
+            draw_title(draw);
+        } else if game.run_mode == RunMode::Paused {
+            draw_pause(draw, game);
+        }
+
+        if let Some(modal) = game.modal {
+            draw_modal(draw, game, modal);
+        }
+
+        if game.game_over {
+            draw_game_over(draw, game);
+        }
+
+        draw.draw_text(
+            &format!("Vol {:.0}% (+/-)", game.master_volume * 100.0),
+            1030,
+            20,
+            18,
+            Color::LIGHTGRAY,
         );
-    }
-    if game.run_mode != RunMode::Interior {
-        draw_heat_warning(draw, game);
-    }
-    draw_hud(draw, game);
-    if game.run_mode != RunMode::Interior {
-        draw_depth_ruler(draw, game);
-        draw_minimap(draw, game);
-    }
 
-    if game.run_mode == RunMode::Title {
-        draw_title(draw);
-    } else if game.run_mode == RunMode::Paused {
-        draw_pause(draw, game);
-    }
-
-    if let Some(modal) = game.modal {
-        draw_modal(draw, game, modal);
-    }
-
-    if game.game_over {
-        draw_game_over(draw, game);
-    }
-
-    draw.draw_text(
-        &format!("Vol {:.0}% (+/-)", game.master_volume * 100.0),
-        1030,
-        20,
-        18,
-        Color::LIGHTGRAY,
-    );
-
-    if game.won_game {
-        draw_ending(draw, game);
+        if game.won_game {
+            draw_ending(draw, game);
+        }
     }
 }
 
@@ -244,49 +271,22 @@ fn render_camera(game: &GameState) -> Vector2 {
     camera
 }
 
-fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
+fn draw_world(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    camera: Vector2,
+    terrain: &TerrainRenderer,
+) {
     draw_surface_buildings(draw, camera);
+    let mut world_draw = draw.begin_mode2D(Camera2D {
+        offset: Vector2::zero(),
+        target: camera,
+        rotation: 0.0,
+        zoom: 1.0,
+    });
+    terrain.draw(&mut world_draw, camera);
+    drop(world_draw);
 
-    let visible = visible_tile_bounds(camera, game);
-    for y in visible.min_y..=visible.max_y {
-        for x in visible.min_x..=visible.max_x {
-            let position = TilePosition { x, y };
-            let Some(tile) = game.terrain.tile(position) else {
-                continue;
-            };
-
-            let explored = game.is_explored(position);
-            if explored && tile.kind == TileKind::Air {
-                continue;
-            }
-
-            draw.draw_rectangle(
-                (x as f32 * TILE_SIZE - camera.x) as i32,
-                (y as f32 * TILE_SIZE - camera.y) as i32,
-                TILE_SIZE as i32,
-                TILE_SIZE as i32,
-                if explored {
-                    layer_tile_color(tile.kind, y)
-                } else {
-                    Color::new(18, 14, 18, 255)
-                },
-            );
-
-            if explored && tile.kind != TileKind::Air {
-                draw_tile_texture(draw, x, y, tile.kind, camera);
-            }
-
-            if explored && tile.durability > 0 {
-                draw.draw_rectangle_lines(
-                    (x as f32 * TILE_SIZE - camera.x) as i32,
-                    (y as f32 * TILE_SIZE - camera.y) as i32,
-                    TILE_SIZE as i32,
-                    TILE_SIZE as i32,
-                    Color::new(0, 0, 0, 30),
-                );
-            }
-        }
-    }
     if let Some(drill) = game.active_drill {
         let x = (drill.target.x as f32 * TILE_SIZE - camera.x) as i32;
         let y = (drill.target.y as f32 * TILE_SIZE - camera.y) as i32;
@@ -298,11 +298,24 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
         let progress = ((f32::from(chipped) + drill.progress.clamp(0.0, 1.0))
             / f32::from(drill.initial_durability.max(1)))
         .clamp(0.0, 1.0);
-        if matches!(
-            game.terrain.tile(drill.target).map(|tile| tile.kind),
-            Some(TileKind::Gas)
-        ) {
-            let pulse = (drill.progress * std::f32::consts::TAU * 4.0).sin().abs();
+        draw.draw_rectangle_lines(
+            x - 2,
+            y - 2,
+            TILE_SIZE as i32 + 4,
+            TILE_SIZE as i32 + 4,
+            Color::YELLOW,
+        );
+        if drill.direction == DrillDirection::Down {
+            let pulse = (game.update_ticks as f32 * 0.4).sin().abs();
+            draw.draw_circle(
+                x + TILE_SIZE as i32 / 2,
+                y + TILE_SIZE as i32 / 2,
+                10.0 + pulse * 8.0,
+                Color::new(255, 180, 70, 85),
+            );
+        }
+        if matches!(game.terrain.tile(drill.target), Some(tile) if tile.kind == TileKind::Gas) {
+            let pulse = (game.update_ticks as f32 * 0.22).sin().abs();
             draw.draw_circle(
                 x + TILE_SIZE as i32 / 2,
                 y + TILE_SIZE as i32 / 2,
@@ -331,46 +344,6 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
             draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
         }
     }
-}
-
-fn draw_tile_texture(
-    draw: &mut RaylibDrawHandle<'_>,
-    tile_x: i32,
-    tile_y: i32,
-    kind: TileKind,
-    camera: Vector2,
-) {
-    let base_x = tile_x as f32 * TILE_SIZE - camera.x;
-    let base_y = tile_y as f32 * TILE_SIZE - camera.y;
-    let seed = texture_hash(tile_x, tile_y);
-    let color = match kind {
-        TileKind::Dirt | TileKind::Clay | TileKind::Stone | TileKind::HardRock => {
-            Color::new(255, 255, 255, 28)
-        }
-        TileKind::Ore(_) => Color::new(255, 245, 180, 80),
-        TileKind::Artifact(_) => Color::new(255, 120, 255, 95),
-        TileKind::Gas => Color::new(120, 255, 120, 70),
-        TileKind::Lava
-        | TileKind::MagmaVent
-        | TileKind::ExplosivePocket
-        | TileKind::PressurePocket => Color::new(255, 120, 60, 85),
-        TileKind::Air => return,
-    };
-    for index in 0..3 {
-        let px = base_x + 4.0 + ((seed >> (index * 5)) & 15) as f32;
-        let py = base_y + 4.0 + ((seed >> (index * 7 + 3)) & 15) as f32;
-        draw.draw_circle_v(
-            Vector2::new(px, py),
-            if index == 0 { 1.8 } else { 1.2 },
-            color,
-        );
-    }
-}
-
-const fn texture_hash(x: i32, y: i32) -> u32 {
-    let ux = x as u32;
-    let uy = y as u32;
-    ux.wrapping_mul(73_856_093) ^ uy.wrapping_mul(19_349_663) ^ 0x9E37_79B9
 }
 
 fn draw_surface_buildings(draw: &mut RaylibDrawHandle<'_>, camera: Vector2) {
@@ -1906,78 +1879,4 @@ fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::RAYWHITE,
     );
-}
-
-const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
-    let base = tile_color(kind);
-    let tint = match y {
-        0..=19 => (0, 0, 0),
-        20..=39 => (10, 5, 20),
-        40..=59 => (25, 10, 0),
-        _ => (15, 0, 25),
-    };
-    Color::new(
-        base.r.saturating_add(tint.0),
-        base.g.saturating_add(tint.1),
-        base.b.saturating_add(tint.2),
-        base.a,
-    )
-}
-
-const fn tile_color(kind: TileKind) -> Color {
-    match kind {
-        TileKind::Air => Color::BLANK,
-        TileKind::Dirt => Color::new(116, 72, 37, 255),
-        TileKind::Clay => Color::new(141, 86, 55, 255),
-        TileKind::Stone => Color::new(92, 92, 96, 255),
-        TileKind::HardRock => Color::new(54, 54, 60, 255),
-        TileKind::Lava => Color::new(255, 84, 28, 255),
-        TileKind::Gas => Color::new(100, 210, 120, 180),
-        TileKind::ExplosivePocket => Color::ORANGE,
-        TileKind::PressurePocket => Color::SKYBLUE,
-        TileKind::MagmaVent => Color::new(255, 36, 12, 255),
-        TileKind::Ore(mineral) => mineral_color(mineral),
-        TileKind::Artifact(artifact) => artifact_color(artifact),
-    }
-}
-
-const fn mineral_color(mineral: MineralKind) -> Color {
-    match mineral {
-        MineralKind::Copper => Color::new(184, 102, 42, 255),
-        MineralKind::Iron => Color::new(168, 150, 132, 255),
-        MineralKind::Silver => Color::new(205, 220, 225, 255),
-        MineralKind::Gold => Color::GOLD,
-        MineralKind::Emerald => Color::GREEN,
-        MineralKind::Ruby => Color::RED,
-        MineralKind::Diamond => Color::SKYBLUE,
-    }
-}
-
-const fn artifact_color(artifact: ArtifactKind) -> Color {
-    match artifact {
-        ArtifactKind::Fossil => Color::BEIGE,
-        ArtifactKind::OldCircuit => Color::VIOLET,
-        ArtifactKind::BuriedIdol => Color::PINK,
-        ArtifactKind::StarCore => Color::new(120, 220, 255, 255),
-    }
-}
-
-struct VisibleTileBounds {
-    min_x: i32,
-    max_x: i32,
-    min_y: i32,
-    max_y: i32,
-}
-
-fn visible_tile_bounds(camera: Vector2, game: &GameState) -> VisibleTileBounds {
-    VisibleTileBounds {
-        min_x: (camera.x / TILE_SIZE).floor().max(0.0) as i32,
-        max_x: ((camera.x + SCREEN_WIDTH as f32) / TILE_SIZE)
-            .ceil()
-            .min(game.terrain.width() as f32 - 1.0) as i32,
-        min_y: (camera.y / TILE_SIZE).floor().max(0.0) as i32,
-        max_y: ((camera.y + SCREEN_HEIGHT as f32) / TILE_SIZE)
-            .ceil()
-            .min(game.terrain.height() as f32 - 1.0) as i32,
-    }
 }

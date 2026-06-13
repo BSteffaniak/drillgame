@@ -182,6 +182,12 @@ pub enum SoundCue {
     Ui,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct VisualChanges {
+    pub full_terrain_refresh: bool,
+    pub changed_tiles: Vec<TilePosition>,
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "game state tracks several orthogonal UI/progression flags"
@@ -283,6 +289,8 @@ pub struct GameState {
     pub sound_cues: Vec<SoundCue>,
     #[serde(default)]
     pub settings_dirty: bool,
+    #[serde(skip)]
+    visual_changes: VisualChanges,
 }
 
 impl GameState {
@@ -304,6 +312,7 @@ impl GameState {
         saved.screen_flash_seconds = 0.0;
         saved.sound_cues.clear();
         saved.settings_dirty = false;
+        saved.visual_changes = VisualChanges::default();
         saved.last_delta_seconds = 0.0;
         saved
     }
@@ -368,6 +377,32 @@ impl GameState {
             screen_flash_seconds: 0.0,
             sound_cues: Vec::new(),
             settings_dirty: false,
+            visual_changes: VisualChanges {
+                full_terrain_refresh: true,
+                changed_tiles: Vec::new(),
+            },
+        }
+    }
+
+    pub fn take_visual_changes(&mut self) -> VisualChanges {
+        std::mem::take(&mut self.visual_changes)
+    }
+
+    pub const fn mark_full_terrain_refresh(&mut self) {
+        self.visual_changes.full_terrain_refresh = true;
+    }
+
+    fn mark_tile_visual_changed(&mut self, position: TilePosition) {
+        self.visual_changes.changed_tiles.push(position);
+    }
+
+    fn mark_radius_visual_changed(&mut self, center: TilePosition, radius: i32) {
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if (x - center.x).abs() + (y - center.y).abs() <= radius {
+                    self.mark_tile_visual_changed(TilePosition { x, y });
+                }
+            }
         }
     }
 
@@ -377,6 +412,10 @@ impl GameState {
             self.explored_tiles = vec![false; expected_tiles];
         }
         self.request_exit = false;
+        self.visual_changes = VisualChanges {
+            full_terrain_refresh: true,
+            changed_tiles: Vec::new(),
+        };
         self.contracts.migrate_after_load();
     }
 
@@ -504,8 +543,12 @@ impl GameState {
         let center_y = (self.player.y / TILE_SIZE).floor() as i32;
         for y in center_y - 3..=center_y + 3 {
             for x in center_x - 4..=center_x + 4 {
-                if let Some(index) = self.tile_index(TilePosition { x, y }) {
+                let position = TilePosition { x, y };
+                if let Some(index) = self.tile_index(position)
+                    && !self.explored_tiles[index]
+                {
                     self.explored_tiles[index] = true;
+                    self.mark_tile_visual_changed(position);
                 }
             }
         }
@@ -520,10 +563,14 @@ impl GameState {
         let radius = 3 + i32::from(self.player.scanner_level) * 2;
         for y in center_y - radius..=center_y + radius {
             for x in center_x - radius..=center_x + radius {
-                if (x - center_x).abs() + (y - center_y).abs() <= radius
-                    && let Some(index) = self.tile_index(TilePosition { x, y })
-                {
-                    self.explored_tiles[index] = true;
+                if (x - center_x).abs() + (y - center_y).abs() <= radius {
+                    let position = TilePosition { x, y };
+                    if let Some(index) = self.tile_index(position)
+                        && !self.explored_tiles[index]
+                    {
+                        self.explored_tiles[index] = true;
+                        self.mark_tile_visual_changed(position);
+                    }
                 }
             }
         }
@@ -617,6 +664,7 @@ impl GameState {
         match load_game() {
             Ok(mut loaded) => {
                 "Game loaded.".clone_into(&mut loaded.message);
+                loaded.mark_full_terrain_refresh();
                 *self = loaded;
             }
             Err(error) => self.message = format!("Load failed: {error}"),
@@ -797,6 +845,7 @@ impl GameState {
             Ok(mut loaded) => {
                 loaded.master_volume = self.master_volume;
                 loaded.fullscreen = self.fullscreen;
+                loaded.mark_full_terrain_refresh();
                 *self = loaded;
                 self.message = format!("Loaded slot {}.", slot + 1);
             }
@@ -1188,7 +1237,11 @@ impl GameState {
             if let Some(state) = &mut self.active_drill {
                 state.progress -= 1.0;
             }
-            match self.terrain.chip(target) {
+            let mine_result = self.terrain.chip(target);
+            if !matches!(mine_result, MineResult::Blocked | MineResult::TooDangerous) {
+                self.mark_tile_visual_changed(target);
+            }
+            match mine_result {
                 MineResult::Blocked => self.active_drill = None,
                 MineResult::TooDangerous => {
                     self.active_drill = None;
@@ -1364,6 +1417,7 @@ impl GameState {
     }
 
     fn detonate_bomb(&mut self, center: TilePosition, radius: i32) {
+        self.mark_radius_visual_changed(center, radius);
         let cleared = self.terrain.blast_radius(center, radius);
         self.sound_cues.push(SoundCue::Explosion);
         self.screen_flash_seconds = self.screen_flash_seconds.max(0.22);
@@ -1395,6 +1449,7 @@ impl GameState {
                     self.terrain.tile(position).map(|tile| tile.kind),
                     Some(TileKind::Gas | TileKind::ExplosivePocket | TileKind::PressurePocket)
                 ) {
+                    self.mark_radius_visual_changed(position, 1);
                     let _ = self.terrain.blast_radius(position, 1);
                     self.hazard_clouds.push(HazardCloud {
                         x: x as f32 * TILE_SIZE,
