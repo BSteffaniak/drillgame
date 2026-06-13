@@ -75,13 +75,20 @@ pub fn repair(player: &mut Player) -> u32 {
 }
 
 pub fn sell_cargo(player: &mut Player) -> u32 {
-    let payout = player
+    let mineral_payout: u32 = player
         .cargo
         .iter()
         .map(|(mineral, count)| mineral.value() * count)
         .sum();
+    let artifact_payout: u32 = player
+        .artifacts
+        .iter()
+        .map(|(artifact, count)| artifact.value() * count)
+        .sum();
+    let payout = mineral_payout + artifact_payout;
     player.credits += payout;
     player.cargo.clear();
+    player.artifacts.clear();
     payout
 }
 
@@ -184,4 +191,41 @@ fn upgrade_cost(kind: UpgradeKind, next_level: u8) -> u32 {
 fn affordable_service_cost(missing: f32, unit_cost: u32, credits: u32) -> u32 {
     let requested = missing as u32 * unit_cost;
     requested.min(credits)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        economy::{refuel, repair, sell_cargo},
+        player::Player,
+        terrain::{ArtifactKind, MineralKind},
+    };
+
+    #[test]
+    fn depot_sells_minerals_and_artifacts() {
+        let mut player = Player::new(0.0, 0.0);
+        assert!(player.add_cargo(MineralKind::Gold));
+        assert!(player.add_artifact(ArtifactKind::Fossil));
+
+        let payout = sell_cargo(&mut player);
+
+        assert_eq!(
+            payout,
+            MineralKind::Gold.value() + ArtifactKind::Fossil.value()
+        );
+        assert_eq!(player.credits, payout);
+        assert_eq!(player.cargo_used(), 0);
+    }
+
+    #[test]
+    fn service_costs_are_limited_by_available_credits() {
+        let mut player = Player::new(0.0, 0.0);
+        player.credits = 10;
+        player.fuel = 0.0;
+        player.hull = 0.0;
+
+        assert_eq!(refuel(&mut player), 10);
+        assert_eq!(player.credits, 0);
+        assert_eq!(repair(&mut player), 0);
+    }
 }

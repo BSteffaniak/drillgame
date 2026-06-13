@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::terrain::{MineralKind, TilePosition};
+use crate::terrain::{ArtifactKind, MineralKind, TilePosition};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Player {
@@ -19,6 +19,7 @@ pub struct Player {
     pub fuel_capacity: f32,
     pub hull: f32,
     pub cargo: BTreeMap<MineralKind, u32>,
+    pub artifacts: BTreeMap<ArtifactKind, u32>,
     pub cargo_capacity: u32,
     pub fuel_tank_level: u8,
     pub cargo_bay_level: u8,
@@ -45,6 +46,7 @@ impl Player {
             fuel_capacity: 100.0,
             hull: 100.0,
             cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
             cargo_capacity: 12,
             fuel_tank_level: 1,
             cargo_bay_level: 1,
@@ -66,7 +68,7 @@ impl Player {
 
     #[must_use]
     pub fn cargo_used(&self) -> u32 {
-        self.cargo.values().sum()
+        self.cargo.values().sum::<u32>() + self.artifacts.values().sum::<u32>()
     }
 
     #[must_use]
@@ -85,6 +87,15 @@ impl Player {
         }
 
         *self.cargo.entry(mineral).or_default() += 1;
+        true
+    }
+
+    pub fn add_artifact(&mut self, artifact: ArtifactKind) -> bool {
+        if !self.has_cargo_space() {
+            return false;
+        }
+
+        *self.artifacts.entry(artifact).or_default() += 1;
         true
     }
 }

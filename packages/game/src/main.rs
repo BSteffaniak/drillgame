@@ -3,6 +3,7 @@
 #![allow(clippy::multiple_crate_versions)]
 
 mod app;
+mod contract;
 mod economy;
 mod game_state;
 mod input;

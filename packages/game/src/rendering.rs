@@ -10,7 +10,7 @@ use raylib::prelude::*;
 use crate::{
     economy::{SurfaceZone, upgrade_offers},
     game_state::{GameState, TILE_SIZE},
-    terrain::{MineralKind, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
 const SCREEN_WIDTH: i32 = 1280;
@@ -119,7 +119,7 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
 }
 
 fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(12, 12, 500, 216, Color::new(0, 0, 0, 175));
+    draw.draw_rectangle(12, 12, 560, 242, Color::new(0, 0, 0, 175));
     draw_bar(
         draw,
         24,
@@ -179,7 +179,20 @@ fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::RAYWHITE,
     );
-    draw.draw_text(&game.message, 24, 188, 18, Color::RAYWHITE);
+    draw.draw_text(
+        &format!(
+            "Contract: {}/{} {} = {} cr",
+            game.contracts.active.progress(&game.player),
+            game.contracts.active.required,
+            game.contracts.active.target.name(),
+            game.contracts.active.reward
+        ),
+        24,
+        188,
+        18,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(&game.message, 24, 216, 18, Color::RAYWHITE);
 
     draw_cargo_manifest(draw, game);
 }
@@ -209,7 +222,8 @@ fn draw_bar(
 
 fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let mut y = 214;
-    let cargo_rows = i32::try_from(game.player.cargo.len()).unwrap_or(i32::MAX);
+    let cargo_rows =
+        i32::try_from(game.player.cargo.len() + game.player.artifacts.len()).unwrap_or(i32::MAX);
     draw.draw_rectangle(
         12,
         y - 10,
@@ -220,7 +234,7 @@ fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Cargo Manifest", 24, y, 18, Color::WHITE);
     y += 24;
 
-    if game.player.cargo.is_empty() {
+    if game.player.cargo.is_empty() && game.player.artifacts.is_empty() {
         draw.draw_text("empty", 24, y, 16, Color::LIGHTGRAY);
         return;
     }
@@ -237,6 +251,22 @@ fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             y,
             16,
             mineral_color(*mineral),
+        );
+        y += 22;
+    }
+
+    for (artifact, count) in &game.player.artifacts {
+        draw.draw_text(
+            &format!(
+                "{} x{} = {}",
+                artifact.name(),
+                count,
+                artifact.value() * count
+            ),
+            24,
+            y,
+            16,
+            artifact_color(*artifact),
         );
         y += 22;
     }
@@ -291,7 +321,9 @@ const fn tile_color(kind: TileKind) -> Color {
         TileKind::Clay => Color::new(141, 86, 55, 255),
         TileKind::Stone => Color::new(92, 92, 96, 255),
         TileKind::HardRock => Color::new(54, 54, 60, 255),
+        TileKind::Lava => Color::new(255, 84, 28, 255),
         TileKind::Ore(mineral) => mineral_color(mineral),
+        TileKind::Artifact(artifact) => artifact_color(artifact),
     }
 }
 
@@ -304,6 +336,15 @@ const fn mineral_color(mineral: MineralKind) -> Color {
         MineralKind::Emerald => Color::GREEN,
         MineralKind::Ruby => Color::RED,
         MineralKind::Diamond => Color::SKYBLUE,
+    }
+}
+
+const fn artifact_color(artifact: ArtifactKind) -> Color {
+    match artifact {
+        ArtifactKind::Fossil => Color::BEIGE,
+        ArtifactKind::OldCircuit => Color::VIOLET,
+        ArtifactKind::BuriedIdol => Color::PINK,
+        ArtifactKind::StarCore => Color::new(120, 220, 255, 255),
     }
 }
 

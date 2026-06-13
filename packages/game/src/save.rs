@@ -35,3 +35,18 @@ impl fmt::Display for SaveError {
 }
 
 impl Error for SaveError {}
+
+#[cfg(test)]
+mod tests {
+    use crate::game_state::GameState;
+
+    #[test]
+    fn game_state_round_trips_through_json() {
+        let game = GameState::new();
+        let json = serde_json::to_string(&game).expect("serialize game");
+        let loaded: GameState = serde_json::from_str(&json).expect("deserialize game");
+
+        assert_eq!(loaded.player.cargo_capacity, game.player.cargo_capacity);
+        assert_eq!(loaded.terrain.width(), game.terrain.width());
+    }
+}

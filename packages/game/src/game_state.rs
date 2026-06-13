@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    contract::ContractLog,
     economy::{
         PurchaseError, SurfaceZone, buy_upgrade, refuel, repair, sell_cargo, upgrade_offers,
     },
@@ -44,6 +45,7 @@ pub struct GameState {
     pub player: Player,
     pub message: String,
     pub current_zone: Option<SurfaceZone>,
+    pub contracts: ContractLog,
     pub game_over: bool,
     pub camera_x: f32,
     pub camera_y: f32,
@@ -59,6 +61,7 @@ impl GameState {
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             current_zone: None,
+            contracts: ContractLog::new(),
             game_over: false,
             camera_x: 0.0,
             camera_y: 0.0,
@@ -80,6 +83,7 @@ impl GameState {
         self.apply_movement(input, delta_seconds);
         self.try_mine(input);
         self.apply_depth_pressure(delta_seconds);
+        self.apply_lava_damage(delta_seconds);
         self.update_status_messages();
         self.check_failure();
         self.update_camera(delta_seconds);
@@ -138,6 +142,11 @@ impl GameState {
                 };
             }
             Some(SurfaceZone::Depot) => {
+                if let Some(reward) = self.contracts.try_complete(&mut self.player) {
+                    self.message = format!("Contract complete! Bonus paid: {reward} credits.");
+                    return;
+                }
+
                 let payout = sell_cargo(&mut self.player);
                 if payout == 0 {
                     "No cargo to sell.".clone_into(&mut self.message);
@@ -235,10 +244,21 @@ impl GameState {
             .any(|position| self.terrain.is_solid_at(*position))
     }
 
+    fn is_grounded(&self) -> bool {
+        collision_points(self.player.x, self.player.y + 2.0)
+            .iter()
+            .any(|position| self.terrain.is_solid_at(*position))
+    }
+
     fn try_mine(&mut self, input: PlayerInput) {
         let Some(target) = mine_target(&self.player, input) else {
             return;
         };
+
+        if !input.drill_down && !self.is_grounded() {
+            "Side drilling requires ground contact.".clone_into(&mut self.message);
+            return;
+        }
 
         if self.player.fuel < DRILL_FUEL_COST {
             "Out of fuel. Reach a fuel station or await rescue.".clone_into(&mut self.message);
@@ -249,6 +269,10 @@ impl GameState {
             MineResult::Blocked => {}
             MineResult::TooHard => {
                 "That layer is too hard. Upgrade your drill.".clone_into(&mut self.message);
+            }
+            MineResult::TooDangerous => {
+                self.player.hull = (self.player.hull - 8.0).max(0.0);
+                "Lava pocket! Hull scorched.".clone_into(&mut self.message);
             }
             MineResult::Chipped => {
                 self.player.fuel -= DRILL_FUEL_COST;
@@ -266,6 +290,16 @@ impl GameState {
         if let TileKind::Ore(mineral) = mined {
             if self.player.add_cargo(mineral) {
                 self.message = format!("Loaded {} ore worth {}.", mineral.name(), mineral.value());
+            } else {
+                "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
+            }
+        } else if let TileKind::Artifact(artifact) = mined {
+            if self.player.add_artifact(artifact) {
+                self.message = format!(
+                    "Recovered {} artifact worth {}.",
+                    artifact.name(),
+                    artifact.value()
+                );
             } else {
                 "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
             }
@@ -287,6 +321,19 @@ impl GameState {
         "Depth pressure overheating hull. Upgrade radiator.".clone_into(&mut self.message);
     }
 
+    fn apply_lava_damage(&mut self, delta_seconds: f32) {
+        if !collision_points(self.player.x, self.player.y)
+            .iter()
+            .any(|position| self.terrain.is_lava_at(*position))
+        {
+            return;
+        }
+
+        let damage = 24.0 * delta_seconds;
+        self.player.hull = (self.player.hull - damage).max(0.0);
+        "Lava heat is burning the hull!".clone_into(&mut self.message);
+    }
+
     fn update_camera(&mut self, delta_seconds: f32) {
         let (target_x, target_y) = target_camera_offset(self);
         let blend = (delta_seconds * CAMERA_SMOOTHING).clamp(0.0, 1.0);
@@ -303,7 +350,7 @@ impl GameState {
                 SurfaceZone::Repair => {
                     "Repair Garage: press E to repair hull (2 credits/unit).".to_owned()
                 }
-                SurfaceZone::Depot => "Ore Depot: press E to sell cargo.".to_owned(),
+                SurfaceZone::Depot => depot_prompt(self),
                 SurfaceZone::Shop => shop_prompt(&self.player),
             };
         }
@@ -324,8 +371,9 @@ impl GameState {
             return;
         }
 
-        let fee = self.player.credits.min(50);
+        let fee = rescue_fee(self.player.y).min(self.player.credits);
         self.player.credits -= fee;
+        let lost_items = drop_half_cargo(&mut self.player);
         self.player.x = 12.0 * TILE_SIZE;
         self.player.y = 4.0 * TILE_SIZE;
         self.player.velocity_x = 0.0;
@@ -333,7 +381,8 @@ impl GameState {
         self.player.fuel = self.player.fuel_capacity * 0.5;
         self.player.hull = self.player.max_hull() * 0.5;
         self.game_over = false;
-        self.message = format!("Emergency rescue completed. Fee: {fee} credits.");
+        self.message =
+            format!("Emergency rescue completed. Fee: {fee} credits. Cargo lost: {lost_items}.");
     }
 }
 
@@ -341,6 +390,28 @@ impl Default for GameState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn rescue_fee(player_y: f32) -> u32 {
+    50 + ((player_y / TILE_SIZE).max(0.0) as u32 * 3)
+}
+
+fn drop_half_cargo(player: &mut Player) -> u32 {
+    let mut lost = 0;
+    for count in player.cargo.values_mut() {
+        let dropped = (*count).div_ceil(2);
+        *count -= dropped;
+        lost += dropped;
+    }
+    player.cargo.retain(|_, count| *count > 0);
+
+    for count in player.artifacts.values_mut() {
+        let dropped = (*count).div_ceil(2);
+        *count -= dropped;
+        lost += dropped;
+    }
+    player.artifacts.retain(|_, count| *count > 0);
+    lost
 }
 
 fn mine_target(player: &Player, input: PlayerInput) -> Option<TilePosition> {
@@ -374,6 +445,17 @@ fn surface_zone_at(x: f32, y: f32) -> Option<SurfaceZone> {
         24..=35 => Some(SurfaceZone::Shop),
         _ => None,
     }
+}
+
+fn depot_prompt(game: &GameState) -> String {
+    let contract = &game.contracts.active;
+    format!(
+        "Depot: E completes contract ({}/{}) {} for {} cr, otherwise sells cargo.",
+        contract.progress(&game.player),
+        contract.required,
+        contract.target.name(),
+        contract.reward
+    )
 }
 
 fn shop_prompt(player: &Player) -> String {

@@ -44,6 +44,36 @@ impl MineralKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum ArtifactKind {
+    Fossil,
+    OldCircuit,
+    BuriedIdol,
+    StarCore,
+}
+
+impl ArtifactKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fossil => "Fossil",
+            Self::OldCircuit => "Old Circuit",
+            Self::BuriedIdol => "Buried Idol",
+            Self::StarCore => "Star Core",
+        }
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        match self {
+            Self::Fossil => 130,
+            Self::OldCircuit => 240,
+            Self::BuriedIdol => 420,
+            Self::StarCore => 760,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TileKind {
     Air,
@@ -51,7 +81,9 @@ pub enum TileKind {
     Clay,
     Stone,
     HardRock,
+    Lava,
     Ore(MineralKind),
+    Artifact(ArtifactKind),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -116,6 +148,12 @@ impl Terrain {
             .is_some_and(|tile| tile.kind != TileKind::Air)
     }
 
+    #[must_use]
+    pub fn is_lava_at(&self, position: TilePosition) -> bool {
+        self.tile(position)
+            .is_some_and(|tile| tile.kind == TileKind::Lava)
+    }
+
     pub fn mine(&mut self, position: TilePosition, drill_strength: u8) -> MineResult {
         let Some(index) = self.index(position) else {
             return MineResult::Blocked;
@@ -124,6 +162,10 @@ impl Terrain {
 
         if tile.kind == TileKind::Air {
             return MineResult::Blocked;
+        }
+
+        if tile.kind == TileKind::Lava {
+            return MineResult::TooDangerous;
         }
 
         if tile_hardness(tile.kind) > drill_strength {
@@ -154,17 +196,73 @@ impl Terrain {
 pub enum MineResult {
     Blocked,
     TooHard,
+    TooDangerous,
     Chipped,
     Mined(TileKind),
 }
 
 const fn generated_tile_kind(x: i32, y: i32) -> TileKind {
+    if y <= 4 {
+        return TileKind::Air;
+    }
+
+    if cave_air(x, y) {
+        return TileKind::Air;
+    }
+
+    if lava_pocket(x, y) {
+        return TileKind::Lava;
+    }
+
+    if artifact_spot(x, y) {
+        return TileKind::Artifact(artifact_at_depth(x, y));
+    }
+
+    let base = match y {
+        5..=14 => TileKind::Dirt,
+        15..=29 => TileKind::Clay,
+        30..=54 => TileKind::Stone,
+        _ => TileKind::HardRock,
+    };
+
+    ore_or_base_tile(x, y, base)
+}
+
+const fn cave_air(x: i32, y: i32) -> bool {
+    if y < 12 {
+        return false;
+    }
+
+    let cavern = ((x / 5) * 17 + (y / 4) * 13).rem_euclid(47);
+    let tunnel = (x * 3 + y * 5).rem_euclid(97);
+    cavern == 0 || tunnel == 0
+}
+
+const fn lava_pocket(x: i32, y: i32) -> bool {
+    if y < 48 {
+        return false;
+    }
+
+    let pocket = ((x / 4) * 29 + (y / 3) * 31).rem_euclid(61);
+    pocket == 0 || (pocket == 1 && y > 68)
+}
+
+const fn artifact_spot(x: i32, y: i32) -> bool {
+    y > 20 && (x * 41 + y * 59).rem_euclid(211) == 0
+}
+
+const fn artifact_at_depth(x: i32, y: i32) -> ArtifactKind {
     match y {
-        0..=4 => TileKind::Air,
-        5..=14 => ore_or_base_tile(x, y, TileKind::Dirt),
-        15..=29 => ore_or_base_tile(x, y, TileKind::Clay),
-        30..=54 => ore_or_base_tile(x, y, TileKind::Stone),
-        _ => ore_or_base_tile(x, y, TileKind::HardRock),
+        0..=30 => ArtifactKind::Fossil,
+        31..=50 => ArtifactKind::OldCircuit,
+        51..=70 => {
+            if (x + y).rem_euclid(2) == 0 {
+                ArtifactKind::BuriedIdol
+            } else {
+                ArtifactKind::OldCircuit
+            }
+        }
+        _ => ArtifactKind::StarCore,
     }
 }
 
@@ -207,11 +305,15 @@ const fn patterned_ore(x: i32, y: i32) -> bool {
 
 const fn tile_hardness(kind: TileKind) -> u8 {
     match kind {
-        TileKind::Air => 0,
+        TileKind::Air | TileKind::Lava => 0,
         TileKind::Dirt | TileKind::Ore(MineralKind::Copper | MineralKind::Iron) => 1,
         TileKind::Clay | TileKind::Ore(MineralKind::Silver | MineralKind::Gold) => 2,
-        TileKind::Stone | TileKind::Ore(MineralKind::Emerald | MineralKind::Ruby) => 3,
-        TileKind::HardRock | TileKind::Ore(MineralKind::Diamond) => 4,
+        TileKind::Stone
+        | TileKind::Ore(MineralKind::Emerald | MineralKind::Ruby)
+        | TileKind::Artifact(ArtifactKind::Fossil | ArtifactKind::OldCircuit) => 3,
+        TileKind::HardRock
+        | TileKind::Ore(MineralKind::Diamond)
+        | TileKind::Artifact(ArtifactKind::BuriedIdol | ArtifactKind::StarCore) => 4,
     }
 }
 
@@ -222,6 +324,37 @@ const fn tile_durability(kind: TileKind) -> u8 {
         TileKind::Clay => 4,
         TileKind::Stone => 7,
         TileKind::HardRock => 11,
+        TileKind::Lava => 1,
         TileKind::Ore(mineral) => tile_hardness(TileKind::Ore(mineral)) + 2,
+        TileKind::Artifact(artifact) => tile_hardness(TileKind::Artifact(artifact)) + 5,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Terrain, TileKind, TilePosition};
+
+    #[test]
+    fn generated_world_contains_caves_and_hazards() {
+        let terrain = Terrain::new(120, 90);
+        let mut air_below_surface = 0;
+        let mut lava = 0;
+
+        for y in 8..terrain.height() {
+            for x in 0..terrain.width() {
+                match terrain
+                    .tile(TilePosition { x, y })
+                    .expect("tile exists")
+                    .kind
+                {
+                    TileKind::Air => air_below_surface += 1,
+                    TileKind::Lava => lava += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(air_below_surface > 0);
+        assert!(lava > 0);
     }
 }

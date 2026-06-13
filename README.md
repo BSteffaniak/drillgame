@@ -22,6 +22,7 @@ nix develop -c cargo run --bin drillgame
 - `A` / `D` or left/right arrows: move horizontally and drill sideways
 - `W` / up arrow / space: thrust upward
 - `S` / down arrow: drill downward
+- side movement drills sideways only while grounded
 - `E`: interact with surface buildings or rescue prompt
 - `1`-`6`: buy upgrades while parked at the shop
 - `F5`: save to `drillgame-save.json`
