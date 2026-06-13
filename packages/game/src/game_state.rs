@@ -207,6 +207,10 @@ pub struct GameState {
     pub return_streak: u32,
     #[serde(default)]
     pub play_seconds: f32,
+    #[serde(default)]
+    pub last_delta_seconds: f32,
+    #[serde(default)]
+    pub update_ticks: u64,
     pub next_milestone_tile: i32,
     #[serde(default)]
     pub current_layer_band: i32,
@@ -268,6 +272,7 @@ impl GameState {
         saved.screen_flash_seconds = 0.0;
         saved.sound_cues.clear();
         saved.settings_dirty = false;
+        saved.last_delta_seconds = 0.0;
         saved
     }
 
@@ -297,6 +302,8 @@ impl GameState {
             trip_best_depth: 0,
             return_streak: 0,
             play_seconds: 0.0,
+            last_delta_seconds: 0.0,
+            update_ticks: 0,
             next_milestone_tile: 20,
             current_layer_band: 0,
             game_over: false,
@@ -334,6 +341,8 @@ impl GameState {
     }
 
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
+        self.last_delta_seconds = delta_seconds;
+        self.update_ticks = self.update_ticks.saturating_add(1);
         self.sound_cues.clear();
         self.show_details = input.details;
         self.handle_save_load(input);

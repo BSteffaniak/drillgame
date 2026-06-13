@@ -477,4 +477,26 @@ mod tests {
         assert!(lava > 0);
         assert!(gas > 0);
     }
+    #[test]
+    fn deeper_biomes_have_more_fractured_air() {
+        let terrain = Terrain::new(120, 90);
+        let shallow_air = count_air(&terrain, 12, 28);
+        let deep_air = count_air(&terrain, 58, 84);
+        assert!(deep_air > shallow_air);
+    }
+
+    fn count_air(terrain: &Terrain, min_y: i32, max_y: i32) -> u32 {
+        let mut total = 0;
+        for y in min_y..=max_y {
+            for x in 0..terrain.width() {
+                if terrain
+                    .tile(TilePosition { x, y })
+                    .is_some_and(|tile| tile.kind == TileKind::Air)
+                {
+                    total += 1;
+                }
+            }
+        }
+        total
+    }
 }

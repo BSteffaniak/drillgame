@@ -124,6 +124,10 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
                 },
             );
 
+            if explored && tile.kind != TileKind::Air {
+                draw_tile_texture(draw, x, y, tile.kind, camera);
+            }
+
             if explored && tile.durability > 0 {
                 draw.draw_rectangle_lines(
                     (x as f32 * TILE_SIZE - camera.x) as i32,
@@ -179,6 +183,46 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
             draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
         }
     }
+}
+
+fn draw_tile_texture(
+    draw: &mut RaylibDrawHandle<'_>,
+    tile_x: i32,
+    tile_y: i32,
+    kind: TileKind,
+    camera: Vector2,
+) {
+    let base_x = tile_x as f32 * TILE_SIZE - camera.x;
+    let base_y = tile_y as f32 * TILE_SIZE - camera.y;
+    let seed = texture_hash(tile_x, tile_y);
+    let color = match kind {
+        TileKind::Dirt | TileKind::Clay | TileKind::Stone | TileKind::HardRock => {
+            Color::new(255, 255, 255, 28)
+        }
+        TileKind::Ore(_) => Color::new(255, 245, 180, 80),
+        TileKind::Artifact(_) => Color::new(255, 120, 255, 95),
+        TileKind::Gas => Color::new(120, 255, 120, 70),
+        TileKind::Lava
+        | TileKind::MagmaVent
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket => Color::new(255, 120, 60, 85),
+        TileKind::Air => return,
+    };
+    for index in 0..3 {
+        let px = base_x + 4.0 + ((seed >> (index * 5)) & 15) as f32;
+        let py = base_y + 4.0 + ((seed >> (index * 7 + 3)) & 15) as f32;
+        draw.draw_circle_v(
+            Vector2::new(px, py),
+            if index == 0 { 1.8 } else { 1.2 },
+            color,
+        );
+    }
+}
+
+const fn texture_hash(x: i32, y: i32) -> u32 {
+    let ux = x as u32;
+    let uy = y as u32;
+    ux.wrapping_mul(73_856_093) ^ uy.wrapping_mul(19_349_663) ^ 0x9E37_79B9
 }
 
 fn draw_surface_buildings(draw: &mut RaylibDrawHandle<'_>, camera: Vector2) {
@@ -495,6 +539,54 @@ fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.show_details || game.modal == Some(ModalScreen::Depot) {
         draw_detail_panel(draw, game);
     }
+    if game.show_details {
+        draw_debug_stats(draw, game);
+    }
+}
+
+fn draw_debug_stats(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let fps = if game.last_delta_seconds > 0.0 {
+        1.0 / game.last_delta_seconds
+    } else {
+        0.0
+    };
+    draw.draw_rectangle(980, 90, 270, 96, Color::new(0, 0, 0, 145));
+    draw.draw_rectangle_lines(980, 90, 270, 96, Color::DARKGRAY);
+    draw.draw_text("Debug", 995, 102, 18, Color::SKYBLUE);
+    draw.draw_text(
+        &format!(
+            "Frame {:.1} ms / {:.0} fps",
+            game.last_delta_seconds * 1000.0,
+            fps
+        ),
+        995,
+        126,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &format!(
+            "Ticks {} | play {:.1}m",
+            game.update_ticks,
+            game.play_seconds / 60.0
+        ),
+        995,
+        148,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &format!(
+            "Particles d{} s{} b{}",
+            game.dust_particles.len(),
+            game.spark_particles.len(),
+            game.falling_boulders.len()
+        ),
+        995,
+        170,
+        16,
+        Color::RAYWHITE,
+    );
 }
 
 fn draw_compact_status(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -1470,9 +1562,9 @@ fn draw_title(draw: &mut RaylibDrawHandle<'_>) {
 
 fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
-    draw.draw_rectangle(430, 190, 420, 310, Color::new(0, 0, 0, 220));
-    draw.draw_rectangle_lines(430, 190, 420, 310, Color::RAYWHITE);
-    draw.draw_text("PAUSED", 548, 220, 44, Color::RAYWHITE);
+    draw.draw_rectangle(430, 170, 420, 360, Color::new(0, 0, 0, 220));
+    draw.draw_rectangle_lines(430, 170, 420, 360, Color::RAYWHITE);
+    draw.draw_text("PAUSED", 548, 200, 44, Color::RAYWHITE);
 
     for (index, option) in PauseOption::ALL.iter().enumerate() {
         let y = 300 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
