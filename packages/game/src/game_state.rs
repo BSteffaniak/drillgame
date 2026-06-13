@@ -53,6 +53,7 @@ pub struct DrillState {
     pub target: TilePosition,
     pub direction: DrillDirection,
     pub progress: f32,
+    pub initial_durability: u8,
     pub seconds_per_chip: f32,
     pub sound_timer: f32,
     pub dust_timer: f32,
@@ -641,6 +642,10 @@ impl GameState {
             .any(|position| self.terrain.is_solid_at(*position))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "drilling update coordinates input, physics, terrain, feedback, and collection in one frame step"
+    )]
     fn update_drilling(&mut self, input: PlayerInput, delta_seconds: f32) {
         let Some((target, direction)) = mine_target(&self.player, input) else {
             self.active_drill = None;
@@ -689,6 +694,7 @@ impl GameState {
                 target,
                 direction,
                 progress: 0.0,
+                initial_durability: tile.durability.max(1),
                 seconds_per_chip,
                 sound_timer: 0.0,
                 dust_timer: 0.0,
@@ -715,10 +721,14 @@ impl GameState {
             }
             should_chip = state.progress >= 1.0;
             self.drill_flash_seconds = 0.09;
+            let chipped = state.initial_durability.saturating_sub(tile.durability);
+            let total_progress = ((f32::from(chipped) + state.progress.min(1.0))
+                / f32::from(state.initial_durability.max(1)))
+            .clamp(0.0, 1.0);
             self.message = format!(
                 "Drilling {}... {:.0}%",
                 tile.kind.name(),
-                (state.progress.min(1.0) * 100.0)
+                total_progress * 100.0
             );
         }
         if should_spawn_dust {

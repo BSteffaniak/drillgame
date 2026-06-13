@@ -109,22 +109,33 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
     if let Some(drill) = game.active_drill {
         let x = (drill.target.x as f32 * TILE_SIZE - camera.x) as i32;
         let y = (drill.target.y as f32 * TILE_SIZE - camera.y) as i32;
-        let inset = (10.0 * (1.0 - drill.progress.clamp(0.0, 1.0))) as i32;
-        draw.draw_rectangle_lines(
-            x + inset,
-            y + inset,
-            TILE_SIZE as i32 - inset * 2,
-            TILE_SIZE as i32 - inset * 2,
-            Color::YELLOW,
+        let current_durability = game
+            .terrain
+            .tile(drill.target)
+            .map_or(drill.initial_durability, |tile| tile.durability);
+        let chipped = drill.initial_durability.saturating_sub(current_durability);
+        let progress = ((f32::from(chipped) + drill.progress.clamp(0.0, 1.0))
+            / f32::from(drill.initial_durability.max(1)))
+        .clamp(0.0, 1.0);
+        let bar_width = (TILE_SIZE * progress) as i32;
+        draw.draw_rectangle(
+            x + 4,
+            y + TILE_SIZE as i32 - 7,
+            TILE_SIZE as i32 - 8,
+            3,
+            Color::new(0, 0, 0, 120),
         );
-        draw.draw_line(x + 5, y + 8, x + 24, y + 26, Color::new(255, 230, 120, 210));
-        draw.draw_line(
-            x + 24,
-            y + 7,
-            x + 10,
-            y + 24,
-            Color::new(255, 230, 120, 180),
+        draw.draw_rectangle(
+            x + 4,
+            y + TILE_SIZE as i32 - 7,
+            bar_width.min(TILE_SIZE as i32 - 8),
+            3,
+            Color::new(255, 215, 90, 220),
         );
+        draw.draw_circle(x + 10, y + 11, 2.0, Color::new(255, 235, 150, 170));
+        if progress > 0.45 {
+            draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
+        }
     }
 }
 
