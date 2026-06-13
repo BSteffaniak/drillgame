@@ -280,6 +280,7 @@ impl GameState {
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
+        self.update_warning_messages();
         self.update_status_messages();
         self.check_failure();
         self.update_camera(delta_seconds);
@@ -521,6 +522,9 @@ impl GameState {
         }
 
         let payout = sell_cargo(&mut self.player);
+        if payout > 0 {
+            let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {payout} cr");
+        }
         if payout == 0 {
             "No cargo to sell.".clone_into(&mut self.message);
         } else {
@@ -920,7 +924,22 @@ impl GameState {
         self.camera_y += (target_y - self.camera_y) * blend;
     }
 
+    fn update_warning_messages(&mut self) {
+        let low_fuel = self.player.fuel <= self.player.fuel_capacity * 0.18;
+        let low_hull = self.player.hull <= self.player.max_hull() * 0.25;
+        match (low_fuel, low_hull) {
+            (true, true) => "CRITICAL: low fuel and damaged hull. Return to surface!"
+                .clone_into(&mut self.message),
+            (true, false) => "Warning: fuel reserves low.".clone_into(&mut self.message),
+            (false, true) => "Warning: hull integrity low.".clone_into(&mut self.message),
+            (false, false) => {}
+        }
+    }
+
     fn update_status_messages(&mut self) {
+        if self.message.starts_with("Warning:") || self.message.starts_with("CRITICAL:") {
+            return;
+        }
         if let Some(zone) = self.current_zone {
             self.message = match zone {
                 SurfaceZone::Fuel => {

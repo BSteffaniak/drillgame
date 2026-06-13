@@ -506,6 +506,20 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 Color::WHITE,
             );
             draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
+            let missing = (game.player.fuel_capacity - game.player.fuel)
+                .ceil()
+                .max(0.0) as u32;
+            let affordable = missing.min(game.player.credits);
+            draw.draw_text(
+                &format!(
+                    "Tank: {:.0}/{:.0} | Fill cost: {missing} cr | Buying now: {affordable} units",
+                    game.player.fuel, game.player.fuel_capacity
+                ),
+                330,
+                290,
+                18,
+                Color::RAYWHITE,
+            );
         }
         ModalScreen::Repair => {
             draw.draw_text("Repair Garage", 330, 150, 30, Color::LIME);
@@ -517,6 +531,21 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 Color::WHITE,
             );
             draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
+            let missing = (game.player.max_hull() - game.player.hull).ceil().max(0.0) as u32;
+            let affordable_units = missing.min(game.player.credits / 2);
+            draw.draw_text(
+                &format!(
+                    "Hull: {:.0}/{:.0} | Full repair: {} cr | Repairing now: {} hull",
+                    game.player.hull,
+                    game.player.max_hull(),
+                    missing * 2,
+                    affordable_units
+                ),
+                330,
+                290,
+                18,
+                Color::RAYWHITE,
+            );
         }
         ModalScreen::Depot => draw_modal_depot(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
@@ -571,13 +600,59 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::RAYWHITE,
     );
 
+    draw.draw_text(
+        &format!(
+            "Cargo manifest: {}/{} slots",
+            game.player.cargo_used(),
+            game.player.cargo_capacity
+        ),
+        330,
+        350,
+        18,
+        Color::LIGHTGRAY,
+    );
+    let mut manifest_y = 378;
+    for (mineral, count) in &game.player.cargo {
+        draw.draw_text(
+            &format!(
+                "{} x{} = {} cr",
+                mineral.name(),
+                count,
+                mineral.value() * count
+            ),
+            350,
+            manifest_y,
+            16,
+            Color::RAYWHITE,
+        );
+        manifest_y += 20;
+    }
+    for (artifact, count) in &game.player.artifacts {
+        draw.draw_text(
+            &format!(
+                "{} x{} = {} cr",
+                artifact.name(),
+                count,
+                artifact.value() * count
+            ),
+            350,
+            manifest_y,
+            16,
+            Color::MAGENTA,
+        );
+        manifest_y += 20;
+    }
+    if game.player.cargo_used() == 0 {
+        draw.draw_text("Cargo hold empty", 350, manifest_y, 16, Color::GRAY);
+    }
+
     if !game.last_depot_receipt.is_empty() {
-        draw.draw_text("Last receipt:", 330, 360, 18, Color::LIGHTGRAY);
-        for (index, line) in game.last_depot_receipt.lines().take(5).enumerate() {
+        draw.draw_text("Last receipt:", 710, 350, 18, Color::LIGHTGRAY);
+        for (index, line) in game.last_depot_receipt.lines().take(6).enumerate() {
             draw.draw_text(
                 line,
-                350,
-                386 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+                730,
+                376 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
                 16,
                 Color::RAYWHITE,
             );
@@ -620,6 +695,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 TileKind::Air => Color::new(40, 42, 55, 255),
                 TileKind::Lava => Color::RED,
                 TileKind::Gas => Color::GREEN,
+                TileKind::Ore(mineral) if mineral.value() >= 78 => Color::ORANGE,
                 TileKind::Ore(_) => Color::GOLD,
                 TileKind::Artifact(_) => Color::MAGENTA,
                 _ => Color::new(115, 82, 58, 255),
@@ -631,6 +707,26 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     draw.draw_circle(player_x, player_y, 6.0, Color::SKYBLUE);
+    draw.draw_text("YOU", player_x + 8, player_y - 7, 12, Color::SKYBLUE);
+
+    let buildings = [
+        (4, 4, "FUEL", Color::BLUE),
+        (12, 4, "FIX", Color::MAROON),
+        (20, 4, "DEPOT", Color::GREEN),
+        (30, 4, "SHOP", Color::PURPLE),
+    ];
+    for (tx, ty, label, color) in buildings {
+        let px = x + tx * width / terrain_width;
+        let py = y + ty * height / terrain_height;
+        draw.draw_circle(px, py, 4.0, color);
+        draw.draw_text(label, px + 6, py - 6, 10, Color::RAYWHITE);
+    }
+
+    for depth in (20..terrain_height).step_by(20) {
+        let py = y + depth * height / terrain_height;
+        draw.draw_line(x, py, x + width, py, Color::new(255, 255, 255, 35));
+        draw.draw_text(&format!("{depth}m"), x - 44, py - 6, 12, Color::LIGHTGRAY);
+    }
 }
 
 fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
@@ -668,7 +764,8 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
-    for (index, offer) in upgrade_offers(&game.player).iter().enumerate() {
+    let offers = upgrade_offers(&game.player);
+    for (index, offer) in offers.iter().enumerate() {
         let y = 230 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
         let selected = index == game.selected_menu_item;
         let affordable = game.player.credits >= offer.cost;
@@ -697,6 +794,39 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             20,
             color,
         );
+    }
+
+    if let Some(offer) = offers.get(game.selected_menu_item) {
+        draw.draw_rectangle(690, 230, 330, 230, Color::new(20, 24, 36, 220));
+        draw.draw_rectangle_lines(690, 230, 330, 230, Color::LIGHTGRAY);
+        draw.draw_text("Upgrade Detail", 715, 255, 22, Color::GOLD);
+        draw.draw_text(offer.name, 715, 292, 20, Color::RAYWHITE);
+        draw.draw_text(offer.description, 715, 322, 16, Color::LIGHTGRAY);
+        draw.draw_text(
+            &format!("Current level: {}", offer.level),
+            715,
+            354,
+            16,
+            Color::RAYWHITE,
+        );
+        if offer.level >= crate::economy::MAX_UPGRADE_LEVEL {
+            draw.draw_text("Already at max tier", 715, 386, 16, Color::GREEN);
+        } else {
+            draw.draw_text(
+                &format!("Next tier: {}", upgrade_tier_name(offer.kind, offer.level)),
+                715,
+                386,
+                16,
+                Color::RAYWHITE,
+            );
+            draw.draw_text(
+                &format!("Cost: {} credits", offer.cost),
+                715,
+                416,
+                16,
+                Color::YELLOW,
+            );
+        }
     }
 }
 
