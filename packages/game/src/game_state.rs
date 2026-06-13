@@ -42,6 +42,23 @@ const CAMERA_SMOOTHING: f32 = 8.0;
 const WORLD_SEED: u64 = 0xD1_11_6A_4E;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DrillDirection {
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct DrillState {
+    pub target: TilePosition,
+    pub direction: DrillDirection,
+    pub progress: f32,
+    pub seconds_per_chip: f32,
+    pub sound_timer: f32,
+    pub dust_timer: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RunMode {
     Title,
     Playing,
@@ -136,6 +153,8 @@ pub struct GameState {
     pub camera_x: f32,
     pub camera_y: f32,
     pub drill_flash_seconds: f32,
+    #[serde(default)]
+    pub active_drill: Option<DrillState>,
     pub dust_particles: Vec<DustParticle>,
     #[serde(default)]
     pub hazard_clouds: Vec<HazardCloud>,
@@ -150,6 +169,7 @@ impl GameState {
         saved.modal = None;
         saved.request_exit = false;
         saved.show_details = false;
+        saved.active_drill = None;
         saved.dust_particles.clear();
         saved.hazard_clouds.clear();
         saved.sound_cues.clear();
@@ -180,6 +200,7 @@ impl GameState {
             camera_x: 0.0,
             camera_y: 0.0,
             drill_flash_seconds: 0.0,
+            active_drill: None,
             dust_particles: Vec::new(),
             hazard_clouds: Vec::new(),
             sound_cues: Vec::new(),
@@ -254,7 +275,7 @@ impl GameState {
 
         self.handle_interaction(input);
         self.apply_movement(input, delta_seconds);
-        self.try_mine(input);
+        self.update_drilling(input, delta_seconds);
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
@@ -620,40 +641,121 @@ impl GameState {
             .any(|position| self.terrain.is_solid_at(*position))
     }
 
-    fn try_mine(&mut self, input: PlayerInput) {
-        let Some(target) = mine_target(&self.player, input) else {
+    fn update_drilling(&mut self, input: PlayerInput, delta_seconds: f32) {
+        let Some((target, direction)) = mine_target(&self.player, input) else {
+            self.active_drill = None;
             return;
         };
 
-        if !input.drill_down && !self.is_grounded() {
-            "Side drilling requires ground contact.".clone_into(&mut self.message);
+        if direction != DrillDirection::Down
+            && (!self.is_grounded() || self.player.velocity_y.abs() > 80.0)
+        {
+            self.active_drill = None;
+            "Side drilling requires stable ground contact.".clone_into(&mut self.message);
             return;
         }
 
-        if self.player.fuel < DRILL_FUEL_COST {
+        if self.player.fuel <= 0.0 {
+            self.active_drill = None;
             "Out of fuel. Reach a fuel station or await rescue.".clone_into(&mut self.message);
             return;
         }
 
-        match self.terrain.mine(target, self.player.drill_strength) {
-            MineResult::Blocked => {}
-            MineResult::TooHard => {
-                "That layer is too hard. Upgrade your drill.".clone_into(&mut self.message);
-            }
-            MineResult::TooDangerous => {
-                self.player.hull = (self.player.hull - 8.0).max(0.0);
-                self.sound_cues.push(SoundCue::Damage);
-                "Lava pocket! Hull scorched.".clone_into(&mut self.message);
-            }
-            MineResult::Exploded => self.trigger_gas_explosion(),
-            MineResult::Chipped => {
-                self.player.fuel -= DRILL_FUEL_COST;
+        let Some(tile) = self.terrain.tile(target) else {
+            self.active_drill = None;
+            return;
+        };
+        if tile.kind == TileKind::Air {
+            self.active_drill = None;
+            return;
+        }
+        if self
+            .terrain
+            .hardness_at(target)
+            .is_some_and(|hardness| hardness > self.player.drill_strength)
+        {
+            self.active_drill = None;
+            "That layer is too hard. Upgrade your drill.".clone_into(&mut self.message);
+            return;
+        }
+
+        let seconds_per_chip =
+            drill_seconds_per_chip(tile.kind, self.player.drill_strength, direction);
+        let reset = self
+            .active_drill
+            .is_none_or(|state| state.target != target || state.direction != direction);
+        if reset {
+            self.active_drill = Some(DrillState {
+                target,
+                direction,
+                progress: 0.0,
+                seconds_per_chip,
+                sound_timer: 0.0,
+                dust_timer: 0.0,
+            });
+        }
+
+        self.player.fuel = (self.player.fuel - DRILL_FUEL_COST * 1.25 * delta_seconds).max(0.0);
+        self.creep_into_drill(direction, delta_seconds);
+
+        let mut should_chip = false;
+        let mut should_spawn_dust = false;
+        if let Some(state) = &mut self.active_drill {
+            state.seconds_per_chip = seconds_per_chip;
+            state.progress += delta_seconds / seconds_per_chip;
+            state.sound_timer -= delta_seconds;
+            state.dust_timer -= delta_seconds;
+            if state.sound_timer <= 0.0 {
                 self.sound_cues.push(SoundCue::Drill);
-                self.spawn_dust();
-                self.drill_flash_seconds = 0.08;
-                "Drilling...".clone_into(&mut self.message);
+                state.sound_timer = 0.13;
             }
-            MineResult::Mined(mined) => self.collect_mined_tile(mined, target),
+            if state.dust_timer <= 0.0 {
+                should_spawn_dust = true;
+                state.dust_timer = 0.09;
+            }
+            should_chip = state.progress >= 1.0;
+            self.drill_flash_seconds = 0.09;
+            self.message = format!(
+                "Drilling {}... {:.0}%",
+                tile.kind.name(),
+                (state.progress.min(1.0) * 100.0)
+            );
+        }
+        if should_spawn_dust {
+            self.spawn_dust();
+        }
+
+        if should_chip {
+            if let Some(state) = &mut self.active_drill {
+                state.progress -= 1.0;
+            }
+            match self.terrain.chip(target) {
+                MineResult::Blocked => self.active_drill = None,
+                MineResult::TooDangerous => {
+                    self.active_drill = None;
+                    self.player.hull = (self.player.hull - 8.0).max(0.0);
+                    self.sound_cues.push(SoundCue::Damage);
+                    "Lava pocket! Hull scorched.".clone_into(&mut self.message);
+                }
+                MineResult::Exploded => {
+                    self.active_drill = None;
+                    self.trigger_gas_explosion();
+                }
+                MineResult::Chipped => {}
+                MineResult::Mined(mined) => {
+                    self.active_drill = None;
+                    self.collect_mined_tile(mined, target);
+                }
+            }
+        }
+    }
+
+    fn creep_into_drill(&mut self, direction: DrillDirection, delta_seconds: f32) {
+        let creep = 32.0 * delta_seconds;
+        match direction {
+            DrillDirection::Down => self.move_axis(0.0, creep),
+            DrillDirection::Left => self.move_axis(-creep * 0.65, 0.0),
+            DrillDirection::Right => self.move_axis(creep * 0.65, 0.0),
         }
     }
 
@@ -881,22 +983,53 @@ fn drop_half_cargo(player: &mut Player) -> u32 {
     lost
 }
 
-fn mine_target(player: &Player, input: PlayerInput) -> Option<TilePosition> {
+fn drill_seconds_per_chip(kind: TileKind, drill_strength: u8, direction: DrillDirection) -> f32 {
+    let base = match kind {
+        TileKind::Air => 0.0,
+        TileKind::Dirt => 0.09,
+        TileKind::Clay => 0.12,
+        TileKind::Stone => 0.15,
+        TileKind::HardRock => 0.19,
+        TileKind::Lava | TileKind::Gas => 0.08,
+        TileKind::Ore(_) => 0.16,
+        TileKind::Artifact(_) => 0.21,
+    };
+    let drill_bonus = 1.0 + f32::from(drill_strength.saturating_sub(1)) * 0.28;
+    let direction_penalty = if direction == DrillDirection::Down {
+        1.0
+    } else {
+        1.45
+    };
+    (base * direction_penalty / drill_bonus).max(0.045)
+}
+
+fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, DrillDirection)> {
     if !input.drill_down && input.horizontal == 0.0 {
         return None;
     }
 
     let current_tile = player.tile_position(TILE_SIZE);
     Some(if input.drill_down {
-        TilePosition {
-            x: current_tile.x,
-            y: current_tile.y + 1,
-        }
+        (
+            TilePosition {
+                x: current_tile.x,
+                y: current_tile.y + 1,
+            },
+            DrillDirection::Down,
+        )
     } else {
-        TilePosition {
-            x: current_tile.x + facing_direction(input.horizontal),
-            y: current_tile.y,
-        }
+        let facing = facing_direction(input.horizontal);
+        (
+            TilePosition {
+                x: current_tile.x + facing,
+                y: current_tile.y,
+            },
+            if facing < 0 {
+                DrillDirection::Left
+            } else {
+                DrillDirection::Right
+            },
+        )
     })
 }
 

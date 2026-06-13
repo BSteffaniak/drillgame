@@ -10,7 +10,7 @@ use raylib::prelude::*;
 
 use crate::{
     economy::{upgrade_effect, upgrade_offers, upgrade_tier_name},
-    game_state::{GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
+    game_state::{DrillDirection, GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
@@ -106,6 +106,26 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
             }
         }
     }
+    if let Some(drill) = game.active_drill {
+        let x = (drill.target.x as f32 * TILE_SIZE - camera.x) as i32;
+        let y = (drill.target.y as f32 * TILE_SIZE - camera.y) as i32;
+        let inset = (10.0 * (1.0 - drill.progress.clamp(0.0, 1.0))) as i32;
+        draw.draw_rectangle_lines(
+            x + inset,
+            y + inset,
+            TILE_SIZE as i32 - inset * 2,
+            TILE_SIZE as i32 - inset * 2,
+            Color::YELLOW,
+        );
+        draw.draw_line(x + 5, y + 8, x + 24, y + 26, Color::new(255, 230, 120, 210));
+        draw.draw_line(
+            x + 24,
+            y + 7,
+            x + 10,
+            y + 24,
+            Color::new(255, 230, 120, 180),
+        );
+    }
 }
 
 fn draw_surface_buildings(draw: &mut RaylibDrawHandle<'_>, camera: Vector2) {
@@ -142,9 +162,22 @@ fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vec
     }
 }
 
+fn drill_visual_offset(game: &GameState) -> (f32, f32) {
+    let Some(drill) = game.active_drill else {
+        return (0.0, 0.0);
+    };
+    let pulse = (drill.progress * std::f32::consts::TAU * 3.0).sin() * 1.8;
+    match drill.direction {
+        DrillDirection::Down => (0.0, pulse.abs()),
+        DrillDirection::Left => (-pulse.abs(), 0.0),
+        DrillDirection::Right => (pulse.abs(), 0.0),
+    }
+}
+
 fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
-    let screen_x = game.player.x - camera.x;
-    let screen_y = game.player.y - camera.y;
+    let (offset_x, offset_y) = drill_visual_offset(game);
+    let screen_x = game.player.x - camera.x + offset_x;
+    let screen_y = game.player.y - camera.y + offset_y;
 
     draw.draw_circle_v(
         Vector2::new(screen_x, screen_y),

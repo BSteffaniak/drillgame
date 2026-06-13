@@ -87,6 +87,23 @@ pub enum TileKind {
     Artifact(ArtifactKind),
 }
 
+impl TileKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Air => "air",
+            Self::Dirt => "dirt",
+            Self::Clay => "clay",
+            Self::Stone => "stone",
+            Self::HardRock => "hard rock",
+            Self::Lava => "lava",
+            Self::Gas => "gas",
+            Self::Ore(mineral) => mineral.name(),
+            Self::Artifact(artifact) => artifact.name(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Tile {
     pub kind: TileKind,
@@ -168,7 +185,12 @@ impl Terrain {
             .is_some_and(|tile| tile.kind == TileKind::Lava)
     }
 
-    pub fn mine(&mut self, position: TilePosition, drill_strength: u8) -> MineResult {
+    #[must_use]
+    pub fn hardness_at(&self, position: TilePosition) -> Option<u8> {
+        self.tile(position).map(|tile| tile_hardness(tile.kind))
+    }
+
+    pub fn chip(&mut self, position: TilePosition) -> MineResult {
         let Some(index) = self.index(position) else {
             return MineResult::Blocked;
         };
@@ -188,11 +210,7 @@ impl Terrain {
             return MineResult::Exploded;
         }
 
-        if tile_hardness(tile.kind) > drill_strength {
-            return MineResult::TooHard;
-        }
-
-        tile.durability = tile.durability.saturating_sub(drill_strength);
+        tile.durability = tile.durability.saturating_sub(1);
         if tile.durability > 0 {
             return MineResult::Chipped;
         }
@@ -215,7 +233,6 @@ impl Terrain {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MineResult {
     Blocked,
-    TooHard,
     TooDangerous,
     Exploded,
     Chipped,
