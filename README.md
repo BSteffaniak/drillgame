@@ -8,6 +8,8 @@ A Rust-native 2D mining game mechanically inspired by classic drill/mining games
 cargo fmt
 cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check
 cargo run --bin drillgame
 ```
 
@@ -40,6 +42,8 @@ Successful return trips award streak bonuses. Emergency rescue returns the rig t
 - `+` / `-`: volume hotkeys
 
 ## Surface Buildings
+
+Press `E` at a surface building to walk inside its room. Move with `A`/`D`, use the service counter with `E`, and leave through the door or `Backspace`/`Esc`.
 
 - Fuel Station: refills fuel in partial or full service increments
 - Repair Garage: repairs hull in partial or full service increments

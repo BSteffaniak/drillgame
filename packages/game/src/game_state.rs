@@ -71,6 +71,7 @@ pub struct DrillState {
 pub enum RunMode {
     Title,
     Playing,
+    Interior,
     Paused,
 }
 
@@ -177,6 +178,12 @@ pub struct GameState {
     pub player: Player,
     pub message: String,
     pub current_zone: Option<SurfaceZone>,
+    #[serde(default)]
+    pub interior_zone: Option<SurfaceZone>,
+    #[serde(default)]
+    pub interior_x: f32,
+    #[serde(default)]
+    pub interior_facing: f32,
     pub contracts: ContractLog,
     pub run_mode: RunMode,
     pub modal: Option<ModalScreen>,
@@ -259,6 +266,7 @@ impl GameState {
     pub fn clone_for_save(&self) -> Self {
         let mut saved = self.clone();
         saved.run_mode = RunMode::Playing;
+        saved.interior_zone = None;
         saved.modal = None;
         saved.request_exit = false;
         saved.show_details = false;
@@ -284,6 +292,9 @@ impl GameState {
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             current_zone: None,
+            interior_zone: None,
+            interior_x: 88.0,
+            interior_facing: 1.0,
             contracts: ContractLog::new(),
             run_mode: RunMode::Title,
             modal: None,
@@ -340,6 +351,10 @@ impl GameState {
         self.contracts.migrate_after_load();
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "top-level mode dispatcher keeps frame order explicit"
+    )]
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
         self.last_delta_seconds = delta_seconds;
         self.update_ticks = self.update_ticks.saturating_add(1);
@@ -390,7 +405,10 @@ impl GameState {
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
-        if self.run_mode == RunMode::Playing && !self.game_over && !self.won_game {
+        if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
+            && !self.game_over
+            && !self.won_game
+        {
             self.play_seconds += delta_seconds;
         }
 
@@ -408,7 +426,12 @@ impl GameState {
                 self.handle_pause_menu(input);
                 return;
             }
-            RunMode::Playing => {}
+            RunMode::Playing | RunMode::Interior => {}
+        }
+
+        if self.run_mode == RunMode::Interior {
+            self.handle_interior(input, delta_seconds);
+            return;
         }
 
         if self.game_over {
@@ -553,29 +576,76 @@ impl GameState {
             return;
         }
 
-        match self.current_zone {
-            Some(SurfaceZone::Fuel) => {
-                self.modal = Some(ModalScreen::Fuel);
-                self.selected_menu_item = 0;
-            }
-            Some(SurfaceZone::Repair) => {
-                self.modal = Some(ModalScreen::Repair);
-                self.selected_menu_item = 0;
-            }
-            Some(SurfaceZone::Depot) => {
+        if let Some(zone) = self.current_zone {
+            self.enter_interior(zone);
+        } else {
+            "No surface service here.".clone_into(&mut self.message);
+        }
+    }
+
+    fn enter_interior(&mut self, zone: SurfaceZone) {
+        self.run_mode = RunMode::Interior;
+        self.interior_zone = Some(zone);
+        self.interior_x = 82.0;
+        self.interior_facing = 1.0;
+        self.modal = None;
+        self.selected_menu_item = 0;
+        self.sound_cues.push(SoundCue::Ui);
+        self.message = format!(
+            "Entered {}. Walk to a counter and press E; door exits.",
+            surface_zone_label(zone)
+        );
+    }
+
+    fn handle_interior(&mut self, input: PlayerInput, delta_seconds: f32) {
+        if self.handle_modal(input) {
+            return;
+        }
+        if input.pause {
+            self.run_mode = RunMode::Paused;
+            return;
+        }
+        let movement = input.horizontal;
+        if movement.abs() > f32::EPSILON {
+            self.interior_facing = movement.signum();
+        }
+        self.interior_x = (self.interior_x + movement * 185.0 * delta_seconds).clamp(42.0, 598.0);
+        if input.cancel || (input.interact && self.interior_x < 74.0) {
+            self.exit_interior();
+            return;
+        }
+        if input.interact {
+            self.open_interior_hotspot();
+        }
+    }
+
+    fn exit_interior(&mut self) {
+        self.run_mode = RunMode::Playing;
+        self.interior_zone = None;
+        self.modal = None;
+        self.sound_cues.push(SoundCue::Ui);
+        "Back outside.".clone_into(&mut self.message);
+    }
+
+    fn open_interior_hotspot(&mut self) {
+        let Some(zone) = self.interior_zone else {
+            return;
+        };
+        if (self.interior_x - interior_service_x(zone)).abs() > 70.0 {
+            "Walk to the service counter or the exit door.".clone_into(&mut self.message);
+            return;
+        }
+        match zone {
+            SurfaceZone::Fuel => self.modal = Some(ModalScreen::Fuel),
+            SurfaceZone::Repair => self.modal = Some(ModalScreen::Repair),
+            SurfaceZone::Depot => {
                 self.modal = Some(ModalScreen::Depot);
                 self.selected_menu_item = 1;
             }
-            Some(SurfaceZone::Headquarters) => {
-                self.modal = Some(ModalScreen::Headquarters);
-                self.selected_menu_item = 0;
-            }
-            Some(SurfaceZone::Shop) => {
-                self.modal = Some(ModalScreen::Shop);
-                self.selected_menu_item = 0;
-            }
-            None => "No surface service here.".clone_into(&mut self.message),
+            SurfaceZone::Headquarters => self.modal = Some(ModalScreen::Headquarters),
+            SurfaceZone::Shop => self.modal = Some(ModalScreen::Shop),
         }
+        self.sound_cues.push(SoundCue::Ui);
     }
 
     fn handle_modal(&mut self, input: PlayerInput) -> bool {
@@ -1581,6 +1651,26 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
     })
 }
 
+const fn surface_zone_label(zone: SurfaceZone) -> &'static str {
+    match zone {
+        SurfaceZone::Fuel => "Fuel Station",
+        SurfaceZone::Repair => "Repair Garage",
+        SurfaceZone::Depot => "Ore Depot",
+        SurfaceZone::Headquarters => "HQ",
+        SurfaceZone::Shop => "Upgrade Shop",
+    }
+}
+
+const fn interior_service_x(zone: SurfaceZone) -> f32 {
+    match zone {
+        SurfaceZone::Fuel => 430.0,
+        SurfaceZone::Repair => 405.0,
+        SurfaceZone::Depot => 455.0,
+        SurfaceZone::Headquarters => 390.0,
+        SurfaceZone::Shop => 450.0,
+    }
+}
+
 fn surface_zone_at(x: f32, y: f32) -> Option<SurfaceZone> {
     if y > 5.5 * TILE_SIZE {
         return None;
@@ -1708,5 +1798,32 @@ mod tests {
         game.trigger_explosive_pocket();
         assert!(game.screen_flash_seconds > 0.0);
         assert!(!game.falling_boulders.is_empty());
+    }
+
+    #[test]
+    fn entering_surface_zone_opens_walkable_interior() {
+        let mut game = GameState::new();
+        game.enter_interior(SurfaceZone::Fuel);
+        assert_eq!(game.run_mode, RunMode::Interior);
+        assert_eq!(game.interior_zone, Some(SurfaceZone::Fuel));
+        assert!(game.modal.is_none());
+    }
+
+    #[test]
+    fn interior_counter_opens_existing_service_modal() {
+        let mut game = GameState::new();
+        game.enter_interior(SurfaceZone::Shop);
+        game.interior_x = interior_service_x(SurfaceZone::Shop);
+        game.open_interior_hotspot();
+        assert_eq!(game.modal, Some(ModalScreen::Shop));
+    }
+
+    #[test]
+    fn interior_exit_returns_to_surface_play() {
+        let mut game = GameState::new();
+        game.enter_interior(SurfaceZone::Repair);
+        game.exit_interior();
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert_eq!(game.interior_zone, None);
     }
 }
