@@ -11,6 +11,7 @@ pub fn run() {
         .build();
 
     raylib.set_target_fps(TARGET_FPS);
+    raylib.set_exit_key(None);
 
     let mut game = GameState::new();
 

@@ -152,11 +152,6 @@ impl GameState {
             RunMode::Playing => {}
         }
 
-        if input.pause {
-            self.run_mode = RunMode::Paused;
-            return;
-        }
-
         if self.game_over {
             self.handle_rescue(input);
             self.update_camera(delta_seconds);
@@ -166,6 +161,11 @@ impl GameState {
         self.current_zone = surface_zone_at(self.player.x, self.player.y);
         if self.handle_modal(input) {
             self.update_camera(delta_seconds);
+            return;
+        }
+
+        if input.pause || input.cancel {
+            self.run_mode = RunMode::Paused;
             return;
         }
 
