@@ -181,7 +181,15 @@ pub struct GameState {
     #[serde(default)]
     pub depot_receipts: Vec<String>,
     pub deepest_tile_reached: i32,
+    #[serde(default)]
+    pub total_earnings: u32,
+    #[serde(default)]
+    pub rescue_count: u32,
+    #[serde(default)]
+    pub artifacts_found: u32,
     pub next_milestone_tile: i32,
+    #[serde(default)]
+    pub current_layer_band: i32,
     pub game_over: bool,
     #[serde(default = "default_master_volume")]
     pub master_volume: f32,
@@ -250,7 +258,11 @@ impl GameState {
             last_depot_receipt: String::new(),
             depot_receipts: Vec::new(),
             deepest_tile_reached: 0,
+            total_earnings: 0,
+            rescue_count: 0,
+            artifacts_found: 0,
             next_milestone_tile: 20,
+            current_layer_band: 0,
             game_over: false,
             master_volume: default_master_volume(),
             fullscreen: default_fullscreen(),
@@ -361,6 +373,7 @@ impl GameState {
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
+        self.update_layer_band();
         self.update_warning_messages();
         self.update_status_messages();
         self.check_failure();
@@ -591,6 +604,7 @@ impl GameState {
     fn confirm_contract(&mut self) {
         if let Some(completion) = self.contracts.try_complete(&mut self.player) {
             self.sound_cues.push(SoundCue::Sell);
+            self.total_earnings += completion.reward;
             if completion.finished_story {
                 self.won_game = true;
                 self.message = format!(
@@ -632,6 +646,7 @@ impl GameState {
 
         let payout = sell_cargo(&mut self.player);
         if payout > 0 {
+            self.total_earnings += payout;
             let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {payout} cr");
             self.depot_receipts.push(self.last_depot_receipt.clone());
             if self.depot_receipts.len() > 5 {
@@ -924,6 +939,7 @@ impl GameState {
             }
         } else if let TileKind::Artifact(artifact) = mined {
             if self.player.add_artifact(artifact) {
+                self.artifacts_found += 1;
                 self.message = format!(
                     "Recovered {} artifact worth {}.",
                     artifact.name(),
@@ -1070,6 +1086,7 @@ impl GameState {
 
         let reward = u32::try_from(self.next_milestone_tile).unwrap_or(0) * 2;
         self.player.credits += reward;
+        self.total_earnings += reward;
         self.sound_cues.push(SoundCue::Milestone);
         let unlock = match self.next_milestone_tile {
             20 => "Silver seams now appear in useful quantities.",
@@ -1136,8 +1153,33 @@ impl GameState {
         }
     }
 
+    fn update_layer_band(&mut self) {
+        let band = self.deepest_tile_reached / 20;
+        if band <= self.current_layer_band {
+            return;
+        }
+        self.current_layer_band = band;
+        let layer = match band {
+            1 => "Clay Belt",
+            2 => "Silver Caverns",
+            3 => "Thermal Strata",
+            _ => "Core Fracture Zone",
+        };
+        self.message = format!("Entering {layer}. Hazards and ore density increased.");
+    }
+
     fn update_status_messages(&mut self) {
         if self.message.starts_with("Warning:") || self.message.starts_with("CRITICAL:") {
+            return;
+        }
+        if self.player.fuel <= self.player.fuel_capacity * 0.15 && self.player.y > 6.0 * TILE_SIZE {
+            "CRITICAL: fuel reserve low. Return to the fuel station now."
+                .clone_into(&mut self.message);
+            return;
+        }
+        if self.player.cargo_used() >= self.player.cargo_capacity {
+            "Warning: cargo hold full. Return to the depot or leave valuables behind."
+                .clone_into(&mut self.message);
             return;
         }
         if let Some(zone) = self.current_zone {
@@ -1171,6 +1213,7 @@ impl GameState {
 
         let fee = rescue_fee(self.player.y).min(self.player.credits);
         self.player.credits -= fee;
+        self.rescue_count += 1;
         let lost_items = drop_half_cargo(&mut self.player);
         self.last_rescue_x = Some(self.player.x);
         self.last_rescue_y = Some(self.player.y);

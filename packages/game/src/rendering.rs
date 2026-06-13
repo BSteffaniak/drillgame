@@ -9,7 +9,7 @@
 use raylib::prelude::*;
 
 use crate::{
-    economy::{upgrade_effect, upgrade_offers, upgrade_tier_name},
+    economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{DrillDirection, GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
@@ -107,7 +107,7 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
                 TILE_SIZE as i32,
                 TILE_SIZE as i32,
                 if explored {
-                    tile_color(tile.kind)
+                    layer_tile_color(tile.kind, y)
                 } else {
                     Color::new(18, 14, 18, 255)
                 },
@@ -1066,6 +1066,10 @@ fn draw_shop_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "shop tab screen includes category list and stat preview"
+)]
 fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Upgrade Shop", 330, 150, 30, Color::WHITE);
     draw.draw_text(
@@ -1137,14 +1141,72 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 16,
                 Color::RAYWHITE,
             );
+            let missing = offer.cost.saturating_sub(game.player.credits);
             draw.draw_text(
-                &format!("Cost: {} credits", offer.cost),
+                &format!("Cost: {} cr | Missing: {} cr", offer.cost, missing),
                 715,
                 416,
                 16,
                 Color::YELLOW,
             );
+            draw.draw_text(
+                &upgrade_stat_preview(game, offer.kind),
+                715,
+                446,
+                16,
+                Color::RAYWHITE,
+            );
+            draw.draw_text(
+                if missing == 0 {
+                    "Affordable"
+                } else {
+                    "Need more credits"
+                },
+                715,
+                476,
+                16,
+                if missing == 0 {
+                    Color::GREEN
+                } else {
+                    Color::RED
+                },
+            );
         }
+    }
+}
+
+fn upgrade_stat_preview(game: &GameState, kind: UpgradeKind) -> String {
+    match kind {
+        UpgradeKind::Drill => format!(
+            "Drill speed: L{} -> L{}",
+            game.player.drill_strength,
+            game.player.drill_strength.saturating_add(1)
+        ),
+        UpgradeKind::FuelTank => format!(
+            "Fuel: {:.0} -> {:.0}",
+            game.player.fuel_capacity,
+            game.player.fuel_capacity + 45.0
+        ),
+        UpgradeKind::CargoBay => format!(
+            "Cargo: {} -> {} slots",
+            game.player.cargo_capacity,
+            game.player.cargo_capacity + 4
+        ),
+        UpgradeKind::Engine => format!(
+            "Thrust: L{} -> L{}",
+            game.player.engine_level,
+            game.player.engine_level.saturating_add(1)
+        ),
+        UpgradeKind::Hull => format!(
+            "Hull: {:.0} -> {:.0}",
+            game.player.max_hull(),
+            game.player.max_hull() + 35.0
+        ),
+        UpgradeKind::Radiator => format!(
+            "Safe heat depth: L{} -> L{}",
+            game.player.radiator_level,
+            game.player.radiator_level.saturating_add(1)
+        ),
     }
 }
 
@@ -1188,14 +1250,30 @@ fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
 fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(5, 8, 18, 205));
-    draw.draw_rectangle(300, 220, 680, 240, Color::new(0, 0, 0, 230));
-    draw.draw_rectangle_lines(300, 220, 680, 240, Color::GOLD);
-    draw.draw_text("STAR CORE RECOVERED", 392, 255, 40, Color::GOLD);
-    draw.draw_text(&game.message, 340, 325, 20, Color::RAYWHITE);
+    draw.draw_rectangle(300, 180, 680, 340, Color::new(0, 0, 0, 230));
+    draw.draw_rectangle_lines(300, 180, 680, 340, Color::GOLD);
+    draw.draw_text("STAR CORE RECOVERED", 392, 215, 40, Color::GOLD);
+    draw.draw_text(&game.message, 340, 285, 20, Color::RAYWHITE);
+    let stats = [
+        format!("Total earnings: {} cr", game.total_earnings),
+        format!("Contracts completed: {}", game.contracts.completed),
+        format!("Deepest depth: {}m", game.deepest_tile_reached),
+        format!("Rescues: {}", game.rescue_count),
+        format!("Artifacts found: {}", game.artifacts_found),
+    ];
+    for (index, stat) in stats.iter().enumerate() {
+        draw.draw_text(
+            stat,
+            390,
+            330 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
+            20,
+            Color::RAYWHITE,
+        );
+    }
     draw.draw_text(
         "You can keep mining, save, or exit from the pause menu.",
         382,
-        380,
+        475,
         20,
         Color::LIGHTGRAY,
     );
@@ -1213,6 +1291,22 @@ fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::RAYWHITE,
     );
+}
+
+const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
+    let base = tile_color(kind);
+    let tint = match y {
+        0..=19 => (0, 0, 0),
+        20..=39 => (10, 5, 20),
+        40..=59 => (25, 10, 0),
+        _ => (15, 0, 25),
+    };
+    Color::new(
+        base.r.saturating_add(tint.0),
+        base.g.saturating_add(tint.1),
+        base.b.saturating_add(tint.2),
+        base.a,
+    )
 }
 
 const fn tile_color(kind: TileKind) -> Color {
