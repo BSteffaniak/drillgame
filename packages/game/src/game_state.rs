@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     contract::ContractLog,
     economy::{
-        PurchaseError, SurfaceZone, buy_upgrade, refuel, repair, sell_cargo, upgrade_offers,
-        upgrade_tier_name,
+        PurchaseError, SurfaceZone, buy_upgrade, refuel_amount, repair_amount, sell_cargo,
+        upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
     player::Player,
@@ -120,6 +120,23 @@ pub struct HazardCloud {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct FallingBoulder {
+    pub x: f32,
+    pub y: f32,
+    pub velocity_y: f32,
+    pub life: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct SparkParticle {
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+    pub life: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum SoundCue {
     Drill,
     Sell,
@@ -172,6 +189,14 @@ pub struct GameState {
     pub dust_particles: Vec<DustParticle>,
     #[serde(default)]
     pub hazard_clouds: Vec<HazardCloud>,
+    #[serde(default)]
+    pub falling_boulders: Vec<FallingBoulder>,
+    #[serde(default)]
+    pub spark_particles: Vec<SparkParticle>,
+    #[serde(default)]
+    pub camera_shake_seconds: f32,
+    #[serde(default)]
+    pub camera_shake_strength: f32,
     pub sound_cues: Vec<SoundCue>,
 }
 
@@ -186,6 +211,9 @@ impl GameState {
         saved.active_drill = None;
         saved.dust_particles.clear();
         saved.hazard_clouds.clear();
+        saved.falling_boulders.clear();
+        saved.spark_particles.clear();
+        saved.camera_shake_seconds = 0.0;
         saved.sound_cues.clear();
         saved
     }
@@ -221,6 +249,10 @@ impl GameState {
             active_drill: None,
             dust_particles: Vec::new(),
             hazard_clouds: Vec::new(),
+            falling_boulders: Vec::new(),
+            spark_particles: Vec::new(),
+            camera_shake_seconds: 0.0,
+            camera_shake_strength: 0.0,
             sound_cues: Vec::new(),
         }
     }
@@ -261,6 +293,8 @@ impl GameState {
             self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
         }
         self.update_particles(delta_seconds);
+        self.update_boulders(delta_seconds);
+        self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
         self.update_hazards(delta_seconds);
         self.reveal_near_player();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
@@ -453,9 +487,8 @@ impl GameState {
             let max_item = match modal {
                 ModalScreen::Shop => upgrade_offers(&self.player).len() - 1,
                 ModalScreen::Depot => 1,
+                ModalScreen::Fuel | ModalScreen::Repair => 2,
                 ModalScreen::ShopConfirm
-                | ModalScreen::Fuel
-                | ModalScreen::Repair
                 | ModalScreen::ExitConfirm
                 | ModalScreen::Map
                 | ModalScreen::Help => 0,
@@ -481,8 +514,17 @@ impl GameState {
         true
     }
 
+    const fn selected_service_fraction(&self) -> f32 {
+        match self.selected_menu_item {
+            0 => 0.25,
+            1 => 0.5,
+            _ => 1.0,
+        }
+    }
+
     fn confirm_refuel(&mut self) {
-        let cost = refuel(&mut self.player);
+        let fraction = self.selected_service_fraction();
+        let cost = refuel_amount(&mut self.player, fraction);
         self.message = if cost == 0 {
             "Fuel already full or no credits available.".to_owned()
         } else {
@@ -491,7 +533,8 @@ impl GameState {
     }
 
     fn confirm_repair(&mut self) {
-        let cost = repair(&mut self.player);
+        let fraction = self.selected_service_fraction();
+        let cost = repair_amount(&mut self.player, fraction);
         self.message = if cost == 0 {
             "Hull already repaired or no credits available.".to_owned()
         } else {
@@ -652,6 +695,8 @@ impl GameState {
         let damage = (self.player.velocity_y - SAFE_LANDING_SPEED) * CRASH_DAMAGE_SCALE;
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
+        self.shake_camera(0.28, 7.0);
+        self.spawn_sparks();
         self.message = format!("Hard landing! Hull took {damage:.0} damage.");
     }
 
@@ -659,6 +704,8 @@ impl GameState {
         let damage = (speed - SAFE_LANDING_SPEED * 0.75) * CRASH_DAMAGE_SCALE * 0.5;
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
+        self.shake_camera(0.2, 5.0);
+        self.spawn_sparks();
         self.message = format!("Hull scraped the wall for {damage:.0} damage.");
     }
 
@@ -848,11 +895,15 @@ impl GameState {
         if matches!(mined, TileKind::Stone | TileKind::HardRock)
             && falling_rock_roll(target, self.terrain.seed())
         {
-            self.player.hull = (self.player.hull - 7.0).max(0.0);
-            self.player.velocity_y += 90.0;
+            self.falling_boulders.push(FallingBoulder {
+                x: target.x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+                y: (target.y as f32 - 1.0) * TILE_SIZE,
+                velocity_y: 80.0,
+                life: 3.0,
+            });
             self.sound_cues.push(SoundCue::Damage);
-            self.spawn_dust();
-            self.message.push_str(" Falling rocks clipped the rig!");
+            self.shake_camera(0.18, 4.0);
+            self.message.push_str(" Unstable rock falling!");
         }
     }
 
@@ -862,6 +913,43 @@ impl GameState {
             particle.y -= 18.0 * delta_seconds;
         }
         self.dust_particles.retain(|particle| particle.life > 0.0);
+        for spark in &mut self.spark_particles {
+            spark.life -= delta_seconds;
+            spark.x += spark.velocity_x * delta_seconds;
+            spark.y += spark.velocity_y * delta_seconds;
+            spark.velocity_y += 180.0 * delta_seconds;
+        }
+        self.spark_particles.retain(|particle| particle.life > 0.0);
+    }
+
+    fn update_boulders(&mut self, delta_seconds: f32) {
+        for boulder in &mut self.falling_boulders {
+            boulder.life -= delta_seconds;
+            boulder.velocity_y = (boulder.velocity_y + GRAVITY * 0.8 * delta_seconds).min(520.0);
+            boulder.y += boulder.velocity_y * delta_seconds;
+        }
+
+        let hit_player = self.falling_boulders.iter().any(|boulder| {
+            let dx = self.player.x - boulder.x;
+            let dy = self.player.y - boulder.y;
+            dx.hypot(dy) <= PLAYER_RADIUS + 8.0
+        });
+        if hit_player {
+            self.player.hull = (self.player.hull - 12.0).max(0.0);
+            self.sound_cues.push(SoundCue::Damage);
+            self.shake_camera(0.35, 9.0);
+            self.spawn_sparks();
+            "Falling boulder slammed the rig!".clone_into(&mut self.message);
+        }
+
+        self.falling_boulders.retain(|boulder| {
+            boulder.life > 0.0
+                && boulder.y < (self.terrain.height() as f32 - 1.0) * TILE_SIZE
+                && !self.terrain.is_solid_at(TilePosition {
+                    x: (boulder.x / TILE_SIZE).floor() as i32,
+                    y: (boulder.y / TILE_SIZE).floor() as i32,
+                })
+        });
     }
 
     fn update_hazards(&mut self, delta_seconds: f32) {
@@ -879,6 +967,28 @@ impl GameState {
         if in_gas {
             self.player.hull = (self.player.hull - 4.0 * delta_seconds).max(0.0);
             "Corrosive gas cloud eating hull plating!".clone_into(&mut self.message);
+        }
+    }
+
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "uses f32 max for camera shake state"
+    )]
+    fn shake_camera(&mut self, seconds: f32, strength: f32) {
+        self.camera_shake_seconds = self.camera_shake_seconds.max(seconds);
+        self.camera_shake_strength = self.camera_shake_strength.max(strength);
+    }
+
+    fn spawn_sparks(&mut self) {
+        for index in 0..8 {
+            let side = if index % 2 == 0 { -1.0 } else { 1.0 };
+            self.spark_particles.push(SparkParticle {
+                x: self.player.x + side * 8.0,
+                y: self.player.y,
+                velocity_x: side * (45.0 + index as f32 * 8.0),
+                velocity_y: -80.0 + index as f32 * 12.0,
+                life: 0.45,
+            });
         }
     }
 
@@ -904,9 +1014,11 @@ impl GameState {
             return;
         }
 
+        let reward = u32::try_from(self.next_milestone_tile).unwrap_or(0) * 2;
+        self.player.credits += reward;
         self.sound_cues.push(SoundCue::Milestone);
         self.message = format!(
-            "Depth milestone reached: {}m. Richer ore lies below.",
+            "Depth milestone reached: {}m. Survey bonus: {reward} credits. Richer ore lies below.",
             self.next_milestone_tile - 5
         );
         self.next_milestone_tile += 20;

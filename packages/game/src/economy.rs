@@ -52,26 +52,38 @@ pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 6] {
     ]
 }
 
-pub fn refuel(player: &mut Player) -> u32 {
+pub fn refuel_amount(player: &mut Player, fraction: f32) -> u32 {
     let missing = (player.fuel_capacity - player.fuel).ceil().max(0.0);
-    let cost = affordable_service_cost(missing, REFUEL_UNIT_COST, player.credits);
+    let target = (missing * fraction).ceil().max(1.0).min(missing);
+    let cost = affordable_service_cost(target, REFUEL_UNIT_COST, player.credits);
     let fuel_added = cost / REFUEL_UNIT_COST;
     player.credits -= cost;
     player.fuel = (player.fuel + fuel_added as f32).min(player.fuel_capacity);
     cost
 }
 
+#[cfg(test)]
+pub fn refuel(player: &mut Player) -> u32 {
+    refuel_amount(player, 1.0)
+}
+
+pub fn repair_amount(player: &mut Player, fraction: f32) -> u32 {
+    let missing = (player.max_hull() - player.hull).ceil().max(0.0);
+    let target = (missing * fraction).ceil().max(1.0).min(missing);
+    let cost = affordable_service_cost(target, REPAIR_UNIT_COST, player.credits);
+    let hull_added = cost / REPAIR_UNIT_COST;
+    player.credits -= cost;
+    player.hull = (player.hull + hull_added as f32).min(player.max_hull());
+    cost
+}
+
+#[cfg(test)]
 #[allow(
     clippy::missing_const_for_fn,
     reason = "uses player max hull calculation"
 )]
 pub fn repair(player: &mut Player) -> u32 {
-    let missing = (player.max_hull() - player.hull).ceil().max(0.0);
-    let cost = affordable_service_cost(missing, REPAIR_UNIT_COST, player.credits);
-    let hull_added = cost / REPAIR_UNIT_COST;
-    player.credits -= cost;
-    player.hull = (player.hull + hull_added as f32).min(player.max_hull());
-    cost
+    repair_amount(player, 1.0)
 }
 
 pub fn sell_cargo(player: &mut Player) -> u32 {

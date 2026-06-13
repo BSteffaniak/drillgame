@@ -29,7 +29,7 @@ struct MinimapProjection {
 pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.clear_background(Color::new(105, 190, 235, 255));
 
-    let camera = Vector2::new(game.camera_x, game.camera_y);
+    let camera = render_camera(game);
 
     draw_world(draw, game, camera);
     draw_particles(draw, game, camera);
@@ -72,6 +72,16 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.won_game {
         draw_ending(draw, game);
     }
+}
+
+fn render_camera(game: &GameState) -> Vector2 {
+    let mut camera = Vector2::new(game.camera_x, game.camera_y);
+    if game.camera_shake_seconds > 0.0 {
+        let pulse = (game.camera_shake_seconds * 70.0).sin();
+        camera.x += pulse * game.camera_shake_strength;
+        camera.y += (game.camera_shake_seconds * 53.0).cos() * game.camera_shake_strength * 0.7;
+    }
+    camera
 }
 
 fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2) {
@@ -178,6 +188,27 @@ fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vec
             Color::new(190, 150, 105, (180.0 * alpha) as u8),
         );
     }
+    for boulder in &game.falling_boulders {
+        draw.draw_circle_v(
+            Vector2::new(boulder.x - camera.x, boulder.y - camera.y),
+            8.0,
+            Color::new(95, 80, 70, 255),
+        );
+        draw.draw_circle_lines(
+            (boulder.x - camera.x) as i32,
+            (boulder.y - camera.y) as i32,
+            8.0,
+            Color::DARKGRAY,
+        );
+    }
+    for spark in &game.spark_particles {
+        let alpha = (spark.life / 0.45).clamp(0.0, 1.0);
+        draw.draw_circle_v(
+            Vector2::new(spark.x - camera.x, spark.y - camera.y),
+            2.5,
+            Color::new(255, 190, 60, (220.0 * alpha) as u8),
+        );
+    }
 }
 
 fn drill_visual_offset(game: &GameState) -> (f32, f32) {
@@ -279,6 +310,20 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
 fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw_compact_status(draw, game);
     draw_message_toast(draw, game);
+
+    draw.draw_text(
+        &format!(
+            "Objective: {} {}/{} {}",
+            game.contracts.active.title,
+            game.contracts.active.progress(&game.player),
+            game.contracts.active.required,
+            game.contracts.active.target.name()
+        ),
+        22,
+        74,
+        18,
+        Color::RAYWHITE,
+    );
 
     if game.show_details || game.modal == Some(ModalScreen::Depot) {
         draw_detail_panel(draw, game);
@@ -557,6 +602,24 @@ fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
 }
 
+fn draw_service_options(draw: &mut RaylibDrawHandle<'_>, selected: usize, x: i32, y: i32) {
+    let options = ["Small 25%", "Half 50%", "Full 100%"];
+    for (index, option) in options.iter().enumerate() {
+        let color = if index == selected {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(
+            option,
+            x,
+            y + i32::try_from(index).unwrap_or(i32::MAX) * 28,
+            20,
+            color,
+        );
+    }
+}
+
 fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScreen) {
     draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
     draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
@@ -565,7 +628,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
         ModalScreen::Fuel => {
             draw.draw_text("Fuel Station", 330, 150, 30, Color::GOLD);
             draw.draw_text(
-                "Enter/E: buy as much fuel as credits allow",
+                "Up/Down: small/half/full | Enter/E buy selected",
                 330,
                 210,
                 22,
@@ -586,11 +649,12 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 18,
                 Color::RAYWHITE,
             );
+            draw_service_options(draw, game.selected_menu_item, 330, 330);
         }
         ModalScreen::Repair => {
             draw.draw_text("Repair Garage", 330, 150, 30, Color::LIME);
             draw.draw_text(
-                "Enter/E: repair as much hull as credits allow",
+                "Up/Down: small/half/full | Enter/E repair selected",
                 330,
                 210,
                 22,
@@ -612,6 +676,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 18,
                 Color::RAYWHITE,
             );
+            draw_service_options(draw, game.selected_menu_item, 330, 330);
         }
         ModalScreen::Depot => draw_modal_depot(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
@@ -801,6 +866,13 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_line(x, py, x + width, py, Color::new(255, 255, 255, 35));
         draw.draw_text(&format!("{depth}m"), x - 44, py - 6, 12, Color::LIGHTGRAY);
     }
+    draw.draw_text(
+        "Legend: gold ore | orange rare ore | magenta artifact | red lava | green gas | blue you",
+        190,
+        612,
+        16,
+        Color::LIGHTGRAY,
+    );
 }
 
 fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
