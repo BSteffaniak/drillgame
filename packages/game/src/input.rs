@@ -1,11 +1,13 @@
+use raylib::prelude::*;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerInput {
     pub horizontal: f32,
     pub thrust: bool,
     pub drill_down: bool,
+    pub interact: bool,
+    pub selected_upgrade: Option<usize>,
 }
-
-use raylib::prelude::*;
 
 #[must_use]
 pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
@@ -21,6 +23,24 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         horizontal: horizontal_axis(left, right),
         thrust: up,
         drill_down: down,
+        interact: raylib.is_key_pressed(KeyboardKey::KEY_E),
+        selected_upgrade: selected_upgrade(raylib),
+    }
+}
+
+fn selected_upgrade(raylib: &RaylibHandle) -> Option<usize> {
+    if raylib.is_key_pressed(KeyboardKey::KEY_ONE) {
+        Some(0)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_TWO) {
+        Some(1)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_THREE) {
+        Some(2)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_FOUR) {
+        Some(3)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_FIVE) {
+        Some(4)
+    } else {
+        None
     }
 }
 

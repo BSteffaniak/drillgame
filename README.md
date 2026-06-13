@@ -11,11 +11,24 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run --bin drillgame
 ```
 
+With Nix:
+
+```bash
+nix develop -c cargo run --bin drillgame
+```
+
 ## Controls
 
-- `A` / `D` or left/right arrows: move horizontally
+- `A` / `D` or left/right arrows: move horizontally and drill sideways
 - `W` / up arrow / space: thrust upward
-- `S` / down arrow: drill downward faster
+- `S` / down arrow: drill downward
+- `E`: interact with surface buildings or rescue prompt
+- `1`-`5`: buy upgrades while parked at the shop
 - `Esc`: quit
 
-Return to the surface base to automatically sell cargo and refuel.
+## Surface Buildings
+
+- Fuel Station: refills fuel
+- Repair Garage: repairs hull
+- Ore Depot: sells cargo by mineral value
+- Upgrade Shop: sells drill, fuel tank, cargo bay, engine, and hull upgrades
