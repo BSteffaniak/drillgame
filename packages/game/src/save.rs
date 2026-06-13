@@ -4,8 +4,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::game_state::GameState;
 
+const SETTINGS_PATH: &str = "drillgame-settings.json";
+
 const SAVE_PATH: &str = "drillgame-save.json";
 const SAVE_VERSION: u32 = 2;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct SettingsFile {
+    pub master_volume: f32,
+    pub fullscreen: bool,
+}
+
+impl Default for SettingsFile {
+    fn default() -> Self {
+        Self {
+            master_volume: 0.8,
+            fullscreen: false,
+        }
+    }
+}
+
+pub fn save_settings(settings: SettingsFile) -> Result<(), SaveError> {
+    let json = serde_json::to_string_pretty(&settings).map_err(SaveError::Serialize)?;
+    fs::write(SETTINGS_PATH, json).map_err(SaveError::Io)
+}
+
+#[must_use]
+pub fn load_settings() -> SettingsFile {
+    let Ok(json) = fs::read_to_string(SETTINGS_PATH) else {
+        return SettingsFile::default();
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SaveFile {

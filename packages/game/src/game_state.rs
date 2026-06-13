@@ -45,6 +45,10 @@ const fn default_master_volume() -> f32 {
     0.8
 }
 
+const fn default_fullscreen() -> bool {
+    false
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DrillDirection {
     Down,
@@ -73,8 +77,11 @@ pub enum RunMode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ModalScreen {
     Fuel,
+    FuelConfirm,
     Repair,
+    RepairConfirm,
     Depot,
+    DepotReceiptHistory,
     Shop,
     ShopConfirm,
     ExitConfirm,
@@ -124,6 +131,7 @@ pub struct FallingBoulder {
     pub x: f32,
     pub y: f32,
     pub velocity_y: f32,
+    pub warning_seconds: f32,
     pub life: f32,
 }
 
@@ -177,6 +185,8 @@ pub struct GameState {
     pub game_over: bool,
     #[serde(default = "default_master_volume")]
     pub master_volume: f32,
+    #[serde(default = "default_fullscreen")]
+    pub fullscreen: bool,
     #[serde(default)]
     pub last_rescue_x: Option<f32>,
     #[serde(default)]
@@ -243,6 +253,7 @@ impl GameState {
             next_milestone_tile: 20,
             game_over: false,
             master_volume: default_master_volume(),
+            fullscreen: default_fullscreen(),
             last_rescue_x: None,
             last_rescue_y: None,
             last_rescue_summary: String::new(),
@@ -294,6 +305,14 @@ impl GameState {
         if input.volume_down {
             self.master_volume = (self.master_volume - 0.1).max(0.0);
             self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+        }
+        if input.fullscreen {
+            self.fullscreen = !self.fullscreen;
+            self.message = if self.fullscreen {
+                "Fullscreen preference saved. Restart/toggle window integration pending.".to_owned()
+            } else {
+                "Windowed preference saved.".to_owned()
+            };
         }
         self.update_particles(delta_seconds);
         self.update_boulders(delta_seconds);
@@ -488,15 +507,20 @@ impl GameState {
         }
         if input.menu_down {
             let max_item = match modal {
-                ModalScreen::Shop => upgrade_offers(&self.player).len() - 1,
-                ModalScreen::Depot => 1,
-                ModalScreen::Fuel | ModalScreen::Repair => 2,
-                ModalScreen::ShopConfirm
-                | ModalScreen::ExitConfirm
-                | ModalScreen::Map
-                | ModalScreen::Help => 0,
+                ModalScreen::Depot | ModalScreen::Fuel | ModalScreen::Repair => 2,
+                _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
+        }
+
+        if matches!(modal, ModalScreen::Shop) {
+            if input.menu_left {
+                self.selected_menu_item = self.selected_menu_item.saturating_sub(1);
+            }
+            if input.menu_right {
+                self.selected_menu_item =
+                    (self.selected_menu_item + 1).min(upgrade_offers(&self.player).len() - 1);
+            }
         }
 
         if let Some(index) = input.selected_upgrade {
@@ -505,9 +529,12 @@ impl GameState {
 
         if input.confirm {
             match modal {
-                ModalScreen::Fuel => self.confirm_refuel(),
-                ModalScreen::Repair => self.confirm_repair(),
+                ModalScreen::Fuel => self.modal = Some(ModalScreen::FuelConfirm),
+                ModalScreen::FuelConfirm => self.confirm_refuel(),
+                ModalScreen::Repair => self.modal = Some(ModalScreen::RepairConfirm),
+                ModalScreen::RepairConfirm => self.confirm_repair(),
                 ModalScreen::Depot => self.confirm_depot(),
+                ModalScreen::DepotReceiptHistory => self.modal = Some(ModalScreen::Depot),
                 ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
                 ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
                 ModalScreen::ExitConfirm | ModalScreen::Map | ModalScreen::Help => {}
@@ -533,6 +560,10 @@ impl GameState {
         } else {
             format!("Fuel topped up for {cost} credits.")
         };
+        if cost > 0 {
+            self.sound_cues.push(SoundCue::Upgrade);
+        }
+        self.modal = Some(ModalScreen::Fuel);
     }
 
     fn confirm_repair(&mut self) {
@@ -543,13 +574,17 @@ impl GameState {
         } else {
             format!("Hull repaired for {cost} credits.")
         };
+        if cost > 0 {
+            self.sound_cues.push(SoundCue::Upgrade);
+        }
+        self.modal = Some(ModalScreen::Repair);
     }
 
     fn confirm_depot(&mut self) {
-        if self.selected_menu_item == 0 {
-            self.confirm_contract();
-        } else {
-            self.confirm_sell_cargo();
+        match self.selected_menu_item {
+            0 => self.confirm_contract(),
+            1 => self.confirm_sell_cargo(),
+            _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
     }
 
@@ -858,21 +893,21 @@ impl GameState {
 
     fn trigger_gas_explosion(&mut self) {
         self.player.fuel = (self.player.fuel - DRILL_FUEL_COST).max(0.0);
-        self.player.hull = (self.player.hull - 18.0).max(0.0);
-        self.player.velocity_x *= -0.45;
-        self.player.velocity_y = -220.0;
+        self.player.velocity_x *= -0.25;
+        self.player.velocity_y = -90.0;
         self.sound_cues.push(SoundCue::Damage);
         self.drill_flash_seconds = 0.2;
         self.hazard_clouds.push(HazardCloud {
             x: self.player.x,
             y: self.player.y + TILE_SIZE,
             life: 8.0,
-            radius: 36.0,
+            radius: 10.0,
         });
         for _ in 0..5 {
             self.spawn_dust();
         }
-        "Gas pocket exploded! Hull damaged.".clone_into(&mut self.message);
+        "Gas pocket venting! Clear the green leak before it turns corrosive."
+            .clone_into(&mut self.message);
     }
 
     fn collect_mined_tile(&mut self, mined: TileKind, target: TilePosition) {
@@ -906,8 +941,9 @@ impl GameState {
             self.falling_boulders.push(FallingBoulder {
                 x: target.x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
                 y: (target.y as f32 - 1.0) * TILE_SIZE,
-                velocity_y: 80.0,
-                life: 3.0,
+                velocity_y: 0.0,
+                warning_seconds: 0.55,
+                life: 3.6,
             });
             self.sound_cues.push(SoundCue::Damage);
             self.shake_camera(0.18, 4.0);
@@ -933,11 +969,18 @@ impl GameState {
     fn update_boulders(&mut self, delta_seconds: f32) {
         for boulder in &mut self.falling_boulders {
             boulder.life -= delta_seconds;
+            if boulder.warning_seconds > 0.0 {
+                boulder.warning_seconds -= delta_seconds;
+                continue;
+            }
             boulder.velocity_y = (boulder.velocity_y + GRAVITY * 0.8 * delta_seconds).min(520.0);
             boulder.y += boulder.velocity_y * delta_seconds;
         }
 
         let hit_player = self.falling_boulders.iter().any(|boulder| {
+            if boulder.warning_seconds > 0.0 {
+                return false;
+            }
             let dx = self.player.x - boulder.x;
             let dy = self.player.y - boulder.y;
             dx.hypot(dy) <= PLAYER_RADIUS + 8.0
@@ -968,6 +1011,9 @@ impl GameState {
         self.hazard_clouds.retain(|cloud| cloud.life > 0.0);
 
         let in_gas = self.hazard_clouds.iter().any(|cloud| {
+            if cloud.life >= 6.0 {
+                return false;
+            }
             let dx = self.player.x - cloud.x;
             let dy = self.player.y - cloud.y;
             dx.hypot(dy) <= cloud.radius

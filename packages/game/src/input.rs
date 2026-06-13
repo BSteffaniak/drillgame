@@ -15,6 +15,8 @@ pub struct PlayerInput {
     pub pause: bool,
     pub menu_up: bool,
     pub menu_down: bool,
+    pub menu_left: bool,
+    pub menu_right: bool,
     pub details: bool,
     pub save: bool,
     pub load: bool,
@@ -23,6 +25,7 @@ pub struct PlayerInput {
     pub help: bool,
     pub volume_up: bool,
     pub volume_down: bool,
+    pub fullscreen: bool,
 }
 
 #[must_use]
@@ -49,6 +52,10 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
             || raylib.is_key_pressed(KeyboardKey::KEY_W),
         menu_down: raylib.is_key_pressed(KeyboardKey::KEY_DOWN)
             || raylib.is_key_pressed(KeyboardKey::KEY_S),
+        menu_left: raylib.is_key_pressed(KeyboardKey::KEY_LEFT)
+            || raylib.is_key_pressed(KeyboardKey::KEY_A),
+        menu_right: raylib.is_key_pressed(KeyboardKey::KEY_RIGHT)
+            || raylib.is_key_pressed(KeyboardKey::KEY_D),
         details: raylib.is_key_down(KeyboardKey::KEY_TAB),
         save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
         load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
@@ -59,6 +66,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
             || raylib.is_key_pressed(KeyboardKey::KEY_KP_ADD),
         volume_down: raylib.is_key_pressed(KeyboardKey::KEY_MINUS)
             || raylib.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
+        fullscreen: raylib.is_key_pressed(KeyboardKey::KEY_F11),
     }
 }
 

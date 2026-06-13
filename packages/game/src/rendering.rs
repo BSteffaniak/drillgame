@@ -203,10 +203,20 @@ fn draw_particles(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vec
         );
     }
     for boulder in &game.falling_boulders {
+        let wobble = if boulder.warning_seconds > 0.0 {
+            (boulder.warning_seconds * 60.0).sin() * 3.0
+        } else {
+            0.0
+        };
+        let color = if boulder.warning_seconds > 0.0 {
+            Color::new(180, 80, 55, 255)
+        } else {
+            Color::new(95, 80, 70, 255)
+        };
         draw.draw_circle_v(
-            Vector2::new(boulder.x - camera.x, boulder.y - camera.y),
+            Vector2::new(boulder.x - camera.x + wobble, boulder.y - camera.y),
             8.0,
-            Color::new(95, 80, 70, 255),
+            color,
         );
         draw.draw_circle_lines(
             (boulder.x - camera.x) as i32,
@@ -659,6 +669,29 @@ fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
 }
 
+fn draw_service_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState, service: &str) {
+    let label = match game.selected_menu_item {
+        0 => "small 25%",
+        1 => "half 50%",
+        _ => "full 100%",
+    };
+    draw.draw_text("Confirm Service", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        &format!("Buy {label} {service}?"),
+        330,
+        220,
+        24,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        "Enter/E confirms | Backspace/Esc cancels",
+        330,
+        280,
+        20,
+        Color::WHITE,
+    );
+}
+
 fn draw_service_options(draw: &mut RaylibDrawHandle<'_>, selected: usize, x: i32, y: i32) {
     let options = ["Small 25%", "Half 50%", "Full 100%"];
     for (index, option) in options.iter().enumerate() {
@@ -708,6 +741,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
             );
             draw_service_options(draw, game.selected_menu_item, 330, 330);
         }
+        ModalScreen::FuelConfirm => draw_service_confirm(draw, game, "fuel"),
         ModalScreen::Repair => {
             draw.draw_text("Repair Garage", 330, 150, 30, Color::LIME);
             draw.draw_text(
@@ -735,7 +769,9 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
             );
             draw_service_options(draw, game.selected_menu_item, 330, 330);
         }
+        ModalScreen::RepairConfirm => draw_service_confirm(draw, game, "repair"),
         ModalScreen::Depot => draw_modal_depot(draw, game),
+        ModalScreen::DepotReceiptHistory => draw_depot_receipt_history(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
         ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
         ModalScreen::Map => draw_large_map(draw, game),
@@ -748,6 +784,34 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
                 210,
                 22,
                 Color::WHITE,
+            );
+        }
+    }
+}
+
+fn draw_depot_receipt_history(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Depot Receipt History", 330, 150, 30, Color::GREEN);
+    draw.draw_text(
+        "Enter/E or Backspace/Esc returns",
+        330,
+        190,
+        18,
+        Color::LIGHTGRAY,
+    );
+    if game.depot_receipts.is_empty() {
+        draw.draw_text("No sales recorded yet.", 350, 245, 22, Color::GRAY);
+        return;
+    }
+    for (index, receipt) in game.depot_receipts.iter().rev().enumerate() {
+        let y = 235 + i32::try_from(index).unwrap_or(i32::MAX) * 72;
+        draw.draw_text(&format!("Sale {}", index + 1), 350, y, 18, Color::GOLD);
+        for (line_index, line) in receipt.lines().take(2).enumerate() {
+            draw.draw_text(
+                line,
+                370,
+                y + 24 + i32::try_from(line_index).unwrap_or(i32::MAX) * 18,
+                15,
+                Color::RAYWHITE,
             );
         }
     }
@@ -767,7 +831,11 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::LIGHTGRAY,
     );
 
-    let options = ["Complete active contract", "Sell loose cargo"];
+    let options = [
+        "Complete active contract",
+        "Sell loose cargo",
+        "Receipt history",
+    ];
     for (index, option) in options.iter().enumerate() {
         let y = 230 + i32::try_from(index).unwrap_or(i32::MAX) * 36;
         let color = if index == game.selected_menu_item {

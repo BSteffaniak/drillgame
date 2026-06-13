@@ -352,10 +352,10 @@ const fn ore_or_base_tile(x: i32, y: i32, base: TileKind, seed: u64) -> TileKind
 }
 
 const fn patterned_ore(x: i32, y: i32, seed: u64) -> bool {
-    let vein_a = seeded_hash(x, y, seed ^ 0xC0DE) % 37;
-    let vein_b = seeded_hash(x, y, seed ^ 0xBEEF) % 53;
-    let pocket = seeded_hash(x / 3, y / 3, seed ^ 0xFACE) % 29;
-    vein_a <= 2 || vein_b <= 1 || pocket == 0
+    let vein_a = seeded_hash(x / 2, y / 2, seed ^ 0xC0DE) % 31;
+    let vein_b = seeded_hash((x + y) / 3, y / 2, seed ^ 0xBEEF) % 43;
+    let pocket = seeded_hash(x / 4, y / 3, seed ^ 0xFACE) % 23;
+    vein_a <= 2 || vein_b <= 1 || pocket <= 1
 }
 
 const fn seeded_hash(x: i32, y: i32, seed: u64) -> u64 {
