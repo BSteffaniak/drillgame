@@ -81,6 +81,7 @@ pub struct GameState {
     pub run_mode: RunMode,
     pub modal: Option<ModalScreen>,
     pub selected_menu_item: usize,
+    pub show_details: bool,
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
     pub game_over: bool,
@@ -97,6 +98,7 @@ impl GameState {
         let mut saved = self.clone();
         saved.run_mode = RunMode::Playing;
         saved.modal = None;
+        saved.show_details = false;
         saved.sound_cues.clear();
         saved
     }
@@ -113,6 +115,7 @@ impl GameState {
             run_mode: RunMode::Title,
             modal: None,
             selected_menu_item: 0,
+            show_details: false,
             deepest_tile_reached: 0,
             next_milestone_tile: 20,
             game_over: false,
@@ -126,6 +129,7 @@ impl GameState {
 
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
         self.sound_cues.clear();
+        self.show_details = input.details;
         self.handle_save_load(input);
         self.update_particles(delta_seconds);
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);

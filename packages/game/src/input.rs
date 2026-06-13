@@ -15,6 +15,7 @@ pub struct PlayerInput {
     pub pause: bool,
     pub menu_up: bool,
     pub menu_down: bool,
+    pub details: bool,
     pub save: bool,
     pub load: bool,
     pub selected_upgrade: Option<usize>,
@@ -44,6 +45,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
             || raylib.is_key_pressed(KeyboardKey::KEY_W),
         menu_down: raylib.is_key_pressed(KeyboardKey::KEY_DOWN)
             || raylib.is_key_pressed(KeyboardKey::KEY_S),
+        details: raylib.is_key_down(KeyboardKey::KEY_TAB),
         save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
         load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
         selected_upgrade: selected_upgrade(raylib),

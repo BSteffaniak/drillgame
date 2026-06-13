@@ -138,86 +138,90 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
 }
 
 fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(12, 12, 560, 242, Color::new(0, 0, 0, 175));
-    draw_bar(
+    draw_compact_status(draw, game);
+    draw_message_toast(draw, game);
+
+    if game.show_details || game.modal == Some(ModalScreen::Depot) {
+        draw_detail_panel(draw, game);
+    }
+}
+
+fn draw_compact_status(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_rectangle(10, 10, SCREEN_WIDTH - 20, 54, Color::new(0, 0, 0, 120));
+    draw_mini_bar(
         draw,
-        24,
-        26,
+        22,
+        20,
         "Fuel",
         game.player.fuel,
         game.player.fuel_capacity,
         Color::GOLD,
     );
-    draw_bar(
+    draw_mini_bar(
         draw,
-        24,
-        56,
+        22,
+        42,
         "Hull",
         game.player.hull,
         game.player.max_hull(),
         Color::LIME,
     );
+
+    draw.draw_text(
+        &format!("Credits {}", game.player.credits),
+        340,
+        20,
+        18,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &format!("Depth {:.0}m", (game.player.y / TILE_SIZE - 5.0).max(0.0)),
+        340,
+        42,
+        18,
+        Color::RAYWHITE,
+    );
+
     draw.draw_text(
         &format!(
-            "Cargo: {}/{}",
+            "Cargo {}/{}",
             game.player.cargo_used(),
             game.player.cargo_capacity
         ),
-        24,
-        86,
+        520,
         20,
-        Color::WHITE,
-    );
-    draw.draw_text(
-        &format!("Credits: {}", game.player.credits),
-        24,
-        110,
-        20,
-        Color::WHITE,
+        18,
+        Color::RAYWHITE,
     );
     draw.draw_text(
         &format!(
-            "Drill {} | Engine {} | Hull {} | Radiator {}",
+            "Contract {}/{} {}",
+            game.contracts.active.progress(&game.player),
+            game.contracts.active.required,
+            game.contracts.active.target.name()
+        ),
+        520,
+        42,
+        18,
+        Color::RAYWHITE,
+    );
+
+    draw.draw_text(
+        &format!(
+            "D{} E{} H{} R{} | Tab details | F5/F9",
             game.player.drill_strength,
             game.player.engine_level,
             game.player.hull_level,
             game.player.radiator_level
         ),
-        24,
-        134,
+        810,
+        31,
         18,
-        Color::RAYWHITE,
+        Color::LIGHTGRAY,
     );
-    draw.draw_text(
-        &format!(
-            "Depth: {:.0}m | Seed {:X} | F5 save | F9 load",
-            (game.player.y / TILE_SIZE - 5.0).max(0.0),
-            game.terrain.seed()
-        ),
-        24,
-        158,
-        18,
-        Color::RAYWHITE,
-    );
-    draw.draw_text(
-        &format!(
-            "Contract: {}/{} {} = {} cr",
-            game.contracts.active.progress(&game.player),
-            game.contracts.active.required,
-            game.contracts.active.target.name(),
-            game.contracts.active.reward
-        ),
-        24,
-        188,
-        18,
-        Color::RAYWHITE,
-    );
-    draw.draw_text(&game.message, 24, 216, 18, Color::RAYWHITE);
-
-    draw_cargo_manifest(draw, game);
 }
 
-fn draw_bar(
+fn draw_mini_bar(
     draw: &mut RaylibDrawHandle<'_>,
     x: i32,
     y: i32,
@@ -227,35 +231,70 @@ fn draw_bar(
     color: Color,
 ) {
     let ratio = (value / max).clamp(0.0, 1.0);
-    draw.draw_text(label, x, y - 2, 18, Color::WHITE);
-    draw.draw_rectangle(x + 70, y, 210, 18, Color::new(35, 35, 35, 255));
-    draw.draw_rectangle(x + 70, y, (210.0 * ratio) as i32, 18, color);
-    draw.draw_rectangle_lines(x + 70, y, 210, 18, Color::WHITE);
+    draw.draw_text(label, x, y - 5, 16, Color::WHITE);
+    draw.draw_rectangle(x + 46, y - 2, 210, 14, Color::new(35, 35, 35, 220));
+    draw.draw_rectangle(x + 46, y - 2, (210.0 * ratio) as i32, 14, color);
+    draw.draw_rectangle_lines(x + 46, y - 2, 210, 14, Color::new(230, 230, 230, 180));
     draw.draw_text(
         &format!("{value:.0}/{max:.0}"),
-        x + 292,
-        y - 2,
-        18,
+        x + 266,
+        y - 5,
+        16,
         Color::WHITE,
     );
 }
 
-fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    let mut y = 214;
+fn draw_message_toast(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    if game.message.is_empty() || game.run_mode != RunMode::Playing || game.modal.is_some() {
+        return;
+    }
+
+    let text_width = i32::try_from(game.message.len()).unwrap_or(i32::MAX) * 10;
+    let width = text_width.clamp(260, 820);
+    let x = (SCREEN_WIDTH - width) / 2;
+    let y = SCREEN_HEIGHT - 76;
+    draw.draw_rectangle(x, y, width, 42, Color::new(0, 0, 0, 145));
+    draw.draw_rectangle_lines(x, y, width, 42, Color::new(255, 255, 255, 120));
+    draw.draw_text(&game.message, x + 16, y + 12, 18, Color::RAYWHITE);
+}
+
+fn draw_detail_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let x = SCREEN_WIDTH - 330;
+    let y = 82;
     let cargo_rows =
         i32::try_from(game.player.cargo.len() + game.player.artifacts.len()).unwrap_or(i32::MAX);
-    draw.draw_rectangle(
-        12,
-        y - 10,
-        260,
-        32 + cargo_rows * 22,
-        Color::new(0, 0, 0, 150),
+    let height = 156 + cargo_rows * 22;
+    draw.draw_rectangle(x, y, 312, height, Color::new(0, 0, 0, 170));
+    draw.draw_rectangle_lines(x, y, 312, height, Color::new(255, 255, 255, 120));
+
+    draw.draw_text("Details", x + 14, y + 12, 22, Color::WHITE);
+    draw.draw_text(
+        &format!("Seed {:X}", game.terrain.seed()),
+        x + 14,
+        y + 40,
+        16,
+        Color::LIGHTGRAY,
     );
-    draw.draw_text("Cargo Manifest", 24, y, 18, Color::WHITE);
-    y += 24;
+    draw.draw_text(
+        &format!(
+            "Contract: {}/{} {} = {} cr",
+            game.contracts.active.progress(&game.player),
+            game.contracts.active.required,
+            game.contracts.active.target.name(),
+            game.contracts.active.reward
+        ),
+        x + 14,
+        y + 62,
+        16,
+        Color::RAYWHITE,
+    );
+
+    let mut row_y = y + 96;
+    draw.draw_text("Cargo", x + 14, row_y, 18, Color::WHITE);
+    row_y += 24;
 
     if game.player.cargo.is_empty() && game.player.artifacts.is_empty() {
-        draw.draw_text("empty", 24, y, 16, Color::LIGHTGRAY);
+        draw.draw_text("empty", x + 14, row_y, 16, Color::LIGHTGRAY);
         return;
     }
 
@@ -267,12 +306,12 @@ fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 count,
                 mineral.value() * count
             ),
-            24,
-            y,
+            x + 14,
+            row_y,
             16,
             mineral_color(*mineral),
         );
-        y += 22;
+        row_y += 22;
     }
 
     for (artifact, count) in &game.player.artifacts {
@@ -283,12 +322,12 @@ fn draw_cargo_manifest(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 count,
                 artifact.value() * count
             ),
-            24,
-            y,
+            x + 14,
+            row_y,
             16,
             artifact_color(*artifact),
         );
-        y += 22;
+        row_y += 22;
     }
 }
 
