@@ -170,6 +170,8 @@ pub struct GameState {
     pub explored_tiles: Vec<bool>,
     #[serde(default)]
     pub last_depot_receipt: String,
+    #[serde(default)]
+    pub depot_receipts: Vec<String>,
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
     pub game_over: bool,
@@ -236,6 +238,7 @@ impl GameState {
             won_game: false,
             explored_tiles: vec![false; (WORLD_WIDTH * WORLD_HEIGHT) as usize],
             last_depot_receipt: String::new(),
+            depot_receipts: Vec::new(),
             deepest_tile_reached: 0,
             next_milestone_tile: 20,
             game_over: false,
@@ -560,8 +563,9 @@ impl GameState {
                     completion.completed_title, completion.reward
                 );
             } else {
+                let story = ContractLog::story_for_completed(self.contracts.completed);
                 self.message = format!(
-                    "{} complete! Bonus paid: {} credits.",
+                    "{} complete! Bonus paid: {} credits. {story}",
                     completion.completed_title, completion.reward
                 );
             }
@@ -594,6 +598,10 @@ impl GameState {
         let payout = sell_cargo(&mut self.player);
         if payout > 0 {
             let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {payout} cr");
+            self.depot_receipts.push(self.last_depot_receipt.clone());
+            if self.depot_receipts.len() > 5 {
+                self.depot_receipts.remove(0);
+            }
         }
         if payout == 0 {
             "No cargo to sell.".clone_into(&mut self.message);
@@ -1017,8 +1025,14 @@ impl GameState {
         let reward = u32::try_from(self.next_milestone_tile).unwrap_or(0) * 2;
         self.player.credits += reward;
         self.sound_cues.push(SoundCue::Milestone);
+        let unlock = match self.next_milestone_tile {
+            20 => "Silver seams now appear in useful quantities.",
+            40 => "Gold and relic pockets are becoming common.",
+            60 => "Emerald, ruby, and heat hazards intensify below.",
+            _ => "Diamond traces and Star Core readings strengthen below.",
+        };
         self.message = format!(
-            "Depth milestone reached: {}m. Survey bonus: {reward} credits. Richer ore lies below.",
+            "Depth milestone reached: {}m. Survey bonus: {reward} credits. {unlock}",
             self.next_milestone_tile - 5
         );
         self.next_milestone_tile += 20;

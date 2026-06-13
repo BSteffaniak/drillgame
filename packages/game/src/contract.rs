@@ -45,6 +45,20 @@ impl ContractLog {
             finished_story,
         })
     }
+    pub const fn story_for_completed(completed: u32) -> &'static str {
+        match completed {
+            1 => "HQ: Copper confirms the claim. Push toward silver-bearing clay.",
+            2 => "HQ: Silver assay approved. Fossils imply old tunnels below.",
+            3 => "HQ: Relic recovered. Corporate wants gold calibration samples.",
+            4 => "HQ: Gold readings are stable. Heat shielding tests begin.",
+            5 => "HQ: Ruby survived high heat. Seek idol chambers deeper down.",
+            6 => "HQ: Idol telemetry points to emerald conductors.",
+            7 => "HQ: Emerald circuitry is live. A diamond lens can focus the scan.",
+            8 => "HQ: Diamond lens aligned. Recover the old circuit to triangulate the core.",
+            _ => "HQ: Star Core coordinates locked. This is the final descent.",
+        }
+    }
+
     pub fn migrate_after_load(&mut self) {
         let canonical = contract_for_index(self.completed);
         if self.active.title.is_empty() {
@@ -181,6 +195,27 @@ fn contract_for_index(index: u32) -> Contract {
             ContractTarget::Artifact(ArtifactKind::BuriedIdol),
             1,
             700,
+            false,
+        ),
+        6 => Contract::new(
+            "Emerald Conductors",
+            ContractTarget::Mineral(MineralKind::Emerald),
+            2,
+            860,
+            false,
+        ),
+        7 => Contract::new(
+            "Diamond Lens",
+            ContractTarget::Mineral(MineralKind::Diamond),
+            1,
+            1_100,
+            false,
+        ),
+        8 => Contract::new(
+            "Ancient Machine",
+            ContractTarget::Artifact(ArtifactKind::OldCircuit),
+            1,
+            1_350,
             false,
         ),
         _ => Contract::new(

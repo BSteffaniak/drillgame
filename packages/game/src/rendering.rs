@@ -43,6 +43,7 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 
     draw_player(draw, game, camera);
+    draw_heat_warning(draw, game);
     draw_hud(draw, game);
     draw_depth_ruler(draw, game);
     draw_minimap(draw, game);
@@ -134,6 +135,19 @@ fn draw_world(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector2
         let progress = ((f32::from(chipped) + drill.progress.clamp(0.0, 1.0))
             / f32::from(drill.initial_durability.max(1)))
         .clamp(0.0, 1.0);
+        if matches!(
+            game.terrain.tile(drill.target).map(|tile| tile.kind),
+            Some(TileKind::Gas)
+        ) {
+            let pulse = (drill.progress * std::f32::consts::TAU * 4.0).sin().abs();
+            draw.draw_circle(
+                x + TILE_SIZE as i32 / 2,
+                y + TILE_SIZE as i32 / 2,
+                10.0 + pulse * 8.0,
+                Color::new(95, 230, 90, 80),
+            );
+            draw.draw_text("GAS", x + 4, y + 4, 12, Color::GREEN);
+        }
         let bar_width = (TILE_SIZE * progress) as i32;
         draw.draw_rectangle(
             x + 4,
@@ -298,12 +312,55 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
             Color::new(255, 95, 20, 220),
         );
     }
+    if game.player.hull < game.player.max_hull() * 0.35 {
+        let smoke_alpha = 90 + ((game.player.hull as i32).rem_euclid(40) as u8);
+        draw.draw_circle(
+            (screen_x - 16.0) as i32,
+            (screen_y - 18.0) as i32,
+            5.0,
+            Color::new(60, 60, 60, smoke_alpha),
+        );
+        draw.draw_circle(
+            (screen_x - 22.0) as i32,
+            (screen_y - 25.0) as i32,
+            7.0,
+            Color::new(45, 45, 45, smoke_alpha.saturating_sub(25)),
+        );
+    }
     if game.drill_flash_seconds > 0.0 {
         draw.draw_circle_v(
             Vector2::new(screen_x, screen_y + 20.0),
             7.0,
             Color::new(255, 230, 80, 210),
         );
+    }
+}
+
+fn draw_heat_warning(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let depth_heat = game.player.y > 18.0 * TILE_SIZE;
+    let tile_x = (game.player.x / TILE_SIZE) as i32;
+    let tile_y = (game.player.y / TILE_SIZE) as i32;
+    let near_lava = (-2..=2).any(|dy| {
+        (-2..=2).any(|dx| {
+            matches!(
+                game.terrain.tile(TilePosition {
+                    x: tile_x + dx,
+                    y: tile_y + dy,
+                }),
+                Some(tile) if tile.kind == TileKind::Lava
+            )
+        })
+    });
+    if depth_heat || near_lava {
+        let alpha = if near_lava { 70 } else { 35 };
+        draw.draw_rectangle(
+            0,
+            0,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            Color::new(255, 70, 20, alpha),
+        );
+        draw.draw_text("HEAT", 1110, 48, 22, Color::ORANGE);
     }
 }
 
@@ -696,6 +753,10 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "depot modal composes manifest, receipt, and history"
+)]
 fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Ore Depot", 330, 150, 30, Color::GREEN);
     draw.draw_text(
@@ -785,6 +846,19 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 line,
                 730,
                 376 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+                16,
+                Color::RAYWHITE,
+            );
+        }
+    }
+    if !game.depot_receipts.is_empty() {
+        draw.draw_text("Receipt history:", 710, 500, 18, Color::LIGHTGRAY);
+        for (index, receipt) in game.depot_receipts.iter().rev().take(3).enumerate() {
+            let total_line = receipt.lines().last().unwrap_or("receipt");
+            draw.draw_text(
+                total_line,
+                730,
+                526 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
                 16,
                 Color::RAYWHITE,
             );
@@ -933,9 +1007,16 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+    draw.draw_text(
+        "Categories: [1] Drill [2] Tank [3] Cargo [4] Engine [5] Hull [6] Radiator",
+        330,
+        208,
+        16,
+        Color::LIGHTGRAY,
+    );
     let offers = upgrade_offers(&game.player);
     for (index, offer) in offers.iter().enumerate() {
-        let y = 230 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
+        let y = 242 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
         let selected = index == game.selected_menu_item;
         let affordable = game.player.credits >= offer.cost;
         let color = if selected {
