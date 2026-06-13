@@ -54,6 +54,7 @@
           buildInputs = [
             rustToolchain
             cargoMachete
+            pkgs.cargo-deny
             pkgs.cmake
             pkgs.pkg-config
             pkgs.clang
@@ -70,6 +71,7 @@
             echo "  - cargo ($(cargo --version))"
             echo "  - rustc ($(rustc --version))"
             echo "  - clippy ($(cargo clippy --version))"
+            echo "  - cargo-deny ($(cargo deny --version))"
             echo "  - cargo-machete ($(cargo machete --version))"
             echo "  - cmake ($(cmake --version | head -1))"
 

@@ -1,17 +1,17 @@
 [package]
-name = "drillgame_game"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
+authors.workspace    = true
+categories           = ["games"]
+description          = "Desktop raylib frontend for Drillgame"
+edition.workspace    = true
+keywords             = ["game", "mining", "raylib"]
+license.workspace    = true
+name                 = "drillgame_game"
+readme               = "README.md"
 repository.workspace = true
-readme = "README.md"
-description = "Desktop raylib frontend for Drillgame"
-keywords = ["game", "mining", "raylib"]
-categories = ["games"]
+version.workspace    = true
 
 [features]
-default = []
+default          = []
 fail-on-warnings = []
 
 [[bin]]

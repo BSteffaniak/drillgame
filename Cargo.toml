@@ -1,14 +1,14 @@
 [workspace]
-members = ["packages/game"]
+members  = ["packages/game"]
 resolver = "2"
 
 [workspace.package]
-authors = ["Braden Steffaniak"]
-edition = "2024"
-license = "MPL-2.0"
-readme = "README.md"
+authors    = ["Braden Steffaniak"]
+edition    = "2024"
+license    = "MPL-2.0"
+readme     = "README.md"
 repository = "https://github.com/BSteffaniak/drillgame"
-version = "0.0.1-alpha.0"
+version    = "0.0.1-alpha.0"
 
 [workspace.dependencies]
 raylib = { version = "6.0.0", default-features = false, features = [
