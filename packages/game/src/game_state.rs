@@ -36,6 +36,9 @@ const DRILL_FUEL_COST: f32 = 0.45;
 const PLAYER_RADIUS: f32 = 10.5;
 const SAFE_LANDING_SPEED: f32 = 330.0;
 const CRASH_DAMAGE_SCALE: f32 = 0.11;
+const BOULDER_DAMAGE: f32 = 8.0;
+const BOULDER_WARNING_SECONDS: f32 = 0.85;
+const BOULDER_SPAWN_CHANCE: u64 = 16;
 const HEAT_START_DEPTH: f32 = 18.0 * TILE_SIZE;
 const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
 const CAMERA_SMOOTHING: f32 = 8.0;
@@ -1437,7 +1440,7 @@ impl GameState {
                 x: target.x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
                 y: (target.y as f32 - 1.0) * TILE_SIZE,
                 velocity_y: 0.0,
-                warning_seconds: 0.55,
+                warning_seconds: BOULDER_WARNING_SECONDS,
                 life: 3.6,
             });
             self.sound_cues.push(SoundCue::Damage);
@@ -1555,16 +1558,19 @@ impl GameState {
             boulder.y += boulder.velocity_y * delta_seconds;
         }
 
-        let hit_player = self.falling_boulders.iter().any(|boulder| {
+        let mut hit_player = false;
+        self.falling_boulders.retain(|boulder| {
             if boulder.warning_seconds > 0.0 {
-                return false;
+                return true;
             }
             let dx = self.player.x - boulder.x;
             let dy = self.player.y - boulder.y;
-            dx.hypot(dy) <= PLAYER_RADIUS + 8.0
+            let hit = dx.hypot(dy) <= PLAYER_RADIUS + 8.0;
+            hit_player |= hit;
+            !hit
         });
         if hit_player {
-            self.player.hull = (self.player.hull - 12.0).max(0.0);
+            self.player.hull = (self.player.hull - BOULDER_DAMAGE).max(0.0);
             self.sound_cues.push(SoundCue::Damage);
             self.shake_camera(0.35, 9.0);
             self.spawn_sparks();
@@ -2082,7 +2088,7 @@ const fn falling_rock_roll(position: TilePosition, seed: u64) -> bool {
     let value = seed
         ^ ((position.x as u64).wrapping_mul(0x9E37))
         ^ ((position.y as u64).wrapping_mul(0x85EB));
-    value.is_multiple_of(9)
+    value.is_multiple_of(BOULDER_SPAWN_CHANCE)
 }
 
 fn target_camera_offset(game: &GameState) -> (f32, f32) {
