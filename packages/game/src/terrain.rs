@@ -304,9 +304,16 @@ const fn cave_air(x: i32, y: i32, seed: u64) -> bool {
         return false;
     }
 
-    let cavern = seeded_hash(x / 5, y / 4, seed) % 47;
+    let cavern_mod = match y {
+        0..=27 => 61,
+        28..=47 => 43,
+        48..=67 => 37,
+        _ => 31,
+    };
+    let cavern = seeded_hash(x / 5, y / 4, seed) % cavern_mod;
+    let seam = y > 44 && seeded_hash(x / 9, y, seed ^ 0xF00D).is_multiple_of(19);
     let tunnel = seeded_hash(x, y, seed ^ 0xA5A5) % 97;
-    cavern == 0 || tunnel == 0
+    cavern == 0 || tunnel == 0 || seam
 }
 
 const fn explosive_pocket(x: i32, y: i32, seed: u64) -> bool {

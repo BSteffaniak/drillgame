@@ -44,6 +44,16 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 
     draw_player(draw, game, camera);
+    if game.screen_flash_seconds > 0.0 {
+        let alpha = (game.screen_flash_seconds * 520.0).clamp(0.0, 120.0) as u8;
+        draw.draw_rectangle(
+            0,
+            0,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            Color::new(255, 220, 150, alpha),
+        );
+    }
     draw_heat_warning(draw, game);
     draw_hud(draw, game);
     draw_depth_ruler(draw, game);
@@ -792,6 +802,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
         }
         ModalScreen::RepairConfirm => draw_service_confirm(draw, game, "repair"),
         ModalScreen::Depot => draw_modal_depot(draw, game),
+        ModalScreen::Headquarters => draw_headquarters(draw, game),
         ModalScreen::DepotReceiptHistory => draw_depot_receipt_history(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
         ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
@@ -844,6 +855,51 @@ fn draw_depot_receipt_history(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
 #[allow(
     clippy::too_many_lines,
     reason = "depot modal composes manifest, receipt, and history"
+)]
+fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("HQ - Borealis Mining Office", 330, 150, 30, Color::GOLD);
+    draw.draw_rectangle(330, 195, 590, 120, Color::new(18, 24, 42, 230));
+    draw.draw_rectangle_lines(330, 195, 590, 120, Color::SKYBLUE);
+    let briefing = match game.deepest_tile_reached {
+        0..=19 => {
+            "Director Vale: First contract proves the claim. Keep cargo clean and receipts cleaner."
+        }
+        20..=39 => "Mechanic Iona: Clay gives way to silver caverns. Bring upgrades, not excuses.",
+        40..=59 => {
+            "Surveyor Kade: Relics, gas, and pressure pockets start arguing with the maps here."
+        }
+        60..=79 => {
+            "Director Vale: Thermal strata will eat cheap hulls. Radiators first, heroics second."
+        }
+        _ => "Surveyor Kade: Core harmonics below. If the radio screams, keep drilling anyway.",
+    };
+    draw.draw_text(briefing, 350, 220, 18, Color::RAYWHITE);
+    let options = ["Complete active contract", "Ask for briefing/radio intel"];
+    for (index, option) in options.iter().enumerate() {
+        draw.draw_text(
+            option,
+            360,
+            355 + i32::try_from(index).unwrap_or(i32::MAX) * 44,
+            24,
+            if index == game.selected_menu_item {
+                Color::YELLOW
+            } else {
+                Color::RAYWHITE
+            },
+        );
+    }
+    draw.draw_text(
+        "Enter/E confirms | Backspace/Esc exits HQ",
+        330,
+        505,
+        18,
+        Color::LIGHTGRAY,
+    );
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "depot panel combines sales, contracts, and receipt previews"
 )]
 fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Ore Depot", 330, 150, 30, Color::GREEN);
@@ -1043,7 +1099,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(&format!("{depth}m"), x - 44, py - 6, 12, Color::LIGHTGRAY);
     }
     draw.draw_text(
-        "Legend: gold ore | orange rare ore | magenta artifact | red lava | green gas | blue you",
+        "Legend: gold ore | orange rare/blast | magenta artifact | red lava/vent | green gas | cyan pressure | blue you",
         190,
         612,
         16,
@@ -1057,14 +1113,15 @@ fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
     draw.draw_text("Controls", 300, 145, 32, Color::GOLD);
     let lines = [
         "A/D or arrows: drive/steer",
-        "W/Space: thrust",
-        "S/Down: drill downward",
-        "E/Enter: interact/confirm",
-        "P/Esc: pause or close menus",
-        "M: large mine map",
-        "H: this help screen",
-        "F5/F9: save/load",
-        "Tab: details overlay",
+        "W/Space: thrust | S/Down: drill downward",
+        "E/Enter: interact/confirm | Backspace/Esc: close",
+        "P: pause; pause menu has slots and options",
+        "M: large mine map with ore, hazards, rescue, lost cargo",
+        "H: this help screen | Tab: details overlay",
+        "F5/F9: quick save/load | F11: fullscreen",
+        "Surface: Fuel, Repair, Depot, HQ, Shop",
+        "HQ: contracts and radio briefings",
+        "Return safely for trip-streak bonuses",
     ];
     for (index, line) in lines.iter().enumerate() {
         draw.draw_text(
@@ -1219,12 +1276,12 @@ fn upgrade_stat_preview(game: &GameState, kind: UpgradeKind) -> String {
         UpgradeKind::FuelTank => format!(
             "Fuel: {:.0} -> {:.0}",
             game.player.fuel_capacity,
-            game.player.fuel_capacity + 45.0
+            game.player.fuel_capacity + 50.0
         ),
         UpgradeKind::CargoBay => format!(
             "Cargo: {} -> {} slots",
             game.player.cargo_capacity,
-            game.player.cargo_capacity + 4
+            game.player.cargo_capacity + 8
         ),
         UpgradeKind::Engine => format!(
             "Thrust: L{} -> L{}",
@@ -1315,7 +1372,7 @@ fn draw_title(draw: &mut RaylibDrawHandle<'_>) {
     draw.draw_text("DRILLGAME", 475, 250, 54, Color::GOLD);
     draw.draw_text("Press Enter or E to start", 505, 325, 24, Color::RAYWHITE);
     draw.draw_text(
-        "F5/F9 save-load once in game | P pause",
+        "P pause/options/slots | H help | M map | F11 fullscreen",
         455,
         365,
         20,

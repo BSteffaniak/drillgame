@@ -226,7 +226,7 @@ pub const fn upgrade_effect(kind: UpgradeKind) -> &'static str {
         UpgradeKind::Drill => "+1 drill tier; unlocks harder strata",
         UpgradeKind::FuelTank => "+50 fuel and full refill",
         UpgradeKind::CargoBay => "+8 cargo slots",
-        UpgradeKind::Engine => "+18% thrust/handling",
+        UpgradeKind::Engine => "+28% thrust/handling",
         UpgradeKind::Hull => "+40 max hull and full repair",
         UpgradeKind::Radiator => "reduces deep heat damage",
     }

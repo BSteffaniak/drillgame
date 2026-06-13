@@ -81,6 +81,7 @@ pub enum ModalScreen {
     Repair,
     RepairConfirm,
     Depot,
+    Headquarters,
     DepotReceiptHistory,
     Shop,
     ShopConfirm,
@@ -238,6 +239,8 @@ pub struct GameState {
     pub camera_shake_seconds: f32,
     #[serde(default)]
     pub camera_shake_strength: f32,
+    #[serde(default)]
+    pub screen_flash_seconds: f32,
     pub sound_cues: Vec<SoundCue>,
 }
 
@@ -255,6 +258,8 @@ impl GameState {
         saved.falling_boulders.clear();
         saved.spark_particles.clear();
         saved.camera_shake_seconds = 0.0;
+        saved.camera_shake_strength = 0.0;
+        saved.screen_flash_seconds = 0.0;
         saved.sound_cues.clear();
         saved
     }
@@ -305,6 +310,7 @@ impl GameState {
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
             camera_shake_strength: 0.0,
+            screen_flash_seconds: 0.0,
             sound_cues: Vec::new(),
         }
     }
@@ -355,6 +361,7 @@ impl GameState {
         self.update_particles(delta_seconds);
         self.update_boulders(delta_seconds);
         self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
+        self.screen_flash_seconds = (self.screen_flash_seconds - delta_seconds).max(0.0);
         self.update_hazards(delta_seconds);
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
@@ -533,7 +540,7 @@ impl GameState {
                 self.selected_menu_item = 1;
             }
             Some(SurfaceZone::Headquarters) => {
-                self.modal = Some(ModalScreen::Depot);
+                self.modal = Some(ModalScreen::Headquarters);
                 self.selected_menu_item = 0;
             }
             Some(SurfaceZone::Shop) => {
@@ -563,6 +570,7 @@ impl GameState {
                 | ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::Options => 2,
+                ModalScreen::Headquarters => 1,
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -590,6 +598,7 @@ impl GameState {
                 ModalScreen::Repair => self.modal = Some(ModalScreen::RepairConfirm),
                 ModalScreen::RepairConfirm => self.confirm_repair(),
                 ModalScreen::Depot => self.confirm_depot(),
+                ModalScreen::Headquarters => self.confirm_headquarters(),
                 ModalScreen::DepotReceiptHistory => self.modal = Some(ModalScreen::Depot),
                 ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
                 ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
@@ -680,15 +689,24 @@ impl GameState {
         self.modal = Some(ModalScreen::Repair);
     }
 
+    fn confirm_headquarters(&mut self) {
+        if self.selected_menu_item == 0 {
+            self.confirm_complete_contract();
+        } else {
+            self.message = hq_story_message(self);
+            self.sound_cues.push(SoundCue::Milestone);
+        }
+    }
+
     fn confirm_depot(&mut self) {
         match self.selected_menu_item {
-            0 => self.confirm_contract(),
+            0 => self.confirm_complete_contract(),
             1 => self.confirm_sell_cargo(),
             _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
     }
 
-    fn confirm_contract(&mut self) {
+    fn confirm_complete_contract(&mut self) {
         if let Some(completion) = self.contracts.try_complete(&mut self.player) {
             self.sound_cues.push(SoundCue::Sell);
             self.total_earnings += completion.reward;
@@ -969,6 +987,7 @@ impl GameState {
                     self.active_drill = None;
                     self.player.hull = (self.player.hull - 8.0).max(0.0);
                     self.sound_cues.push(SoundCue::Damage);
+                    self.screen_flash_seconds = 0.1;
                     let warning = if self
                         .terrain
                         .tile(target)
@@ -1012,6 +1031,7 @@ impl GameState {
         self.player.velocity_y = -90.0;
         self.sound_cues.push(SoundCue::Damage);
         self.drill_flash_seconds = 0.2;
+        self.screen_flash_seconds = 0.12;
         self.hazard_clouds.push(HazardCloud {
             x: self.player.x,
             y: self.player.y + TILE_SIZE,
@@ -1032,6 +1052,7 @@ impl GameState {
         self.player.velocity_y = -260.0;
         self.sound_cues.push(SoundCue::Damage);
         self.drill_flash_seconds = 0.35;
+        self.screen_flash_seconds = 0.22;
         self.shake_camera(0.45, 14.0);
         for _ in 0..12 {
             self.spawn_dust();
@@ -1433,6 +1454,19 @@ impl GameState {
 impl Default for GameState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn hq_story_message(game: &GameState) -> String {
+    if game.won_game {
+        return "Director Vale: The Star Core is secure. The mine is yours to master.".to_owned();
+    }
+    match game.deepest_tile_reached {
+        0..=19 => "Director Vale: Bring us contract cargo and prove this shaft is profitable.".to_owned(),
+        20..=39 => "Mechanic Iona: Silver strata ahead. Upgrade before chasing deep seams.".to_owned(),
+        40..=59 => "Surveyor Kade: Relic signals are stronger. Gas pockets are no longer rumors.".to_owned(),
+        60..=79 => "Director Vale: Thermal readings are ugly. Radiators and hull plating are survival gear.".to_owned(),
+        _ => "Surveyor Kade: Star Core harmonics are below. Expect vents, blasts, and cave-ins.".to_owned(),
     }
 }
 
