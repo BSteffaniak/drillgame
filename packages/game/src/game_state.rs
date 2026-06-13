@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub const TILE_SIZE: f32 = 32.0;
-const WORLD_WIDTH: i32 = 150;
+const WORLD_WIDTH: i32 = 240;
 const WORLD_HEIGHT: i32 = 90;
 const GRAVITY: f32 = 780.0;
 const HORIZONTAL_ACCELERATION: f32 = 900.0;
@@ -333,7 +333,7 @@ impl GameState {
     pub fn new() -> Self {
         Self {
             terrain: Terrain::new_seeded(WORLD_WIDTH, WORLD_HEIGHT, WORLD_SEED),
-            player: Player::new(6.0 * TILE_SIZE, 4.0 * TILE_SIZE),
+            player: Player::new(97.0 * TILE_SIZE, 4.0 * TILE_SIZE),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             current_zone: None,
