@@ -11,6 +11,7 @@ mod input;
 mod player;
 mod rendering;
 mod save;
+mod surface;
 mod terrain;
 
 use app::run;

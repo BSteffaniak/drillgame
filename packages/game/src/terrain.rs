@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::surface::building_foundation_at;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum MineralKind {
     Copper,
@@ -81,6 +83,7 @@ pub enum TileKind {
     Clay,
     Stone,
     HardRock,
+    Foundation,
     Lava,
     Gas,
     ExplosivePocket,
@@ -99,6 +102,7 @@ impl TileKind {
             Self::Clay => "clay",
             Self::Stone => "stone",
             Self::HardRock => "hard rock",
+            Self::Foundation => "foundation",
             Self::Lava => "lava",
             Self::Gas => "gas",
             Self::ExplosivePocket => "explosive pocket",
@@ -206,7 +210,10 @@ impl Terrain {
             return MineResult::Blocked;
         }
 
-        if matches!(tile.kind, TileKind::Lava | TileKind::MagmaVent) {
+        if matches!(
+            tile.kind,
+            TileKind::Lava | TileKind::MagmaVent | TileKind::Foundation
+        ) {
             return MineResult::TooDangerous;
         }
 
@@ -244,7 +251,10 @@ impl Terrain {
                     continue;
                 };
                 let tile = &mut self.tiles[index];
-                if tile.kind != TileKind::Air && tile.kind != TileKind::Lava {
+                if !matches!(
+                    tile.kind,
+                    TileKind::Air | TileKind::Lava | TileKind::Foundation
+                ) {
                     tile.kind = TileKind::Air;
                     tile.durability = 0;
                     result.cleared += 1;
@@ -281,9 +291,13 @@ pub enum MineResult {
     Mined(TileKind),
 }
 
-const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
+fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
     if y <= 4 {
         return TileKind::Air;
+    }
+
+    if building_foundation_at(x, y) {
+        return TileKind::Foundation;
     }
 
     if cave_air(x, y, seed) {
@@ -314,7 +328,7 @@ const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
         return TileKind::Artifact(artifact_at_depth(x, y));
     }
 
-    if y >= 46 && y <= 64 && (x + y).rem_euclid(5) == 0 {
+    if (46..=64).contains(&y) && (x + y).rem_euclid(5) == 0 {
         return ore_or_base_tile(x, y, TileKind::HardRock, seed);
     }
 
@@ -447,7 +461,8 @@ const fn tile_hardness(kind: TileKind) -> u8 {
         | TileKind::Gas
         | TileKind::ExplosivePocket
         | TileKind::PressurePocket
-        | TileKind::MagmaVent => 0,
+        | TileKind::MagmaVent
+        | TileKind::Foundation => 0,
         TileKind::Dirt | TileKind::Ore(MineralKind::Copper | MineralKind::Iron) => 1,
         TileKind::Clay | TileKind::Ore(MineralKind::Silver | MineralKind::Gold) => 2,
         TileKind::Stone
@@ -465,7 +480,7 @@ const fn tile_durability(kind: TileKind) -> u8 {
         TileKind::Dirt => 2,
         TileKind::Clay => 4,
         TileKind::Stone => 7,
-        TileKind::HardRock => 11,
+        TileKind::HardRock | TileKind::Foundation => 11,
         TileKind::Lava
         | TileKind::Gas
         | TileKind::ExplosivePocket

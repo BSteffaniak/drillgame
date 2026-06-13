@@ -2,7 +2,9 @@ use raylib::prelude::*;
 
 use super::terrain::TerrainRenderer;
 use crate::{
+    economy::SurfaceZone,
     game_state::{DrillDirection, GameState, TILE_SIZE},
+    surface::SURFACE_BUILDINGS,
     terrain::{TileKind, TilePosition},
 };
 
@@ -95,14 +97,28 @@ pub(super) fn draw_world(
 }
 
 fn draw_surface_buildings(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>) {
-    draw_building(draw, 0.0, 8.0, Color::DARKBLUE, "FUEL");
-    draw_building(draw, 8.0, 8.0, Color::MAROON, "REPAIR");
-    draw_building(draw, 16.0, 8.0, Color::DARKGREEN, "DEPOT");
-    draw_building(draw, 24.0, 8.0, Color::DARKPURPLE, "HQ");
-    draw_building(draw, 32.0, 8.0, Color::PURPLE, "SHOP");
-    draw_building(draw, 40.0, 8.0, Color::DARKGREEN, "BANK");
-    draw_building(draw, 48.0, 8.0, Color::RED, "BOOM");
-    draw_building(draw, 56.0, 8.0, Color::BROWN, "SALVAGE");
+    for building in SURFACE_BUILDINGS {
+        draw_building(
+            draw,
+            building.tile_x as f32,
+            building.tile_width as f32,
+            building_color(building.zone),
+            building.label,
+        );
+    }
+}
+
+const fn building_color(zone: SurfaceZone) -> Color {
+    match zone {
+        SurfaceZone::Fuel => Color::DARKBLUE,
+        SurfaceZone::Repair => Color::MAROON,
+        SurfaceZone::Depot => Color::DARKGREEN,
+        SurfaceZone::Headquarters => Color::DARKPURPLE,
+        SurfaceZone::Shop => Color::PURPLE,
+        SurfaceZone::Bank => Color::new(25, 110, 70, 255),
+        SurfaceZone::Explosives => Color::RED,
+        SurfaceZone::Salvage => Color::BROWN,
+    }
 }
 
 fn draw_building(

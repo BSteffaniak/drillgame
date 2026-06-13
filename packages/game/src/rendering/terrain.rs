@@ -249,9 +249,11 @@ fn draw_tile_texture<D: RaylibDraw>(
 ) {
     let seed = texture_hash(tile_x, tile_y);
     let color = match kind {
-        TileKind::Dirt | TileKind::Clay | TileKind::Stone | TileKind::HardRock => {
-            Color::new(255, 255, 255, 28)
-        }
+        TileKind::Dirt
+        | TileKind::Clay
+        | TileKind::Stone
+        | TileKind::HardRock
+        | TileKind::Foundation => Color::new(255, 255, 255, 28),
         TileKind::Ore(_) => Color::new(255, 245, 180, 80),
         TileKind::Artifact(_) => Color::new(255, 120, 255, 95),
         TileKind::Gas => Color::new(120, 255, 120, 70),
@@ -319,7 +321,11 @@ pub(super) const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
     let base = tile_color(kind);
     if matches!(
         kind,
-        TileKind::Dirt | TileKind::Clay | TileKind::Stone | TileKind::HardRock
+        TileKind::Dirt
+            | TileKind::Clay
+            | TileKind::Stone
+            | TileKind::HardRock
+            | TileKind::Foundation
     ) {
         let depth = if y / 12 < 6 { y / 12 } else { 6 } as u8;
         return Color::new(
@@ -339,6 +345,7 @@ const fn tile_color(kind: TileKind) -> Color {
         TileKind::Clay => Color::new(145, 80, 68, 255),
         TileKind::Stone => Color::new(93, 87, 82, 255),
         TileKind::HardRock => Color::new(54, 50, 58, 255),
+        TileKind::Foundation => Color::new(82, 78, 72, 255),
         TileKind::Lava => Color::ORANGE,
         TileKind::Gas => Color::LIME,
         TileKind::ExplosivePocket => Color::MAROON,

@@ -19,11 +19,12 @@ use crate::{
     input::PlayerInput,
     player::Player,
     save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
+    surface::surface_building_at_tile,
     terrain::{ArtifactKind, MineResult, Terrain, TileKind, TilePosition},
 };
 
 pub const TILE_SIZE: f32 = 32.0;
-const WORLD_WIDTH: i32 = 120;
+const WORLD_WIDTH: i32 = 150;
 const WORLD_HEIGHT: i32 = 90;
 const GRAVITY: f32 = 780.0;
 const HORIZONTAL_ACCELERATION: f32 = 900.0;
@@ -332,7 +333,7 @@ impl GameState {
     pub fn new() -> Self {
         Self {
             terrain: Terrain::new_seeded(WORLD_WIDTH, WORLD_HEIGHT, WORLD_SEED),
-            player: Player::new(12.0 * TILE_SIZE, 4.0 * TILE_SIZE),
+            player: Player::new(6.0 * TILE_SIZE, 4.0 * TILE_SIZE),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             current_zone: None,
@@ -1963,7 +1964,7 @@ fn drill_seconds_per_chip(kind: TileKind, drill_strength: u8, direction: DrillDi
         TileKind::Dirt => 0.09,
         TileKind::Clay => 0.12,
         TileKind::Stone => 0.15,
-        TileKind::HardRock => 0.19,
+        TileKind::HardRock | TileKind::Foundation => 0.19,
         TileKind::Lava
         | TileKind::Gas
         | TileKind::ExplosivePocket
@@ -2046,17 +2047,7 @@ fn surface_zone_at(x: f32, y: f32) -> Option<SurfaceZone> {
         return None;
     }
 
-    match (x / TILE_SIZE).floor() as i32 {
-        0..=7 => Some(SurfaceZone::Fuel),
-        8..=15 => Some(SurfaceZone::Repair),
-        16..=23 => Some(SurfaceZone::Depot),
-        24..=31 => Some(SurfaceZone::Headquarters),
-        32..=39 => Some(SurfaceZone::Shop),
-        40..=47 => Some(SurfaceZone::Bank),
-        48..=55 => Some(SurfaceZone::Explosives),
-        56..=63 => Some(SurfaceZone::Salvage),
-        _ => None,
-    }
+    surface_building_at_tile((x / TILE_SIZE).floor() as i32).map(|building| building.zone)
 }
 
 fn depot_prompt(game: &GameState) -> String {

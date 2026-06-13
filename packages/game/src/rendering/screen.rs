@@ -6,6 +6,7 @@ use crate::{
     economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
+    surface::SURFACE_BUILDINGS,
     terrain::{TileKind, TilePosition},
 };
 
@@ -354,6 +355,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             let py = y + ty * height / terrain_height;
             let color = match tile.kind {
                 TileKind::Air => Color::new(35, 35, 45, 180),
+                TileKind::Foundation => Color::new(135, 125, 105, 220),
                 TileKind::Lava | TileKind::MagmaVent => Color::RED,
                 TileKind::Gas => Color::GREEN,
                 TileKind::ExplosivePocket => Color::ORANGE,
@@ -365,14 +367,15 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         }
     }
 
-    draw_map_marker(draw, &projection, 4, 7, Color::BLUE);
-    draw_map_marker(draw, &projection, 12, 7, Color::MAROON);
-    draw_map_marker(draw, &projection, 20, 7, Color::GREEN);
-    draw_map_marker(draw, &projection, 28, 7, Color::PURPLE);
-    draw_map_marker(draw, &projection, 36, 7, Color::MAGENTA);
-    draw_map_marker(draw, &projection, 44, 7, Color::GOLD);
-    draw_map_marker(draw, &projection, 52, 7, Color::RED);
-    draw_map_marker(draw, &projection, 60, 7, Color::BROWN);
+    for building in SURFACE_BUILDINGS {
+        draw_map_marker(
+            draw,
+            &projection,
+            building.tile_x + building.tile_width / 2,
+            7,
+            Color::RAYWHITE,
+        );
+    }
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     if game.scanner_pulse_seconds > 0.0 {
@@ -772,6 +775,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             let py = y + ty * height / terrain_height;
             let color = match tile.kind {
                 TileKind::Air => Color::new(40, 42, 55, 255),
+                TileKind::Foundation => Color::new(135, 125, 105, 255),
                 TileKind::Lava | TileKind::MagmaVent => Color::RED,
                 TileKind::Gas => Color::GREEN,
                 TileKind::ExplosivePocket => Color::ORANGE,
@@ -797,18 +801,11 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text("LOST", marker_x + 6, marker_y - 6, 12, Color::GOLD);
     }
 
-    let buildings = [
-        (4, 4, "FUEL", Color::BLUE),
-        (12, 4, "FIX", Color::MAROON),
-        (20, 4, "DEPOT", Color::GREEN),
-        (28, 4, "HQ", Color::DARKPURPLE),
-        (38, 4, "SHOP", Color::PURPLE),
-    ];
-    for (tx, ty, label, color) in buildings {
-        let px = x + tx * width / terrain_width;
-        let py = y + ty * height / terrain_height;
-        draw.draw_circle(px, py, 4.0, color);
-        draw.draw_text(label, px + 6, py - 6, 10, Color::RAYWHITE);
+    for building in SURFACE_BUILDINGS {
+        let px = x + (building.tile_x + building.tile_width / 2) * width / terrain_width;
+        let py = y + 4 * height / terrain_height;
+        draw.draw_circle(px, py, 4.0, Color::RAYWHITE);
+        draw.draw_text(building.label, px + 6, py - 6, 10, Color::RAYWHITE);
     }
 
     if let (Some(rescue_x), Some(rescue_y)) = (game.last_rescue_x, game.last_rescue_y) {
