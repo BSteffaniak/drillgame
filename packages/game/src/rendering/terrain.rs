@@ -189,12 +189,18 @@ impl TerrainChunk {
                 }
 
                 if explored && tile.durability > 0 {
-                    texture_draw.draw_rectangle_lines(
+                    draw_tile_durability_lines(
+                        &mut texture_draw,
                         local_x,
                         local_y,
-                        TILE_SIZE_PIXELS,
-                        TILE_SIZE_PIXELS,
-                        Color::new(0, 0, 0, 30),
+                        tile_x,
+                        tile_y,
+                        ChunkTileBounds {
+                            min_x: self.tile_min_x,
+                            min_y: self.tile_min_y,
+                            max_x: self.tile_max_x,
+                            max_y: self.tile_max_y,
+                        },
                     );
                 }
             }
@@ -202,6 +208,8 @@ impl TerrainChunk {
     }
 
     fn draw(&self, draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>) {
+        // RenderTexture2D content is vertically flipped when sampled back by raylib,
+        // so source height is negative.
         let world_x = self.tile_min_x as f32 * TILE_SIZE;
         let world_y = self.tile_min_y as f32 * TILE_SIZE;
         draw.draw_texture_pro(
@@ -259,6 +267,49 @@ fn draw_tile_texture<D: RaylibDraw>(
         draw.draw_circle_v(
             Vector2::new(px, py),
             if index == 0 { 1.8 } else { 1.2 },
+            color,
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ChunkTileBounds {
+    min_x: i32,
+    min_y: i32,
+    max_x: i32,
+    max_y: i32,
+}
+
+fn draw_tile_durability_lines<D: RaylibDraw>(
+    draw: &mut D,
+    local_x: i32,
+    local_y: i32,
+    tile_x: i32,
+    tile_y: i32,
+    bounds: ChunkTileBounds,
+) {
+    let color = Color::new(0, 0, 0, 30);
+    if tile_x >= bounds.min_x {
+        draw.draw_line(local_x, local_y, local_x, local_y + TILE_SIZE_PIXELS, color);
+    }
+    if tile_y >= bounds.min_y {
+        draw.draw_line(local_x, local_y, local_x + TILE_SIZE_PIXELS, local_y, color);
+    }
+    if tile_x + 1 < bounds.max_x {
+        draw.draw_line(
+            local_x + TILE_SIZE_PIXELS,
+            local_y,
+            local_x + TILE_SIZE_PIXELS,
+            local_y + TILE_SIZE_PIXELS,
+            color,
+        );
+    }
+    if tile_y + 1 < bounds.max_y {
+        draw.draw_line(
+            local_x,
+            local_y + TILE_SIZE_PIXELS,
+            local_x + TILE_SIZE_PIXELS,
+            local_y + TILE_SIZE_PIXELS,
             color,
         );
     }
