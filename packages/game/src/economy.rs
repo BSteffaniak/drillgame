@@ -26,6 +26,8 @@ pub enum UpgradeKind {
     Engine,
     Hull,
     Radiator,
+    Scanner,
+    BombPack,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,7 +44,7 @@ pub const REFUEL_UNIT_COST: u32 = 1;
 pub const REPAIR_UNIT_COST: u32 = 2;
 
 #[must_use]
-pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 6] {
+pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 8] {
     [
         offer(UpgradeKind::Drill, player.drill_strength),
         offer(UpgradeKind::FuelTank, player.fuel_tank_level),
@@ -50,6 +52,8 @@ pub fn upgrade_offers(player: &Player) -> [UpgradeOffer; 6] {
         offer(UpgradeKind::Engine, player.engine_level),
         offer(UpgradeKind::Hull, player.hull_level),
         offer(UpgradeKind::Radiator, player.radiator_level),
+        offer(UpgradeKind::Scanner, player.scanner_level),
+        offer(UpgradeKind::BombPack, 0),
     ]
 }
 
@@ -111,7 +115,7 @@ pub fn buy_upgrade(player: &mut Player, index: usize) -> Result<UpgradeOffer, Pu
         return Err(PurchaseError::InvalidSelection);
     };
 
-    if offer.level >= MAX_UPGRADE_LEVEL {
+    if offer.kind != UpgradeKind::BombPack && offer.level >= MAX_UPGRADE_LEVEL {
         return Err(PurchaseError::MaxLevel);
     }
 
@@ -149,6 +153,8 @@ fn apply_upgrade(player: &mut Player, kind: UpgradeKind) {
             player.hull = player.max_hull();
         }
         UpgradeKind::Radiator => player.radiator_level += 1,
+        UpgradeKind::Scanner => player.scanner_level += 1,
+        UpgradeKind::BombPack => player.bombs += 3,
     }
 }
 
@@ -171,6 +177,8 @@ const fn upgrade_name(kind: UpgradeKind) -> &'static str {
         UpgradeKind::Engine => "Engine",
         UpgradeKind::Hull => "Hull Plating",
         UpgradeKind::Radiator => "Radiator",
+        UpgradeKind::Scanner => "Mineral Scanner",
+        UpgradeKind::BombPack => "Bomb Pack",
     }
 }
 
@@ -182,6 +190,8 @@ const fn upgrade_description(kind: UpgradeKind) -> &'static str {
         UpgradeKind::Engine => "Stronger lift and handling",
         UpgradeKind::Hull => "Survive harder impacts",
         UpgradeKind::Radiator => "Resist deep heat pressure",
+        UpgradeKind::Scanner => "Reveal nearby ore and hazards",
+        UpgradeKind::BombPack => "Adds 3 underground blasting charges",
     }
 }
 
@@ -218,6 +228,12 @@ pub fn upgrade_tier_name(kind: UpgradeKind, level: u8) -> &'static str {
         (UpgradeKind::Radiator, 3) => "Liquid Radiator",
         (UpgradeKind::Radiator, 4) => "Cryo Radiator",
         (UpgradeKind::Radiator, _) => "Magma Radiator",
+        (UpgradeKind::Scanner, 1) => "Pulse Scanner",
+        (UpgradeKind::Scanner, 2) => "Ore Scanner",
+        (UpgradeKind::Scanner, 3) => "Hazard Scanner",
+        (UpgradeKind::Scanner, 4) => "Artifact Scanner",
+        (UpgradeKind::Scanner, _) => "Deep Scanner",
+        (UpgradeKind::BombPack, _) => "Pack of 3 Bombs",
     }
 }
 
@@ -229,6 +245,8 @@ pub const fn upgrade_effect(kind: UpgradeKind) -> &'static str {
         UpgradeKind::Engine => "+28% thrust/handling",
         UpgradeKind::Hull => "+40 max hull and full repair",
         UpgradeKind::Radiator => "reduces deep heat damage",
+        UpgradeKind::Scanner => "reveals nearby ore, artifacts, and hazards",
+        UpgradeKind::BombPack => "+3 bombs for clearing rock",
     }
 }
 
@@ -240,6 +258,8 @@ fn upgrade_cost(kind: UpgradeKind, next_level: u8) -> u32 {
         UpgradeKind::Engine => 100,
         UpgradeKind::Hull => 90,
         UpgradeKind::Radiator => 115,
+        UpgradeKind::Scanner => 135,
+        UpgradeKind::BombPack => 80,
     };
     base * u32::from(next_level) * u32::from(next_level)
 }

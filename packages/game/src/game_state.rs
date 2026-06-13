@@ -19,7 +19,7 @@ use crate::{
     input::PlayerInput,
     player::Player,
     save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
-    terrain::{MineResult, Terrain, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineResult, Terrain, TileKind, TilePosition},
 };
 
 pub const TILE_SIZE: f32 = 32.0;
@@ -165,6 +165,7 @@ pub enum SoundCue {
     Damage,
     Milestone,
     Rescue,
+    Explosion,
     Ui,
 }
 
@@ -195,6 +196,8 @@ pub struct GameState {
     pub request_exit: bool,
     #[serde(default)]
     pub won_game: bool,
+    #[serde(default)]
+    pub escape_sequence_seconds: f32,
     #[serde(default)]
     pub explored_tiles: Vec<bool>,
     #[serde(default)]
@@ -303,6 +306,7 @@ impl GameState {
             show_details: false,
             request_exit: false,
             won_game: false,
+            escape_sequence_seconds: 0.0,
             explored_tiles: vec![false; (WORLD_WIDTH * WORLD_HEIGHT) as usize],
             last_depot_receipt: String::new(),
             depot_receipts: Vec::new(),
@@ -404,6 +408,7 @@ impl GameState {
         self.update_hazards(delta_seconds);
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
+        self.reveal_scanner_area();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
         if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
             && !self.game_over
@@ -452,11 +457,13 @@ impl GameState {
         }
 
         self.handle_interaction(input);
+        self.handle_bomb(input);
         self.apply_movement(input, delta_seconds);
         self.update_drilling(input, delta_seconds);
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
+        self.update_escape_sequence(delta_seconds);
         self.update_layer_band();
         self.award_return_bonus();
         self.update_warning_messages();
@@ -471,6 +478,24 @@ impl GameState {
         for y in center_y - 3..=center_y + 3 {
             for x in center_x - 4..=center_x + 4 {
                 if let Some(index) = self.tile_index(TilePosition { x, y }) {
+                    self.explored_tiles[index] = true;
+                }
+            }
+        }
+    }
+
+    fn reveal_scanner_area(&mut self) {
+        if self.player.scanner_level == 0 {
+            return;
+        }
+        let center_x = (self.player.x / TILE_SIZE).floor() as i32;
+        let center_y = (self.player.y / TILE_SIZE).floor() as i32;
+        let radius = 3 + i32::from(self.player.scanner_level) * 2;
+        for y in center_y - radius..=center_y + radius {
+            for x in center_x - radius..=center_x + radius {
+                if (x - center_x).abs() + (y - center_y).abs() <= radius
+                    && let Some(index) = self.tile_index(TilePosition { x, y })
+                {
                     self.explored_tiles[index] = true;
                 }
             }
@@ -666,8 +691,8 @@ impl GameState {
                 ModalScreen::Depot
                 | ModalScreen::Fuel
                 | ModalScreen::Repair
-                | ModalScreen::Options => 2,
-                ModalScreen::Headquarters => 1,
+                | ModalScreen::Options
+                | ModalScreen::Headquarters => 2,
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -789,12 +814,32 @@ impl GameState {
     }
 
     fn confirm_headquarters(&mut self) {
-        if self.selected_menu_item == 0 {
-            self.confirm_complete_contract();
-        } else {
-            self.message = hq_story_message(self);
-            self.sound_cues.push(SoundCue::Milestone);
+        match self.selected_menu_item {
+            0 => self.confirm_complete_contract(),
+            1 => {
+                self.message = hq_story_message(self);
+                self.sound_cues.push(SoundCue::Milestone);
+            }
+            _ => self.confirm_finance(),
         }
+    }
+
+    fn confirm_finance(&mut self) {
+        if self.player.loan_debt == 0 {
+            self.player.credits += 250;
+            self.player.loan_debt = 300;
+            "HQ finance issued a 250 credit advance. Repay 300 credits before the board gets loud."
+                .clone_into(&mut self.message);
+        } else {
+            let payment = self.player.loan_debt.min(self.player.credits);
+            self.player.credits -= payment;
+            self.player.loan_debt -= payment;
+            self.message = format!(
+                "Paid {payment} credits toward HQ debt. Remaining: {}.",
+                self.player.loan_debt
+            );
+        }
+        self.sound_cues.push(SoundCue::Sell);
     }
 
     fn confirm_depot(&mut self) {
@@ -889,6 +934,27 @@ impl GameState {
             }
         }
         self.modal = Some(ModalScreen::Shop);
+    }
+
+    fn handle_bomb(&mut self, input: PlayerInput) {
+        if !input.bomb {
+            return;
+        }
+        if self.player.bombs == 0 {
+            "No bombs. Buy bomb packs at the upgrade shop.".clone_into(&mut self.message);
+            return;
+        }
+        self.player.bombs -= 1;
+        let cleared = self
+            .terrain
+            .blast_radius(self.player.tile_position(TILE_SIZE), 2);
+        self.sound_cues.push(SoundCue::Explosion);
+        self.screen_flash_seconds = self.screen_flash_seconds.max(0.18);
+        self.message = format!(
+            "Bomb detonated. Cleared {cleared} tiles. {} bombs left.",
+            self.player.bombs
+        );
+        self.reveal_near_player();
     }
 
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
@@ -1177,11 +1243,18 @@ impl GameState {
         } else if let TileKind::Artifact(artifact) = mined {
             if self.player.add_artifact(artifact) {
                 self.artifacts_found += 1;
-                self.message = format!(
-                    "Recovered {} artifact worth {}.",
-                    artifact.name(),
-                    artifact.value()
-                );
+                if artifact == ArtifactKind::StarCore {
+                    self.escape_sequence_seconds = 120.0;
+                    self.shake_camera(1.0, 10.0);
+                    "Star Core extracted! Core fracture cascade started: return to HQ before the mine collapses."
+                        .clone_into(&mut self.message);
+                } else {
+                    self.message = format!(
+                        "Recovered {} artifact worth {}.",
+                        artifact.name(),
+                        artifact.value()
+                    );
+                }
             } else {
                 "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
             }
@@ -1413,6 +1486,23 @@ impl GameState {
         }
     }
 
+    fn update_escape_sequence(&mut self, delta_seconds: f32) {
+        if self.escape_sequence_seconds <= 0.0 || self.won_game {
+            return;
+        }
+        self.escape_sequence_seconds = (self.escape_sequence_seconds - delta_seconds).max(0.0);
+        if self.current_zone == Some(SurfaceZone::Headquarters) {
+            self.escape_sequence_seconds = 0.0;
+            return;
+        }
+        if self.escape_sequence_seconds == 0.0 {
+            self.player.hull = 0.0;
+            self.game_over = true;
+            "The mine collapsed around the Star Core. Emergency rescue required."
+                .clone_into(&mut self.message);
+        }
+    }
+
     fn update_layer_band(&mut self) {
         let band = self.deepest_tile_reached / 20;
         if band <= self.current_layer_band {
@@ -1433,6 +1523,9 @@ impl GameState {
             return;
         }
         self.return_streak += 1;
+        if self.player.loan_debt > 0 {
+            self.player.loan_debt = self.player.loan_debt.saturating_add(12);
+        }
         let depth = u32::try_from(self.trip_best_depth).unwrap_or(0);
         let reward = (depth / 4).saturating_mul(self.return_streak.min(5));
         self.player.credits += reward;

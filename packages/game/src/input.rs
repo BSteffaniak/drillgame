@@ -26,6 +26,7 @@ pub struct PlayerInput {
     pub volume_up: bool,
     pub volume_down: bool,
     pub fullscreen: bool,
+    pub bomb: bool,
 }
 
 #[must_use]
@@ -67,6 +68,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         volume_down: raylib.is_key_pressed(KeyboardKey::KEY_MINUS)
             || raylib.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
         fullscreen: raylib.is_key_pressed(KeyboardKey::KEY_F11),
+        bomb: raylib.is_key_pressed(KeyboardKey::KEY_B),
     }
 }
 
@@ -83,6 +85,10 @@ fn selected_upgrade(raylib: &RaylibHandle) -> Option<usize> {
         Some(4)
     } else if raylib.is_key_pressed(KeyboardKey::KEY_SIX) {
         Some(5)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_SEVEN) {
+        Some(6)
+    } else if raylib.is_key_pressed(KeyboardKey::KEY_EIGHT) {
+        Some(7)
     } else {
         None
     }

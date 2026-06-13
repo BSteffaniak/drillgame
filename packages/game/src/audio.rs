@@ -52,7 +52,7 @@ impl AudioBus {
                 SoundCue::Upgrade => self.upgrade.play(),
                 SoundCue::Damage => self.damage.play(),
                 SoundCue::Milestone => self.milestone.play(),
-                SoundCue::Rescue => self.rescue.play(),
+                SoundCue::Rescue | SoundCue::Explosion => self.rescue.play(),
                 SoundCue::Ui => self.ui.play(),
             }
         }

@@ -771,17 +771,29 @@ fn draw_compact_status(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
     draw.draw_text(
         &format!(
-            "D{} E{} H{} R{} | Tab details | F5/F9",
+            "D{} E{} H{} R{} S{} B{} Debt{} | Tab",
             game.player.drill_strength,
             game.player.engine_level,
             game.player.hull_level,
-            game.player.radiator_level
+            game.player.radiator_level,
+            game.player.scanner_level,
+            game.player.bombs,
+            game.player.loan_debt
         ),
         810,
         31,
         18,
         Color::LIGHTGRAY,
     );
+    if game.escape_sequence_seconds > 0.0 {
+        draw.draw_text(
+            &format!("CORE CASCADE {:.0}s", game.escape_sequence_seconds),
+            1010,
+            42,
+            18,
+            Color::RED,
+        );
+    }
 }
 
 fn draw_mini_bar(
@@ -1156,7 +1168,16 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         _ => "Surveyor Kade: Core harmonics below. If the radio screams, keep drilling anyway.",
     };
     draw.draw_text(briefing, 350, 220, 18, Color::RAYWHITE);
-    let options = ["Complete active contract", "Ask for briefing/radio intel"];
+    let finance = if game.player.loan_debt == 0 {
+        "Take HQ advance loan (+250 now, owe 300)".to_owned()
+    } else {
+        format!("Pay HQ debt (owed {})", game.player.loan_debt)
+    };
+    let options = [
+        "Complete active contract".to_owned(),
+        "Ask for briefing/radio intel".to_owned(),
+        finance,
+    ];
     for (index, option) in options.iter().enumerate() {
         draw.draw_text(
             option,
@@ -1453,7 +1474,7 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::LIGHTGRAY,
     );
     draw.draw_text(
-        "Categories: [1] Drill [2] Tank [3] Cargo [4] Engine [5] Hull [6] Radiator",
+        "[1] Drill [2] Tank [3] Cargo [4] Engine [5] Hull [6] Radiator [7] Scanner [8] Bombs",
         330,
         208,
         16,
@@ -1466,12 +1487,17 @@ fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         let affordable = game.player.credits >= offer.cost;
         let color = if selected {
             Color::YELLOW
-        } else if affordable || offer.level >= crate::economy::MAX_UPGRADE_LEVEL {
+        } else if affordable
+            || (offer.kind != UpgradeKind::BombPack
+                && offer.level >= crate::economy::MAX_UPGRADE_LEVEL)
+        {
             Color::RAYWHITE
         } else {
             Color::GRAY
         };
-        let price = if offer.level >= crate::economy::MAX_UPGRADE_LEVEL {
+        let price = if offer.kind != UpgradeKind::BombPack
+            && offer.level >= crate::economy::MAX_UPGRADE_LEVEL
+        {
             "MAX".to_owned()
         } else {
             format!("{} cr", offer.cost)
@@ -1579,6 +1605,16 @@ fn upgrade_stat_preview(game: &GameState, kind: UpgradeKind) -> String {
             "Safe heat depth: L{} -> L{}",
             game.player.radiator_level,
             game.player.radiator_level.saturating_add(1)
+        ),
+        UpgradeKind::Scanner => format!(
+            "Scanner: L{} -> L{}",
+            game.player.scanner_level,
+            game.player.scanner_level.saturating_add(1)
+        ),
+        UpgradeKind::BombPack => format!(
+            "Bomb inventory: {} -> {}",
+            game.player.bombs,
+            game.player.bombs + 3
         ),
     }
 }

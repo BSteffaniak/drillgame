@@ -21,7 +21,7 @@ nix develop -c cargo run --bin drillgame
 
 ## Current Gameplay
 
-Drill below the surface, gather minerals and artifacts, manage fuel/hull/cargo, complete HQ contracts, buy upgrades, and push deeper toward the Star Core. Deeper layers add harder rock, richer ore, artifacts, gas, lava, magma vents, pressure pockets, explosive pockets, falling boulders, cave-ins, and stronger heat pressure.
+Drill below the surface, gather minerals and artifacts, manage fuel/hull/cargo/debt, complete HQ contracts, buy upgrades, use scanners and bombs, and push deeper toward the Star Core. Deeper layers add harder rock, richer ore, artifacts, gas, lava, magma vents, pressure pockets, explosive pockets, falling boulders, cave-ins, and stronger heat pressure.
 
 Successful return trips award streak bonuses. Emergency rescue returns the rig to the surface for a fee, drops part of the cargo at the rescue site, and records a depot invoice; lost cargo can be recovered later if there is cargo space.
 
@@ -30,7 +30,8 @@ Successful return trips award streak bonuses. Emergency rescue returns the rig t
 - `A` / `D` or left/right arrows: move horizontally and drill sideways while grounded
 - `W` / up arrow / space: thrust upward
 - `S` / down arrow: drill downward
-- `E` / `Enter`: interact with buildings, confirm menus, or start game
+- `B`: detonate a purchased bomb underground
+- `E` / `Enter`: interact with buildings/interior counters, confirm menus, or start game
 - `Backspace` / `Esc`: close menus; `P` pauses/resumes
 - `M`: large mine map with ore, hazard, rescue, and lost-cargo markers
 - `H`: help screen
@@ -48,8 +49,8 @@ Press `E` at a surface building to walk inside its room. Move with `A`/`D`, use 
 - Fuel Station: refills fuel in partial or full service increments
 - Repair Garage: repairs hull in partial or full service increments
 - Ore Depot: sells mineral/artifact cargo and shows receipt history
-- HQ: completes contracts and provides named story/radio briefings
-- Upgrade Shop: sells drill, fuel tank, cargo bay, engine, hull, and radiator upgrades
+- HQ: completes contracts, provides named story/radio briefings, and offers/collects debt advances
+- Upgrade Shop: sells drill, fuel tank, cargo bay, engine, hull, radiator, scanner, and bomb-pack upgrades
 
 ## Saves and Settings
 

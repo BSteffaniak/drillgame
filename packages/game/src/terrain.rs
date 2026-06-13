@@ -232,6 +232,27 @@ impl Terrain {
         MineResult::Mined(mined)
     }
 
+    pub fn blast_radius(&mut self, center: TilePosition, radius: i32) -> u32 {
+        let mut cleared = 0;
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if (x - center.x).abs() + (y - center.y).abs() > radius {
+                    continue;
+                }
+                let Some(index) = self.index(TilePosition { x, y }) else {
+                    continue;
+                };
+                let tile = &mut self.tiles[index];
+                if tile.kind != TileKind::Air && tile.kind != TileKind::Lava {
+                    tile.kind = TileKind::Air;
+                    tile.durability = 0;
+                    cleared += 1;
+                }
+            }
+        }
+        cleared
+    }
+
     const fn index(&self, position: TilePosition) -> Option<usize> {
         if position.x < 0 || position.y < 0 || position.x >= self.width || position.y >= self.height
         {

@@ -28,6 +28,12 @@ pub struct Player {
     pub engine_level: u8,
     pub hull_level: u8,
     pub radiator_level: u8,
+    #[serde(default)]
+    pub scanner_level: u8,
+    #[serde(default)]
+    pub bombs: u32,
+    #[serde(default)]
+    pub loan_debt: u32,
 }
 
 #[allow(
@@ -55,6 +61,9 @@ impl Player {
             engine_level: 1,
             hull_level: 1,
             radiator_level: 1,
+            scanner_level: 0,
+            bombs: 0,
+            loan_debt: 0,
         }
     }
 
