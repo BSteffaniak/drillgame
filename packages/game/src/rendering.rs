@@ -11,7 +11,7 @@ use raylib::prelude::*;
 use crate::{
     economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
     game_state::{DrillDirection, GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
-    save::{save_slot_count, save_slot_exists},
+    save::{save_slot_count, save_slot_exists, save_slot_metadata},
     terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
@@ -1351,8 +1351,22 @@ fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bo
     for slot in 0..save_slot_count() {
         let exists = save_slot_exists(slot);
         let label = if exists { "occupied" } else { "empty" };
+        let detail = save_slot_metadata(slot).map_or_else(
+            || label.to_owned(),
+            |meta| {
+                format!(
+                    "depth {}m | {} cr | cargo {}/{} | contracts {}{}",
+                    meta.depth,
+                    meta.credits,
+                    meta.cargo_used,
+                    meta.cargo_capacity,
+                    meta.contracts_completed,
+                    if meta.won_game { " | core secured" } else { "" }
+                )
+            },
+        );
         draw.draw_text(
-            &format!("Slot {} - {label}", slot + 1),
+            &format!("Slot {} - {detail}", slot + 1),
             360,
             255 + i32::try_from(slot).unwrap_or(i32::MAX) * 46,
             24,

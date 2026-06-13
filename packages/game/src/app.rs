@@ -42,7 +42,7 @@ pub fn run() {
         if input.fullscreen {
             raylib.toggle_fullscreen();
         }
-        if (input.fullscreen || input.volume_up || input.volume_down)
+        if (input.fullscreen || input.volume_up || input.volume_down || game.take_settings_dirty())
             && let Err(error) = save_settings(SettingsFile {
                 master_volume: game.master_volume,
                 fullscreen: game.fullscreen,

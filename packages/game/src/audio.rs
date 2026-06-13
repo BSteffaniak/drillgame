@@ -18,6 +18,8 @@ pub struct AudioBus {
     upgrade: Sound<'static>,
     damage: Sound<'static>,
     milestone: Sound<'static>,
+    rescue: Sound<'static>,
+    ui: Sound<'static>,
 }
 
 impl AudioBus {
@@ -33,6 +35,8 @@ impl AudioBus {
             upgrade: sound(audio, 880.0, 0.18).ok_or("generated upgrade sound failed")?,
             damage: sound(audio, 90.0, 0.22).ok_or("generated damage sound failed")?,
             milestone: sound(audio, 520.0, 0.28).ok_or("generated milestone sound failed")?,
+            rescue: sound(audio, 250.0, 0.36).ok_or("generated rescue sound failed")?,
+            ui: sound(audio, 980.0, 0.06).ok_or("generated ui sound failed")?,
         })
     }
 
@@ -48,6 +52,8 @@ impl AudioBus {
                 SoundCue::Upgrade => self.upgrade.play(),
                 SoundCue::Damage => self.damage.play(),
                 SoundCue::Milestone => self.milestone.play(),
+                SoundCue::Rescue => self.rescue.play(),
+                SoundCue::Ui => self.ui.play(),
             }
         }
     }

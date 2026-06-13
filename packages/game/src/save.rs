@@ -38,6 +38,16 @@ pub fn load_settings() -> SettingsFile {
     serde_json::from_str(&json).unwrap_or_default()
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SaveSlotMetadata {
+    pub depth: i32,
+    pub credits: u32,
+    pub cargo_used: u32,
+    pub cargo_capacity: u32,
+    pub contracts_completed: u32,
+    pub won_game: bool,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct SaveFile {
     version: u32,
@@ -77,6 +87,22 @@ fn load_game_from_path(path: &str) -> Result<GameState, SaveError> {
     }
     save.game.migrate_after_load();
     Ok(save.game)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "save slot depth is displayed as an integral tile depth"
+)]
+pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
+    let game = load_game_slot(slot).ok()?;
+    Some(SaveSlotMetadata {
+        depth: (game.player.y / crate::game_state::TILE_SIZE).floor() as i32,
+        credits: game.player.credits,
+        cargo_used: game.player.cargo_used(),
+        cargo_capacity: game.player.cargo_capacity,
+        contracts_completed: game.contracts.completed,
+        won_game: game.won_game,
+    })
 }
 
 #[must_use]

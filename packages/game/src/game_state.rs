@@ -163,6 +163,8 @@ pub enum SoundCue {
     Upgrade,
     Damage,
     Milestone,
+    Rescue,
+    Ui,
 }
 
 #[allow(
@@ -242,6 +244,8 @@ pub struct GameState {
     #[serde(default)]
     pub screen_flash_seconds: f32,
     pub sound_cues: Vec<SoundCue>,
+    #[serde(default)]
+    pub settings_dirty: bool,
 }
 
 impl GameState {
@@ -261,6 +265,7 @@ impl GameState {
         saved.camera_shake_strength = 0.0;
         saved.screen_flash_seconds = 0.0;
         saved.sound_cues.clear();
+        saved.settings_dirty = false;
         saved
     }
 
@@ -312,6 +317,7 @@ impl GameState {
             camera_shake_strength: 0.0,
             screen_flash_seconds: 0.0,
             sound_cues: Vec::new(),
+            settings_dirty: false,
         }
     }
 
@@ -345,10 +351,14 @@ impl GameState {
         if input.volume_up {
             self.master_volume = (self.master_volume + 0.1).min(1.0);
             self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
         }
         if input.volume_down {
             self.master_volume = (self.master_volume - 0.1).max(0.0);
             self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
         }
         if input.fullscreen {
             self.fullscreen = !self.fullscreen;
@@ -357,6 +367,8 @@ impl GameState {
             } else {
                 "Windowed preference saved.".to_owned()
             };
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
         }
         self.update_particles(delta_seconds);
         self.update_boulders(delta_seconds);
@@ -631,6 +643,8 @@ impl GameState {
                 };
             }
         }
+        self.settings_dirty = true;
+        self.sound_cues.push(SoundCue::Ui);
     }
 
     fn save_slot(&mut self, slot: usize) {
@@ -1447,7 +1461,13 @@ impl GameState {
         self.player.fuel = self.player.fuel_capacity * 0.5;
         self.player.hull = self.player.max_hull() * 0.5;
         self.game_over = false;
+        self.sound_cues.push(SoundCue::Rescue);
         self.message = format!("Emergency rescue completed. {}", self.last_rescue_summary);
+    }
+    pub const fn take_settings_dirty(&mut self) -> bool {
+        let dirty = self.settings_dirty;
+        self.settings_dirty = false;
+        dirty
     }
 }
 
@@ -1623,4 +1643,38 @@ fn point_to_tile(x: f32, y: f32) -> TilePosition {
 
 fn facing_direction(horizontal: f32) -> i32 {
     if horizontal < 0.0 { -1 } else { 1 }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hq_briefing_changes_with_depth() {
+        let mut game = GameState::new();
+        game.deepest_tile_reached = 65;
+        assert!(hq_story_message(&game).contains("Thermal"));
+    }
+
+    #[test]
+    fn return_bonus_resets_trip_depth_and_pays() {
+        let mut game = GameState::new();
+        game.current_zone = Some(SurfaceZone::Depot);
+        game.trip_best_depth = 24;
+        let initial_credits = game.player.credits;
+        game.award_return_bonus();
+        assert_eq!(game.trip_best_depth, 0);
+        assert_eq!(game.return_streak, 1);
+        assert!(game.player.credits > initial_credits);
+    }
+
+    #[test]
+    fn lost_cargo_recovers_when_player_returns_to_site() {
+        let mut game = GameState::new();
+        game.lost_cargo_x = Some(game.player.x);
+        game.lost_cargo_y = Some(game.player.y);
+        game.lost_cargo_count = 2;
+        game.recover_lost_cargo_if_near();
+        assert_eq!(game.lost_cargo_count, 0);
+        assert_eq!(game.player.cargo_used(), 2);
+    }
 }
