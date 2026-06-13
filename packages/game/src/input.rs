@@ -21,6 +21,8 @@ pub struct PlayerInput {
     pub selected_upgrade: Option<usize>,
     pub map: bool,
     pub help: bool,
+    pub volume_up: bool,
+    pub volume_down: bool,
 }
 
 #[must_use]
@@ -53,6 +55,10 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         selected_upgrade: selected_upgrade(raylib),
         map: raylib.is_key_pressed(KeyboardKey::KEY_M),
         help: raylib.is_key_pressed(KeyboardKey::KEY_H),
+        volume_up: raylib.is_key_pressed(KeyboardKey::KEY_EQUAL)
+            || raylib.is_key_pressed(KeyboardKey::KEY_KP_ADD),
+        volume_down: raylib.is_key_pressed(KeyboardKey::KEY_MINUS)
+            || raylib.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
     }
 }
 

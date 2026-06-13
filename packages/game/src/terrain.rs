@@ -260,10 +260,14 @@ const fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
         return TileKind::Artifact(artifact_at_depth(x, y));
     }
 
+    if y >= 46 && y <= 64 && (x + y).rem_euclid(5) == 0 {
+        return ore_or_base_tile(x, y, TileKind::HardRock, seed);
+    }
+
     let base = match y {
-        5..=14 => TileKind::Dirt,
-        15..=29 => TileKind::Clay,
-        30..=54 => TileKind::Stone,
+        5..=13 => TileKind::Dirt,
+        14..=27 => TileKind::Clay,
+        28..=64 => TileKind::Stone,
         _ => TileKind::HardRock,
     };
 
@@ -285,8 +289,8 @@ const fn lava_pocket(x: i32, y: i32, seed: u64) -> bool {
         return false;
     }
 
-    let pocket = seeded_hash(x / 4, y / 3, seed ^ 0x1A5A) % 61;
-    pocket == 0 || (pocket == 1 && y > 68)
+    let pocket = seeded_hash(x / 4, y / 3, seed ^ 0x1A5A) % 53;
+    pocket == 0 || (pocket <= 2 && y > 68)
 }
 
 const fn gas_pocket(x: i32, y: i32, seed: u64) -> bool {
@@ -294,7 +298,8 @@ const fn gas_pocket(x: i32, y: i32, seed: u64) -> bool {
         return false;
     }
 
-    seeded_hash(x / 3, y / 3, seed ^ 0x6A5).is_multiple_of(83)
+    let divisor = if y > 52 { 59 } else { 83 };
+    seeded_hash(x / 3, y / 3, seed ^ 0x6A5).is_multiple_of(divisor)
 }
 
 const fn artifact_spot(x: i32, y: i32, seed: u64) -> bool {

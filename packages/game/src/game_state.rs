@@ -41,6 +41,10 @@ const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
 const CAMERA_SMOOTHING: f32 = 8.0;
 const WORLD_SEED: u64 = 0xD1_11_6A_4E;
 
+const fn default_master_volume() -> f32 {
+    0.8
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DrillDirection {
     Down,
@@ -72,6 +76,7 @@ pub enum ModalScreen {
     Repair,
     Depot,
     Shop,
+    ShopConfirm,
     ExitConfirm,
     Map,
     Help,
@@ -151,6 +156,14 @@ pub struct GameState {
     pub deepest_tile_reached: i32,
     pub next_milestone_tile: i32,
     pub game_over: bool,
+    #[serde(default = "default_master_volume")]
+    pub master_volume: f32,
+    #[serde(default)]
+    pub last_rescue_x: Option<f32>,
+    #[serde(default)]
+    pub last_rescue_y: Option<f32>,
+    #[serde(default)]
+    pub last_rescue_summary: String,
     pub camera_x: f32,
     pub camera_y: f32,
     pub drill_flash_seconds: f32,
@@ -198,6 +211,10 @@ impl GameState {
             deepest_tile_reached: 0,
             next_milestone_tile: 20,
             game_over: false,
+            master_volume: default_master_volume(),
+            last_rescue_x: None,
+            last_rescue_y: None,
+            last_rescue_summary: String::new(),
             camera_x: 0.0,
             camera_y: 0.0,
             drill_flash_seconds: 0.0,
@@ -234,6 +251,14 @@ impl GameState {
             } else {
                 Some(ModalScreen::Help)
             };
+        }
+        if input.volume_up {
+            self.master_volume = (self.master_volume + 0.1).min(1.0);
+            self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+        }
+        if input.volume_down {
+            self.master_volume = (self.master_volume - 0.1).max(0.0);
+            self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
         }
         self.update_particles(delta_seconds);
         self.update_hazards(delta_seconds);
@@ -428,7 +453,8 @@ impl GameState {
             let max_item = match modal {
                 ModalScreen::Shop => upgrade_offers(&self.player).len() - 1,
                 ModalScreen::Depot => 1,
-                ModalScreen::Fuel
+                ModalScreen::ShopConfirm
+                | ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::ExitConfirm
                 | ModalScreen::Map
@@ -446,7 +472,8 @@ impl GameState {
                 ModalScreen::Fuel => self.confirm_refuel(),
                 ModalScreen::Repair => self.confirm_repair(),
                 ModalScreen::Depot => self.confirm_depot(),
-                ModalScreen::Shop => self.try_buy_upgrade(self.selected_menu_item),
+                ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
+                ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
                 ModalScreen::ExitConfirm | ModalScreen::Map | ModalScreen::Help => {}
             }
         }
@@ -556,6 +583,7 @@ impl GameState {
                 "Not enough credits for that upgrade.".clone_into(&mut self.message);
             }
         }
+        self.modal = Some(ModalScreen::Shop);
     }
 
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
@@ -972,6 +1000,9 @@ impl GameState {
         let fee = rescue_fee(self.player.y).min(self.player.credits);
         self.player.credits -= fee;
         let lost_items = drop_half_cargo(&mut self.player);
+        self.last_rescue_x = Some(self.player.x);
+        self.last_rescue_y = Some(self.player.y);
+        self.last_rescue_summary = format!("Fee: {fee} credits. Cargo lost: {lost_items}.");
         self.player.x = 12.0 * TILE_SIZE;
         self.player.y = 4.0 * TILE_SIZE;
         self.player.velocity_x = 0.0;
@@ -979,8 +1010,7 @@ impl GameState {
         self.player.fuel = self.player.fuel_capacity * 0.5;
         self.player.hull = self.player.max_hull() * 0.5;
         self.game_over = false;
-        self.message =
-            format!("Emergency rescue completed. Fee: {fee} credits. Cargo lost: {lost_items}.");
+        self.message = format!("Emergency rescue completed. {}", self.last_rescue_summary);
     }
 }
 

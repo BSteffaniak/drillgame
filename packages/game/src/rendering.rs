@@ -16,7 +16,6 @@ use crate::{
 
 const SCREEN_WIDTH: i32 = 1280;
 const SCREEN_HEIGHT: i32 = 720;
-const PLAYER_DRAW_RADIUS: f32 = 12.0;
 
 struct MinimapProjection {
     x: i32,
@@ -61,6 +60,14 @@ pub fn render(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.game_over {
         draw_game_over(draw, game);
     }
+
+    draw.draw_text(
+        &format!("Vol {:.0}% (+/-)", game.master_volume * 100.0),
+        1030,
+        20,
+        18,
+        Color::LIGHTGRAY,
+    );
 
     if game.won_game {
         draw_ending(draw, game);
@@ -190,17 +197,76 @@ fn draw_player(draw: &mut RaylibDrawHandle<'_>, game: &GameState, camera: Vector
     let screen_x = game.player.x - camera.x + offset_x;
     let screen_y = game.player.y - camera.y + offset_y;
 
-    draw.draw_circle_v(
-        Vector2::new(screen_x, screen_y),
-        PLAYER_DRAW_RADIUS,
-        Color::new(235, 190, 45, 255),
+    let hull_color = if game.player.hull < game.player.max_hull() * 0.3 {
+        Color::new(210, 95, 60, 255)
+    } else {
+        Color::new(235, 190, 45, 255)
+    };
+    draw.draw_rectangle(
+        (screen_x - 14.0) as i32,
+        (screen_y - 10.0) as i32,
+        28,
+        22,
+        hull_color,
     );
-    draw.draw_triangle(
-        Vector2::new(screen_x - 8.0, screen_y + 10.0),
-        Vector2::new(screen_x + 8.0, screen_y + 10.0),
-        Vector2::new(screen_x, screen_y + 22.0),
-        Color::ORANGE,
+    draw.draw_rectangle_lines(
+        (screen_x - 14.0) as i32,
+        (screen_y - 10.0) as i32,
+        28,
+        22,
+        Color::BROWN,
     );
+    draw.draw_rectangle(
+        (screen_x - 7.0) as i32,
+        (screen_y - 17.0) as i32,
+        14,
+        8,
+        Color::SKYBLUE,
+    );
+    draw.draw_circle(
+        (screen_x - 10.0) as i32,
+        (screen_y + 13.0) as i32,
+        4.0,
+        Color::DARKGRAY,
+    );
+    draw.draw_circle(
+        (screen_x + 10.0) as i32,
+        (screen_y + 13.0) as i32,
+        4.0,
+        Color::DARKGRAY,
+    );
+
+    let direction = game
+        .active_drill
+        .map_or(DrillDirection::Down, |drill| drill.direction);
+    match direction {
+        DrillDirection::Down => draw.draw_triangle(
+            Vector2::new(screen_x - 6.0, screen_y + 13.0),
+            Vector2::new(screen_x + 6.0, screen_y + 13.0),
+            Vector2::new(screen_x, screen_y + 28.0),
+            Color::ORANGE,
+        ),
+        DrillDirection::Left => draw.draw_triangle(
+            Vector2::new(screen_x - 15.0, screen_y - 4.0),
+            Vector2::new(screen_x - 15.0, screen_y + 8.0),
+            Vector2::new(screen_x - 29.0, screen_y + 2.0),
+            Color::ORANGE,
+        ),
+        DrillDirection::Right => draw.draw_triangle(
+            Vector2::new(screen_x + 15.0, screen_y - 4.0),
+            Vector2::new(screen_x + 15.0, screen_y + 8.0),
+            Vector2::new(screen_x + 29.0, screen_y + 2.0),
+            Color::ORANGE,
+        ),
+    }
+    if game.player.velocity_y < -40.0 {
+        draw.draw_triangle(
+            Vector2::new(screen_x - 8.0, screen_y + 16.0),
+            Vector2::new(screen_x + 8.0, screen_y + 16.0),
+            Vector2::new(screen_x, screen_y + 34.0),
+            Color::new(255, 95, 20, 220),
+        );
+    }
     if game.drill_flash_seconds > 0.0 {
         draw.draw_circle_v(
             Vector2::new(screen_x, screen_y + 20.0),
@@ -549,6 +615,7 @@ fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScr
         }
         ModalScreen::Depot => draw_modal_depot(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
+        ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
         ModalScreen::Map => draw_large_map(draw, game),
         ModalScreen::Help => draw_help(draw),
         ModalScreen::ExitConfirm => {
@@ -722,6 +789,13 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(label, px + 6, py - 6, 10, Color::RAYWHITE);
     }
 
+    if let (Some(rescue_x), Some(rescue_y)) = (game.last_rescue_x, game.last_rescue_y) {
+        let marker_x = x + ((rescue_x / TILE_SIZE) as i32) * width / terrain_width;
+        let marker_y = y + ((rescue_y / TILE_SIZE) as i32) * height / terrain_height;
+        draw.draw_circle_lines(marker_x, marker_y, 7.0, Color::RED);
+        draw.draw_text("RESCUE", marker_x + 9, marker_y - 7, 10, Color::RED);
+    }
+
     for depth in (20..terrain_height).step_by(20) {
         let py = y + depth * height / terrain_height;
         draw.draw_line(x, py, x + width, py, Color::new(255, 255, 255, 35));
@@ -753,6 +827,29 @@ fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
             Color::RAYWHITE,
         );
     }
+}
+
+fn draw_shop_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let offers = upgrade_offers(&game.player);
+    let Some(offer) = offers.get(game.selected_menu_item) else {
+        return;
+    };
+    draw.draw_text("Confirm Purchase", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        &format!("Buy {} for {} credits?", offer.name, offer.cost),
+        330,
+        215,
+        24,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(offer.description, 330, 252, 18, Color::LIGHTGRAY);
+    draw.draw_text(
+        "Enter/E confirms | Backspace/Esc cancels",
+        330,
+        310,
+        20,
+        Color::WHITE,
+    );
 }
 
 fn draw_modal_shop(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {

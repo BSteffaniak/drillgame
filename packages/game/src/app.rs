@@ -28,6 +28,7 @@ pub fn run() {
 
         game.update(input, delta_seconds);
         if let Some(audio) = &audio {
+            audio.set_volume(game.master_volume);
             audio.play(&game.sound_cues);
         }
 

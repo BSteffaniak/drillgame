@@ -12,7 +12,7 @@ use raylib::prelude::*;
 use crate::game_state::SoundCue;
 
 pub struct AudioBus {
-    _audio: &'static RaylibAudio,
+    audio: &'static RaylibAudio,
     drill: Sound<'static>,
     sell: Sound<'static>,
     upgrade: Sound<'static>,
@@ -27,13 +27,17 @@ impl AudioBus {
         ));
         audio.set_master_volume(0.8);
         Ok(Self {
-            _audio: audio,
+            audio,
             drill: sound(audio, 130.0, 0.09).ok_or("generated drill sound failed")?,
             sell: sound(audio, 680.0, 0.16).ok_or("generated sell sound failed")?,
             upgrade: sound(audio, 880.0, 0.18).ok_or("generated upgrade sound failed")?,
             damage: sound(audio, 90.0, 0.22).ok_or("generated damage sound failed")?,
             milestone: sound(audio, 520.0, 0.28).ok_or("generated milestone sound failed")?,
         })
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.audio.set_master_volume(volume.clamp(0.0, 1.0));
     }
 
     pub fn play(&self, cues: &[SoundCue]) {
