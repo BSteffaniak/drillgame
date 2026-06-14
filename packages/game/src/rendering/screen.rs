@@ -93,6 +93,18 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             Color::GREEN,
         );
     }
+    if game.player.survey_drone_kits > 0 {
+        draw.draw_text(
+            &format!(
+                "Survey drones: {} kit(s) (T to place)",
+                game.player.survey_drone_kits
+            ),
+            720,
+            96,
+            16,
+            Color::GREEN,
+        );
+    }
 
     if game.escape_sequence_seconds > 0.0 {
         draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
@@ -433,13 +445,11 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 
     for item in &game.infrastructure {
-        draw_map_marker(
-            draw,
-            &projection,
-            item.position.x,
-            item.position.y,
-            Color::SKYBLUE,
-        );
+        let color = match item.kind {
+            crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
+            crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
+        };
+        draw_map_marker(draw, &projection, item.position.x, item.position.y, color);
     }
 
     for warning in &game.collapse_warnings {
@@ -882,10 +892,11 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     draw.draw_text(
         &format!(
-            "Crafted: bulkheads {} | sorters {} | relay kits {}",
+            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {}",
             game.player.crafted_bulkheads,
             game.player.crafted_sorters,
-            game.player.signal_relay_kits
+            game.player.signal_relay_kits,
+            game.player.survey_drone_kits
         ),
         350,
         450,
@@ -1361,8 +1372,12 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     for item in &game.infrastructure {
         let px = x + item.position.x * width / terrain_width;
         let py = y + item.position.y * height / terrain_height;
-        draw.draw_circle_lines(px, py, 6.0, Color::SKYBLUE);
-        draw.draw_text("R", px + 7, py - 6, 10, Color::SKYBLUE);
+        let (label, color) = match item.kind {
+            crate::game_state::InfrastructureKind::SignalRelay => ("R", Color::SKYBLUE),
+            crate::game_state::InfrastructureKind::SurveyDrone => ("D", Color::GREEN),
+        };
+        draw.draw_circle_lines(px, py, 6.0, color);
+        draw.draw_text(label, px + 7, py - 6, 10, color);
     }
 
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;

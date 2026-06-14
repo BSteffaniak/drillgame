@@ -155,6 +155,7 @@ pub struct DustParticle {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum InfrastructureKind {
     SignalRelay,
+    SurveyDrone,
 }
 
 impl InfrastructureKind {
@@ -162,6 +163,7 @@ impl InfrastructureKind {
     pub const fn name(self) -> &'static str {
         match self {
             Self::SignalRelay => "Signal Relay",
+            Self::SurveyDrone => "Survey Drone",
         }
     }
 }
@@ -208,14 +210,16 @@ pub enum RecipeKind {
     AuxiliaryTank,
     ExpandedSorter,
     SignalRelayKit,
+    SurveyDroneKit,
 }
 
 impl RecipeKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ReinforcedBulkhead,
         Self::AuxiliaryTank,
         Self::ExpandedSorter,
         Self::SignalRelayKit,
+        Self::SurveyDroneKit,
     ];
 
     #[must_use]
@@ -225,6 +229,7 @@ impl RecipeKind {
             Self::AuxiliaryTank => "Auxiliary Tank",
             Self::ExpandedSorter => "Expanded Sorter",
             Self::SignalRelayKit => "Signal Relay Kit",
+            Self::SurveyDroneKit => "Survey Drone Kit",
         }
     }
 
@@ -235,6 +240,7 @@ impl RecipeKind {
             Self::AuxiliaryTank => "+20 fuel capacity rig part",
             Self::ExpandedSorter => "+4 cargo capacity rig part",
             Self::SignalRelayKit => "crafted infrastructure item",
+            Self::SurveyDroneKit => "reveals nearby map over time",
         }
     }
 
@@ -251,6 +257,10 @@ impl RecipeKind {
                 (StrategicResourceKind::CoreShard, 1),
             ],
             Self::SignalRelayKit => &[(StrategicResourceKind::CoreShard, 2)],
+            Self::SurveyDroneKit => &[
+                (StrategicResourceKind::CrystalLens, 1),
+                (StrategicResourceKind::CoreShard, 1),
+            ],
         }
     }
 }
@@ -746,6 +756,7 @@ impl GameState {
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
         self.reveal_scanner_area();
+        self.update_survey_drones();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
         if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
             && !self.game_over
@@ -859,6 +870,38 @@ impl GameState {
                                 kind: tile.kind,
                             });
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_survey_drones(&mut self) {
+        if !self.update_ticks.is_multiple_of(30) {
+            return;
+        }
+        let drones = self
+            .infrastructure
+            .iter()
+            .filter(|item| item.kind == InfrastructureKind::SurveyDrone)
+            .copied()
+            .collect::<Vec<_>>();
+        for drone in drones {
+            let radius = 3 + i32::from(self.town_development.scanner_lab_level);
+            for y in drone.position.y - radius..=drone.position.y + radius {
+                for x in drone.position.x - radius..=drone.position.x + radius {
+                    if (x - drone.position.x).abs() + (y - drone.position.y).abs() > radius {
+                        continue;
+                    }
+                    let position = TilePosition { x, y };
+                    if let Some(index) = self.tile_index(position)
+                        && !self.explored_tiles[index]
+                    {
+                        self.explored_tiles[index] = true;
+                        self.mark_exploration_visual_changed(position);
+                    }
+                    if let Some(tile) = self.terrain.tile(position) {
+                        self.collection_log.discover_tile(tile.kind);
                     }
                 }
             }
@@ -1378,6 +1421,9 @@ impl GameState {
             }
             RecipeKind::SignalRelayKit => {
                 self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_add(1);
+            }
+            RecipeKind::SurveyDroneKit => {
+                self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_add(1);
             }
         }
         self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
@@ -1973,16 +2019,32 @@ impl GameState {
     }
 
     fn handle_infrastructure_placement(&mut self, input: PlayerInput) {
-        if !input.place_relay {
-            return;
+        if input.place_relay {
+            self.place_infrastructure_kit(
+                InfrastructureKind::SignalRelay,
+                "No signal relay kits. Craft one at HQ first.",
+            );
         }
-        if self.player.signal_relay_kits == 0 {
-            "No signal relay kits. Craft one at HQ first.".clone_into(&mut self.message);
+        if input.place_drone {
+            self.place_infrastructure_kit(
+                InfrastructureKind::SurveyDrone,
+                "No survey drone kits. Craft one at HQ first.",
+            );
+        }
+    }
+
+    fn place_infrastructure_kit(&mut self, kind: InfrastructureKind, empty_message: &str) {
+        let kits = match kind {
+            InfrastructureKind::SignalRelay => self.player.signal_relay_kits,
+            InfrastructureKind::SurveyDrone => self.player.survey_drone_kits,
+        };
+        if kits == 0 {
+            empty_message.clone_into(&mut self.message);
             return;
         }
         let position = self.player.tile_position(TILE_SIZE);
         if position.y < 8 {
-            "Signal relays must be placed underground.".clone_into(&mut self.message);
+            format!("{} must be placed underground.", kind.name()).clone_into(&mut self.message);
             return;
         }
         if self
@@ -1993,15 +2055,24 @@ impl GameState {
             "Infrastructure already occupies this tile.".clone_into(&mut self.message);
             return;
         }
-        self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_sub(1);
-        self.infrastructure.push(PlacedInfrastructure {
-            kind: InfrastructureKind::SignalRelay,
-            position,
-        });
-        self.message = format!(
-            "Placed {}. Deep rescue signal improved.",
-            InfrastructureKind::SignalRelay.name()
-        );
+        match kind {
+            InfrastructureKind::SignalRelay => {
+                self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_sub(1);
+            }
+            InfrastructureKind::SurveyDrone => {
+                self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_sub(1);
+            }
+        }
+        self.infrastructure
+            .push(PlacedInfrastructure { kind, position });
+        self.message = match kind {
+            InfrastructureKind::SignalRelay => {
+                "Placed Signal Relay. Deep rescue signal improved.".to_owned()
+            }
+            InfrastructureKind::SurveyDrone => {
+                "Placed Survey Drone. Nearby map will reveal over time.".to_owned()
+            }
+        };
         self.sound_cues.push(SoundCue::Upgrade);
     }
 
