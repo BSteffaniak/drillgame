@@ -865,6 +865,21 @@ pub enum LocalTentativeFeedback {
     DrillProgressVisual,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TentativeFeedbackPresentation {
+    MovementVisual,
+    DrillContactAudio,
+    DrillProgressVisual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PredictionFailureResolution {
+    RequestTerrainChunk,
+    RequestAuthoritativeSnapshot,
+    RollBackLocalEconomy,
+    RollBackProgression,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionOffset {
     pub x: f32,
@@ -882,6 +897,8 @@ impl CorrectionOffset {
 pub enum PredictionFailure {
     TerrainAlreadyChanged,
     HazardOrRescueChangedState,
+    EconomyChangedState,
+    ProgressionChangedState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1082,6 +1099,45 @@ impl ClientPredictionState {
 
     pub fn clear_feedback(&mut self) {
         self.pending_feedback.clear();
+    }
+
+    #[must_use]
+    pub fn tentative_feedback_presentations(&self) -> Vec<TentativeFeedbackPresentation> {
+        self.pending_feedback
+            .iter()
+            .map(|feedback| match feedback {
+                LocalTentativeFeedback::MovementIntent => {
+                    TentativeFeedbackPresentation::MovementVisual
+                }
+                LocalTentativeFeedback::DrillContact => {
+                    TentativeFeedbackPresentation::DrillContactAudio
+                }
+                LocalTentativeFeedback::DrillProgressVisual => {
+                    TentativeFeedbackPresentation::DrillProgressVisual
+                }
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn prediction_failure_resolutions(&self) -> Vec<PredictionFailureResolution> {
+        self.prediction_failures
+            .iter()
+            .map(|failure| match failure {
+                PredictionFailure::TerrainAlreadyChanged => {
+                    PredictionFailureResolution::RequestTerrainChunk
+                }
+                PredictionFailure::HazardOrRescueChangedState => {
+                    PredictionFailureResolution::RequestAuthoritativeSnapshot
+                }
+                PredictionFailure::EconomyChangedState => {
+                    PredictionFailureResolution::RollBackLocalEconomy
+                }
+                PredictionFailure::ProgressionChangedState => {
+                    PredictionFailureResolution::RollBackProgression
+                }
+            })
+            .collect()
     }
 
     #[must_use]
@@ -2207,6 +2263,24 @@ mod tests {
     }
 
     #[test]
+    fn prediction_state_maps_failures_to_recovery_actions() {
+        let mut prediction = super::ClientPredictionState::default();
+
+        prediction.note_prediction_failure(super::PredictionFailure::TerrainAlreadyChanged);
+        prediction.note_prediction_failure(super::PredictionFailure::EconomyChangedState);
+        prediction.note_prediction_failure(super::PredictionFailure::ProgressionChangedState);
+
+        assert_eq!(
+            prediction.prediction_failure_resolutions(),
+            vec![
+                super::PredictionFailureResolution::RequestTerrainChunk,
+                super::PredictionFailureResolution::RollBackLocalEconomy,
+                super::PredictionFailureResolution::RollBackProgression,
+            ]
+        );
+    }
+
+    #[test]
     fn prediction_state_tracks_local_feedback_and_correction_offsets() {
         let mut prediction = super::ClientPredictionState::default();
 
@@ -2215,6 +2289,13 @@ mod tests {
         prediction.set_correction_offset(super::CorrectionOffset::new(2.0, -1.0));
 
         assert_eq!(prediction.pending_feedback().len(), 2);
+        assert_eq!(
+            prediction.tentative_feedback_presentations(),
+            vec![
+                super::TentativeFeedbackPresentation::MovementVisual,
+                super::TentativeFeedbackPresentation::DrillContactAudio,
+            ]
+        );
         let offset = prediction.correction_offset().expect("offset set");
         assert!((offset.x - 2.0).abs() < f32::EPSILON);
         prediction.clear_feedback();

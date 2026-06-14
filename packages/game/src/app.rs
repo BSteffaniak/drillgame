@@ -179,11 +179,15 @@ fn observe_multiplayer_scaffolding(
     let mut prediction_probe = prediction.clone();
     prediction_probe.note_prediction_failure(PredictionFailure::TerrainAlreadyChanged);
     prediction_probe.note_prediction_failure(PredictionFailure::HazardOrRescueChangedState);
+    prediction_probe.note_prediction_failure(PredictionFailure::EconomyChangedState);
+    prediction_probe.note_prediction_failure(PredictionFailure::ProgressionChangedState);
+    let _prediction_failure_resolutions = prediction_probe.prediction_failure_resolutions();
     prediction_probe.clear_prediction_failures();
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::MovementIntent);
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::DrillContact);
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::DrillProgressVisual);
     let _pending_feedback_count = prediction_probe.pending_feedback().len();
+    let _tentative_feedback_presentations = prediction_probe.tentative_feedback_presentations();
     prediction_probe.clear_feedback();
     prediction_probe.set_correction_offset(crate::session::CorrectionOffset::new(0.0, 0.0));
     let _correction_offset = prediction_probe.correction_offset();
