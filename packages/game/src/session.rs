@@ -228,7 +228,7 @@ impl WorldState {
 pub struct ClientView {
     pub client_id: ClientId,
     pub controlled_player_id: PlayerId,
-    pub camera: crate::game_state::Camera,
+    pub camera: raylib::prelude::Vector2,
     pub run_mode: RunMode,
 }
 

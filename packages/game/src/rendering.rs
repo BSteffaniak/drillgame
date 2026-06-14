@@ -19,9 +19,9 @@ use screen::{
     draw_modal, draw_pause, draw_title,
 };
 use terrain::TerrainRenderer;
+pub use world::render_camera;
 use world::{
-    draw_particles, draw_placed_bombs, draw_player, draw_scanner_marks, draw_world, render_camera,
-    world_camera,
+    draw_particles, draw_placed_bombs, draw_player, draw_scanner_marks, draw_world, world_camera,
 };
 
 use crate::{
@@ -52,10 +52,6 @@ impl GameRenderer {
             self.terrain.mark_tile_dirty(tile);
         }
         self.terrain.sync(raylib, thread, game);
-    }
-
-    pub fn render(&self, draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-        self.render_client_view(draw, game, &ClientView::from_legacy_game(game));
     }
 
     pub fn render_client_view(

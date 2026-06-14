@@ -8,7 +8,7 @@ use crate::{
     terrain::{TileKind, TilePosition},
 };
 
-pub(crate) fn render_camera(game: &GameState) -> Vector2 {
+pub fn render_camera(game: &GameState) -> Vector2 {
     let mut camera = Vector2::new(game.camera_x, game.camera_y);
     if game.camera_shake_seconds > 0.0 {
         let pulse = (game.camera_shake_seconds * 70.0).sin();
