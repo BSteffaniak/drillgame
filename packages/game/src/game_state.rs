@@ -81,6 +81,42 @@ pub struct DrillState {
     pub dust_timer: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum ChallengeBadge {
+    DeepReturn,
+    HighRiskReturn,
+    ValuableHaul,
+}
+
+impl ChallengeBadge {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::DeepReturn => "Deep Return",
+            Self::HighRiskReturn => "High-Risk Return",
+            Self::ValuableHaul => "Valuable Haul",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum CosmeticRigSkin {
+    BronzeTrim,
+    HazardStripes,
+    StarChrome,
+}
+
+impl CosmeticRigSkin {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::BronzeTrim => "Bronze Trim",
+            Self::HazardStripes => "Hazard Stripes",
+            Self::StarChrome => "Star Chrome",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RunMode {
     Title,
@@ -578,6 +614,10 @@ pub struct GameState {
     #[serde(default)]
     pub last_run_summary: String,
     #[serde(default)]
+    pub challenge_badges: std::collections::BTreeSet<ChallengeBadge>,
+    #[serde(default)]
+    pub cosmetic_skins: std::collections::BTreeSet<CosmeticRigSkin>,
+    #[serde(default)]
     pub rescue_count: u32,
     #[serde(default)]
     pub artifacts_found: u32,
@@ -750,6 +790,8 @@ impl GameState {
             expeditions_completed: 0,
             infrastructure_built: 0,
             last_run_summary: String::new(),
+            challenge_badges: std::collections::BTreeSet::new(),
+            cosmetic_skins: std::collections::BTreeSet::new(),
             rescue_count: 0,
             artifacts_found: 0,
             trip_best_depth: 0,
@@ -1131,6 +1173,25 @@ impl GameState {
             expedition.risk_label(),
             expedition.expires_day
         )
+    }
+
+    #[must_use]
+    pub const fn reputation_rank(&self) -> &'static str {
+        match self.town_development.reputation {
+            0..=2 => "Prospector",
+            3..=6 => "Claim Lead",
+            7..=11 => "Charter Operator",
+            _ => "Deep Claim Founder",
+        }
+    }
+
+    #[must_use]
+    pub const fn advanced_permit_status(&self) -> &'static str {
+        if self.town_development.reputation >= 8 && self.best_return_depth >= 80 {
+            "Advanced permits unlocked"
+        } else {
+            "Advanced permits need rank 8 + 80m return"
+        }
     }
 
     #[must_use]
@@ -1851,6 +1912,15 @@ impl GameState {
                 expires_day: day + 5,
             },
         ];
+        if self.town_development.reputation >= 8 && self.best_return_depth >= 80 {
+            self.expedition_offers.push(Expedition {
+                kind: ExpeditionObjectiveKind::ReachDepth,
+                target: TileKind::Artifact(ArtifactKind::OldCircuit),
+                required: 150,
+                reward: 950 + day * 20,
+                expires_day: day + 2,
+            });
+        }
     }
 
     fn accept_expedition_offer(&mut self) {
@@ -3389,6 +3459,31 @@ impl GameState {
         self.message = format!("Entering {layer}. Hazards and ore density increased.");
     }
 
+    fn award_challenge_badges(&mut self, cargo_value: u32, risk_rating: &str) {
+        let mut unlocked = Vec::new();
+        if self.trip_best_depth >= 100 && self.challenge_badges.insert(ChallengeBadge::DeepReturn) {
+            self.cosmetic_skins.insert(CosmeticRigSkin::BronzeTrim);
+            unlocked.push(ChallengeBadge::DeepReturn.title());
+        }
+        if matches!(risk_rating, "High" | "Extreme")
+            && self.challenge_badges.insert(ChallengeBadge::HighRiskReturn)
+        {
+            self.cosmetic_skins.insert(CosmeticRigSkin::HazardStripes);
+            unlocked.push(ChallengeBadge::HighRiskReturn.title());
+        }
+        if cargo_value >= 1_500 && self.challenge_badges.insert(ChallengeBadge::ValuableHaul) {
+            self.cosmetic_skins.insert(CosmeticRigSkin::StarChrome);
+            unlocked.push(ChallengeBadge::ValuableHaul.title());
+        }
+        if !unlocked.is_empty() {
+            self.last_run_summary.push_str(" Badges: ");
+            self.last_run_summary.push_str(&unlocked.join(", "));
+            self.last_run_summary.push('.');
+            self.message = self.last_run_summary.clone();
+            self.sound_cues.push(SoundCue::Milestone);
+        }
+    }
+
     fn current_cargo_value(&self) -> u32 {
         let minerals = self
             .player
@@ -3437,6 +3532,7 @@ impl GameState {
             self.return_streak
         );
         self.message = self.last_run_summary.clone();
+        self.award_challenge_badges(cargo_value, risk_rating);
         self.trip_best_depth = 0;
         self.trip_seconds = 0.0;
         self.deep_instability = 0.0;

@@ -1180,7 +1180,12 @@ fn draw_town_development(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::LIGHTGRAY,
     );
     draw.draw_text(
-        &format!("Reputation: {}", game.town_development.reputation),
+        &format!(
+            "Reputation: {} ({}) | {}",
+            game.town_development.reputation,
+            game.reputation_rank(),
+            game.advanced_permit_status()
+        ),
         330,
         215,
         20,
@@ -1903,6 +1908,15 @@ pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         format!("Best return depth: {}m", game.best_return_depth),
         format!("Most valuable run: {} cr", game.most_valuable_cargo_run),
         format!("Resources refined: {}", game.total_resources_refined),
+        format!("Badges earned: {}", game.challenge_badges.len()),
+        format!(
+            "Cosmetic skins: {}",
+            game.cosmetic_skins
+                .iter()
+                .map(|skin| skin.title())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         format!("Rescues: {}", game.rescue_count),
         format!("Artifacts found: {}", game.artifacts_found),
         format!("Debt remaining: {} cr", game.player.loan_debt),
