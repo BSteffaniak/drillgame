@@ -1895,6 +1895,11 @@ pub(super) fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 }
 
+fn format_duration(seconds: f32) -> String {
+    let total_seconds = seconds.max(0.0) as u32;
+    format!("{}m {:02}s", total_seconds / 60, total_seconds % 60)
+}
+
 pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(5, 8, 18, 205));
     draw.draw_rectangle(300, 180, 680, 340, Color::new(0, 0, 0, 230));
@@ -1914,6 +1919,19 @@ pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             game.cosmetic_skins
                 .iter()
                 .map(|skin| skin.title())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        format!(
+            "Fastest Star Core: {}",
+            game.fastest_star_core_seconds
+                .map_or_else(|| "--".to_owned(), format_duration)
+        ),
+        format!(
+            "Legendary blueprints: {}",
+            game.legendary_blueprints
+                .iter()
+                .map(|blueprint| blueprint.title())
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

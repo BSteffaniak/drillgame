@@ -82,6 +82,24 @@ pub struct DrillState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum LegendaryBlueprint {
+    StarPlating,
+    VoidTank,
+    RelicSorter,
+}
+
+impl LegendaryBlueprint {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::StarPlating => "Star Plating",
+            Self::VoidTank => "Void Tank",
+            Self::RelicSorter => "Relic Sorter",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum ChallengeBadge {
     DeepReturn,
     HighRiskReturn,
@@ -614,6 +632,10 @@ pub struct GameState {
     #[serde(default)]
     pub last_run_summary: String,
     #[serde(default)]
+    pub fastest_star_core_seconds: Option<f32>,
+    #[serde(default)]
+    pub legendary_blueprints: std::collections::BTreeSet<LegendaryBlueprint>,
+    #[serde(default)]
     pub challenge_badges: std::collections::BTreeSet<ChallengeBadge>,
     #[serde(default)]
     pub cosmetic_skins: std::collections::BTreeSet<CosmeticRigSkin>,
@@ -790,6 +812,8 @@ impl GameState {
             expeditions_completed: 0,
             infrastructure_built: 0,
             last_run_summary: String::new(),
+            fastest_star_core_seconds: None,
+            legendary_blueprints: std::collections::BTreeSet::new(),
             challenge_badges: std::collections::BTreeSet::new(),
             cosmetic_skins: std::collections::BTreeSet::new(),
             rescue_count: 0,
@@ -2278,6 +2302,11 @@ impl GameState {
             if completion.finished_story {
                 self.won_game = true;
                 self.deep_claim_status = DeepClaimStatus::Unlocked;
+                self.fastest_star_core_seconds = self
+                    .fastest_star_core_seconds
+                    .map_or(Some(self.play_seconds), |best| {
+                        Some(best.min(self.play_seconds))
+                    });
                 self.message = format!(
                     "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits.",
                     completion.completed_title, completion.reward
@@ -3359,6 +3388,7 @@ impl GameState {
         let reward_tile = if depth >= 120 {
             self.player
                 .add_material(StrategicResourceKind::CoreShard, 1);
+            self.award_legendary_blueprint(depth);
             TileKind::Artifact(ArtifactKind::OldCircuit)
         } else {
             TileKind::Ore(MineralKind::Mythril)
@@ -3371,6 +3401,37 @@ impl GameState {
         } else {
             "Deep reward signal: huge mythril vein migrated nearby.".to_owned()
         };
+    }
+
+    fn award_legendary_blueprint(&mut self, depth: i32) {
+        let blueprint = if depth >= 160 {
+            LegendaryBlueprint::RelicSorter
+        } else if depth >= 140 {
+            LegendaryBlueprint::VoidTank
+        } else {
+            LegendaryBlueprint::StarPlating
+        };
+        if !self.legendary_blueprints.insert(blueprint) {
+            return;
+        }
+        match blueprint {
+            LegendaryBlueprint::StarPlating => {
+                self.player.crafted_bulkheads = self.player.crafted_bulkheads.saturating_add(1);
+                self.player.hull = self.player.max_hull();
+            }
+            LegendaryBlueprint::VoidTank => {
+                self.player.fuel_capacity += 20.0;
+                self.player.fuel = self.player.fuel_capacity;
+            }
+            LegendaryBlueprint::RelicSorter => {
+                self.player.cargo_capacity = self.player.cargo_capacity.saturating_add(4);
+            }
+        }
+        self.message = format!(
+            "Legendary blueprint recovered: {} special rig part installed.",
+            blueprint.title()
+        );
+        self.sound_cues.push(SoundCue::Milestone);
     }
 
     fn update_escape_sequence(&mut self, delta_seconds: f32) {
