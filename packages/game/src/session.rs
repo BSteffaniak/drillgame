@@ -432,6 +432,13 @@ impl AuthoritativeWorldSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerScopedCommandOutcome {
+    Applied,
+    IgnoredUnavailable,
+    UnknownPlayer,
+}
+
 /// Compatibility world wrapper used to introduce explicit player identity before the legacy
 /// monolithic `GameState` is fully split into authoritative world state and local client state.
 #[derive(Clone, Debug)]
@@ -477,6 +484,59 @@ impl WorldState {
 
     pub fn player_mut(&mut self, player_id: PlayerId) -> Option<&mut Player> {
         self.players.get_mut(&player_id)
+    }
+
+    pub fn apply_player_command(
+        &mut self,
+        player_id: PlayerId,
+        command: &PlayerCommand,
+    ) -> PlayerScopedCommandOutcome {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return PlayerScopedCommandOutcome::UnknownPlayer;
+        };
+
+        match *command {
+            PlayerCommand::Movement {
+                horizontal,
+                thrust,
+                drill_down: _,
+            } => {
+                player.velocity_x = horizontal;
+                if thrust {
+                    player.velocity_y = -1.0;
+                }
+                PlayerScopedCommandOutcome::Applied
+            }
+            PlayerCommand::Refuel => {
+                player.fuel = player.fuel_capacity;
+                PlayerScopedCommandOutcome::Applied
+            }
+            PlayerCommand::Repair => {
+                player.hull = player.max_hull();
+                PlayerScopedCommandOutcome::Applied
+            }
+            PlayerCommand::SellCargo => {
+                player.cargo.clear();
+                player.artifacts.clear();
+                PlayerScopedCommandOutcome::Applied
+            }
+            PlayerCommand::PlaceBomb => {
+                if player.bombs == 0 {
+                    PlayerScopedCommandOutcome::IgnoredUnavailable
+                } else {
+                    player.bombs -= 1;
+                    PlayerScopedCommandOutcome::Applied
+                }
+            }
+            PlayerCommand::BuyUpgrade { .. }
+            | PlayerCommand::Interact
+            | PlayerCommand::Cancel
+            | PlayerCommand::Confirm
+            | PlayerCommand::UseScanner
+            | PlayerCommand::PlaceInfrastructure { .. }
+            | PlayerCommand::SelectUpgrade { .. }
+            | PlayerCommand::Rescue => PlayerScopedCommandOutcome::IgnoredUnavailable,
+        }
     }
 
     #[must_use]
@@ -1296,7 +1356,7 @@ mod tests {
 
     use crate::{
         game_state::GameState,
-        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, SimulationTick},
+        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId, SimulationTick},
     };
 
     use super::{GameSession, WorldState};
@@ -1416,6 +1476,58 @@ mod tests {
                 .credits,
             123
         );
+    }
+
+    #[test]
+    fn compatibility_world_applies_player_scoped_commands_to_selected_player() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+
+        assert_eq!(
+            world.apply_player_command(
+                LOCAL_PLAYER_ID,
+                &PlayerCommand::Movement {
+                    horizontal: 0.75,
+                    thrust: true,
+                    drill_down: false,
+                },
+            ),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        let velocity_x = world
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists")
+            .velocity_x;
+        assert!((velocity_x - 0.75).abs() < f32::EPSILON);
+        assert_eq!(
+            world.apply_player_command(PlayerId::new(999), &PlayerCommand::Refuel),
+            super::PlayerScopedCommandOutcome::UnknownPlayer
+        );
+    }
+
+    #[test]
+    fn compatibility_world_applies_player_scoped_resource_commands() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
+        player.fuel = 1.0;
+        player.hull = 1.0;
+        player.bombs = 1;
+
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::Refuel),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::Repair),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::PlaceBomb),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        let player = world.player(LOCAL_PLAYER_ID).expect("player exists");
+        assert!((player.fuel - player.fuel_capacity).abs() < f32::EPSILON);
+        assert!((player.hull - player.max_hull()).abs() < f32::EPSILON);
+        assert_eq!(player.bombs, 0);
     }
 
     #[test]

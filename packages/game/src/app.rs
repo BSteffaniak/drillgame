@@ -92,6 +92,14 @@ fn observe_multiplayer_scaffolding(
     let _player_count = session.world().player_count();
     let _authoritative_summary = session.world().authoritative_summary();
     let mut world_probe = session.world().clone();
+    let _scoped_command_outcome = world_probe.apply_player_command(
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        &PlayerCommand::Movement {
+            horizontal: 0.0,
+            thrust: false,
+            drill_down: false,
+        },
+    );
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _sequenced_commands = session.sequence_local_commands(player_commands);
