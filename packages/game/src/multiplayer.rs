@@ -74,6 +74,23 @@ impl InputSequence {
     }
 }
 
+/// Session token placeholder used to reserve reconnect identity without tying the simulation to a
+/// transport implementation yet.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct SessionToken(u128);
+
+impl SessionToken {
+    #[must_use]
+    pub const fn new(value: u128) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u128 {
+        self.0
+    }
+}
+
 /// Single-player compatibility player id used while the current game is migrated.
 pub const LOCAL_PLAYER_ID: PlayerId = PlayerId::new(1);
 
@@ -147,9 +164,82 @@ pub struct SequencedPlayerCommand {
     pub command: PlayerCommand,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CommandPacket {
+    pub client_id: ClientId,
+    pub commands: Vec<SequencedPlayerCommand>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommandAcknowledgement {
+    pub client_id: ClientId,
+    pub acknowledged_sequence: InputSequence,
+    pub authoritative_tick: SimulationTick,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ReliabilityClass {
+    Reliable,
+    UnreliableSequenced,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum ProtocolMessage {
+    JoinRequest {
+        client_id: ClientId,
+        session_token: Option<SessionToken>,
+    },
+    JoinAccepted {
+        client_id: ClientId,
+        player_id: PlayerId,
+        snapshot_tick: SimulationTick,
+    },
+    ReconnectRequest {
+        client_id: ClientId,
+        session_token: SessionToken,
+    },
+    CommandPacket(CommandPacket),
+    CommandAcknowledgement(CommandAcknowledgement),
+    SnapshotKeyframe {
+        tick: SimulationTick,
+    },
+    WorldDelta {
+        tick: SimulationTick,
+    },
+    TerrainChunkRequest {
+        chunk_x: i32,
+        chunk_y: i32,
+        known_revision: u64,
+    },
+    TerrainChunkResponse {
+        chunk_x: i32,
+        chunk_y: i32,
+        revision: u64,
+    },
+}
+
+impl ProtocolMessage {
+    #[must_use]
+    pub const fn reliability_class(&self) -> ReliabilityClass {
+        match self {
+            Self::CommandPacket(_) | Self::SnapshotKeyframe { .. } | Self::WorldDelta { .. } => {
+                ReliabilityClass::UnreliableSequenced
+            }
+            Self::JoinRequest { .. }
+            | Self::JoinAccepted { .. }
+            | Self::ReconnectRequest { .. }
+            | Self::CommandAcknowledgement(_)
+            | Self::TerrainChunkRequest { .. }
+            | Self::TerrainChunkResponse { .. } => ReliabilityClass::Reliable,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{InputSequence, SimulationTick};
+    use super::{
+        ClientId, InputSequence, ProtocolMessage, ReliabilityClass, SessionToken, SimulationTick,
+    };
 
     #[test]
     fn simulation_tick_advances_monotonically() {
@@ -163,5 +253,25 @@ mod tests {
         let sequence = InputSequence::new(u32::MAX);
 
         assert_eq!(sequence.next().get(), 0);
+    }
+
+    #[test]
+    fn protocol_messages_classify_reliability() {
+        let command_message = ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(7),
+        };
+        let reconnect_message = ProtocolMessage::ReconnectRequest {
+            client_id: ClientId::new(3),
+            session_token: SessionToken::new(99),
+        };
+
+        assert_eq!(
+            command_message.reliability_class(),
+            ReliabilityClass::UnreliableSequenced
+        );
+        assert_eq!(
+            reconnect_message.reliability_class(),
+            ReliabilityClass::Reliable
+        );
     }
 }
