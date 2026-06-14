@@ -401,6 +401,7 @@ pub enum WorldEvent {
 /// monolithic `GameState` is fully split into authoritative world state and local client state.
 #[derive(Clone, Debug)]
 pub struct WorldState {
+    simulation_tick: SimulationTick,
     players: BTreeMap<PlayerId, Player>,
 }
 
@@ -408,8 +409,18 @@ impl WorldState {
     #[must_use]
     pub fn from_legacy_game(game: &GameState) -> Self {
         Self {
+            simulation_tick: SimulationTick::default(),
             players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
         }
+    }
+
+    #[must_use]
+    pub const fn simulation_tick(&self) -> SimulationTick {
+        self.simulation_tick
+    }
+
+    pub const fn set_simulation_tick(&mut self, tick: SimulationTick) {
+        self.simulation_tick = tick;
     }
 
     #[must_use]
@@ -434,7 +445,8 @@ impl WorldState {
             .collect()
     }
 
-    fn sync_from_legacy_game(&mut self, game: &GameState) {
+    fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
+        self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
     }
 }
@@ -874,7 +886,7 @@ impl GameSession {
 
     #[must_use]
     pub fn world_snapshot(&self) -> WorldSnapshot {
-        WorldSnapshot::from_world(self.current_tick, &self.world)
+        WorldSnapshot::from_world(self.world.simulation_tick(), &self.world)
     }
 
     #[must_use]
@@ -936,6 +948,7 @@ impl GameSession {
 
     pub const fn advance_tick(&mut self) {
         self.current_tick = self.current_tick.next();
+        self.world.set_simulation_tick(self.current_tick);
     }
 
     #[must_use]
@@ -1152,7 +1165,8 @@ impl GameSession {
         self.game.update(input, delta_seconds);
         self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
         self.sync_client_settings_from_legacy_game();
-        self.world.sync_from_legacy_game(&self.game);
+        self.world
+            .sync_from_legacy_game(self.current_tick, &self.game);
     }
 
     fn capture_legacy_events(
@@ -1202,7 +1216,7 @@ mod tests {
 
     use crate::{
         game_state::GameState,
-        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand},
+        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, SimulationTick},
     };
 
     use super::{GameSession, WorldState};
@@ -1265,6 +1279,19 @@ mod tests {
 
         assert_eq!(session.world().player_count(), 1);
         assert!(session.world().player(LOCAL_PLAYER_ID).is_some());
+    }
+
+    #[test]
+    fn world_state_tracks_authoritative_simulation_tick() {
+        let mut session = GameSession::new();
+
+        assert_eq!(session.world().simulation_tick(), SimulationTick::default());
+        session.advance_tick();
+        assert_eq!(session.world().simulation_tick(), SimulationTick::new(1));
+        assert_eq!(
+            session.world_snapshot().tick,
+            session.world().simulation_tick()
+        );
     }
 
     #[test]
