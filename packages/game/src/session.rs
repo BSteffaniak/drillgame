@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use crate::{
     game_state::GameState,
     input::PlayerInput,
     multiplayer::{
         ClientId, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId,
-        SequencedPlayerCommand, SimulationTick,
+        SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     save::SettingsFile,
@@ -91,6 +91,7 @@ pub struct GameSession {
     world: WorldState,
     local_client: ClientState,
     current_tick: SimulationTick,
+    simulation_accumulator: Duration,
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
 }
 
@@ -104,6 +105,7 @@ impl GameSession {
             world,
             local_client: ClientState::default(),
             current_tick: SimulationTick::default(),
+            simulation_accumulator: Duration::ZERO,
             pending_commands: BTreeMap::new(),
         }
     }
@@ -130,6 +132,24 @@ impl GameSession {
     #[must_use]
     pub const fn current_tick(&self) -> SimulationTick {
         self.current_tick
+    }
+
+    #[must_use]
+    pub const fn simulation_accumulator(&self) -> Duration {
+        self.simulation_accumulator
+    }
+
+    pub fn accumulate_frame_delta(&mut self, delta_seconds: f32) -> u32 {
+        self.simulation_accumulator += Duration::from_secs_f32(delta_seconds.max(0.0));
+        let fixed_delta = Duration::from_nanos(1_000_000_000 / u64::from(SIMULATION_HZ));
+        let steps = self.simulation_accumulator.as_nanos() / fixed_delta.as_nanos();
+        let capped_steps = u32::try_from(steps).unwrap_or(u32::MAX);
+        self.simulation_accumulator -= fixed_delta.saturating_mul(capped_steps);
+        capped_steps
+    }
+
+    pub const fn advance_tick(&mut self) {
+        self.current_tick = self.current_tick.next();
     }
 
     pub const fn apply_settings(&mut self, settings: SettingsFile) {
@@ -227,8 +247,12 @@ impl GameSession {
     }
 
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
-        let tick_commands = self.drain_commands_for_tick(self.current_tick);
-        drop(tick_commands);
+        let fixed_steps = self.accumulate_frame_delta(delta_seconds);
+        for _ in 0..fixed_steps {
+            let tick_commands = self.drain_commands_for_tick(self.current_tick);
+            drop(tick_commands);
+            self.advance_tick();
+        }
         self.sync_client_settings_to_legacy_game();
         self.game.update(input, delta_seconds);
         self.sync_client_settings_from_legacy_game();
@@ -244,6 +268,8 @@ impl Default for GameSession {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand};
 
     use super::GameSession;
@@ -287,5 +313,24 @@ mod tests {
 
         assert_eq!(commands.len(), 1);
         assert_eq!(session.pending_command_count(tick), 0);
+    }
+
+    #[test]
+    fn frame_delta_accumulator_reports_fixed_steps() {
+        let mut session = GameSession::new();
+
+        let steps = session.accumulate_frame_delta(crate::multiplayer::FIXED_DELTA_SECONDS * 2.5);
+
+        assert_eq!(steps, 2);
+        assert!(session.simulation_accumulator() > Duration::ZERO);
+    }
+
+    #[test]
+    fn advancing_tick_uses_simulation_tick_wrapper() {
+        let mut session = GameSession::new();
+
+        session.advance_tick();
+
+        assert_eq!(session.current_tick().get(), 1);
     }
 }
