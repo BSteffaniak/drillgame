@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Stable identity for a player participating in an authoritative simulation.
@@ -235,10 +237,70 @@ impl ProtocolMessage {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandAcceptance {
+    Accepted,
+    Duplicate,
+    TooOld,
+    TooFarInFuture,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CommandSequenceTracker {
+    latest_sequences: BTreeMap<(ClientId, PlayerId), InputSequence>,
+}
+
+impl CommandSequenceTracker {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            latest_sequences: BTreeMap::new(),
+        }
+    }
+
+    pub fn accept_command(
+        &mut self,
+        client_id: ClientId,
+        command: &SequencedPlayerCommand,
+        current_tick: SimulationTick,
+        max_future_ticks: u64,
+    ) -> CommandAcceptance {
+        if command.target_tick < current_tick {
+            return CommandAcceptance::TooOld;
+        }
+        if command.target_tick.get().saturating_sub(current_tick.get()) > max_future_ticks {
+            return CommandAcceptance::TooFarInFuture;
+        }
+
+        let key = (client_id, command.player_id);
+        if self
+            .latest_sequences
+            .get(&key)
+            .is_some_and(|sequence| *sequence >= command.sequence)
+        {
+            return CommandAcceptance::Duplicate;
+        }
+
+        self.latest_sequences.insert(key, command.sequence);
+        CommandAcceptance::Accepted
+    }
+
+    #[must_use]
+    pub fn latest_sequence(
+        &self,
+        client_id: ClientId,
+        player_id: PlayerId,
+    ) -> Option<InputSequence> {
+        self.latest_sequences.get(&(client_id, player_id)).copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientId, InputSequence, ProtocolMessage, ReliabilityClass, SessionToken, SimulationTick,
+        ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
+        PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
+        SimulationTick,
     };
 
     #[test]
@@ -272,6 +334,46 @@ mod tests {
         assert_eq!(
             reconnect_message.reliability_class(),
             ReliabilityClass::Reliable
+        );
+    }
+
+    #[test]
+    fn command_sequence_tracker_rejects_duplicates_and_bad_ticks() {
+        let mut tracker = CommandSequenceTracker::new();
+        let client_id = ClientId::new(4);
+        let player_id = PlayerId::new(8);
+        let command = SequencedPlayerCommand {
+            player_id,
+            sequence: InputSequence::new(2),
+            target_tick: SimulationTick::new(10),
+            command: PlayerCommand::Interact,
+        };
+
+        assert_eq!(
+            tracker.accept_command(client_id, &command, SimulationTick::new(9), 4),
+            CommandAcceptance::Accepted
+        );
+        assert_eq!(
+            tracker.accept_command(client_id, &command, SimulationTick::new(9), 4),
+            CommandAcceptance::Duplicate
+        );
+        assert_eq!(
+            tracker.accept_command(client_id, &command, SimulationTick::new(11), 4),
+            CommandAcceptance::TooOld
+        );
+
+        let far_future_command = SequencedPlayerCommand {
+            target_tick: SimulationTick::new(100),
+            sequence: InputSequence::new(3),
+            ..command
+        };
+        assert_eq!(
+            tracker.accept_command(client_id, &far_future_command, SimulationTick::new(10), 4),
+            CommandAcceptance::TooFarInFuture
+        );
+        assert_eq!(
+            tracker.latest_sequence(client_id, player_id),
+            Some(InputSequence::new(2))
         );
     }
 }
