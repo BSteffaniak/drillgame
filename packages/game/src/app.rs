@@ -66,6 +66,12 @@ pub fn run() {
         let _client_view_count = session.client_count();
         let _client_views = session.render_views();
 
+        let _prediction_buffer_len = session
+            .local_client()
+            .prediction()
+            .unacknowledged_commands()
+            .len();
+
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
         let _world_delta_is_empty = world_delta.is_empty();

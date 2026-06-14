@@ -268,6 +268,28 @@ impl ClientView {
     }
 }
 
+/// Local prediction/reconciliation bookkeeping for one client.
+#[derive(Clone, Debug, Default)]
+pub struct ClientPredictionState {
+    unacknowledged_commands: Vec<SequencedPlayerCommand>,
+}
+
+impl ClientPredictionState {
+    #[must_use]
+    pub fn unacknowledged_commands(&self) -> &[SequencedPlayerCommand] {
+        &self.unacknowledged_commands
+    }
+
+    fn remember_commands(&mut self, commands: &[SequencedPlayerCommand]) {
+        self.unacknowledged_commands.extend_from_slice(commands);
+    }
+
+    pub fn acknowledge_through(&mut self, sequence: InputSequence) {
+        self.unacknowledged_commands
+            .retain(|command| command.sequence > sequence);
+    }
+}
+
 /// Local client state that is intentionally separate from authoritative gameplay state.
 #[derive(Clone, Debug)]
 pub struct ClientState {
@@ -278,6 +300,7 @@ pub struct ClientState {
     pub settings_dirty: bool,
     pub exit_requested: bool,
     pub view: ClientView,
+    prediction: ClientPredictionState,
     next_input_sequence: InputSequence,
 }
 
@@ -293,6 +316,7 @@ impl ClientState {
             settings_dirty: false,
             exit_requested: false,
             view: ClientView::from_legacy_game(&legacy_game),
+            prediction: ClientPredictionState::default(),
             next_input_sequence: InputSequence::new(0),
         }
     }
@@ -301,6 +325,19 @@ impl ClientState {
         let sequence = self.next_input_sequence;
         self.next_input_sequence = self.next_input_sequence.next();
         sequence
+    }
+
+    #[must_use]
+    pub const fn prediction(&self) -> &ClientPredictionState {
+        &self.prediction
+    }
+
+    fn remember_predicted_commands(&mut self, commands: &[SequencedPlayerCommand]) {
+        self.prediction.remember_commands(commands);
+    }
+
+    pub fn acknowledge_commands_through(&mut self, sequence: InputSequence) {
+        self.prediction.acknowledge_through(sequence);
     }
 }
 
@@ -545,6 +582,10 @@ impl GameSession {
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
         let sequenced = self.sequence_commands_for_client(client_id, commands);
+        self.clients
+            .get_mut(&client_id)
+            .expect("client exists in game session")
+            .remember_predicted_commands(&sequenced);
         self.buffer_commands(sequenced.clone());
         sequenced
     }
@@ -590,6 +631,17 @@ impl GameSession {
         self.pending_commands.remove(&tick).unwrap_or_default()
     }
 
+    pub fn acknowledge_client_commands_through(
+        &mut self,
+        client_id: ClientId,
+        sequence: InputSequence,
+    ) {
+        self.clients
+            .get_mut(&client_id)
+            .expect("client exists in game session")
+            .acknowledge_commands_through(sequence);
+    }
+
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
@@ -599,6 +651,16 @@ impl GameSession {
                 tick,
                 command_count: tick_commands.len(),
             });
+            if !tick_commands.is_empty() {
+                let latest_sequence = tick_commands
+                    .iter()
+                    .filter(|command| command.player_id == self.local_client().controlled_player_id)
+                    .map(|command| command.sequence)
+                    .max();
+                if let Some(sequence) = latest_sequence {
+                    self.acknowledge_client_commands_through(self.local_client_id, sequence);
+                }
+            }
             self.advance_tick();
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
@@ -738,6 +800,30 @@ mod tests {
         assert_eq!(commands[0].player_id, LOCAL_PLAYER_ID);
         assert_eq!(commands[0].sequence.get(), 0);
         assert_eq!(session.pending_command_count(session.current_tick()), 1);
+        assert_eq!(
+            session
+                .local_client()
+                .prediction()
+                .unacknowledged_commands()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn acknowledged_commands_are_removed_from_prediction_buffer() {
+        let mut session = GameSession::new();
+        let commands = session.sequence_local_commands(vec![PlayerCommand::Interact]);
+
+        session.acknowledge_client_commands_through(LOCAL_CLIENT_ID, commands[0].sequence);
+
+        assert!(
+            session
+                .local_client()
+                .prediction()
+                .unacknowledged_commands()
+                .is_empty()
+        );
     }
 
     #[test]
