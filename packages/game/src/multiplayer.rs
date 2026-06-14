@@ -180,6 +180,72 @@ pub struct CommandAcknowledgement {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommandRejection {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub sequence: InputSequence,
+    pub reason: CommandAcceptance,
+    pub authoritative_tick: SimulationTick,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CommandApplicationResponse {
+    Acknowledged(CommandAcknowledgement),
+    Rejected(CommandRejection),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommandNetworkSession {
+    tracker: CommandSequenceTracker,
+    current_tick: SimulationTick,
+    max_future_ticks: u64,
+}
+
+impl CommandNetworkSession {
+    #[must_use]
+    pub const fn new(current_tick: SimulationTick, max_future_ticks: u64) -> Self {
+        Self {
+            tracker: CommandSequenceTracker::new(),
+            current_tick,
+            max_future_ticks,
+        }
+    }
+
+    pub fn apply_command_packet(
+        &mut self,
+        packet: &CommandPacket,
+    ) -> Vec<CommandApplicationResponse> {
+        packet
+            .commands
+            .iter()
+            .map(|command| {
+                let acceptance = self.tracker.accept_command(
+                    packet.client_id,
+                    command,
+                    self.current_tick,
+                    self.max_future_ticks,
+                );
+                if acceptance == CommandAcceptance::Accepted {
+                    CommandApplicationResponse::Acknowledged(CommandAcknowledgement {
+                        client_id: packet.client_id,
+                        acknowledged_sequence: command.sequence,
+                        authoritative_tick: self.current_tick,
+                    })
+                } else {
+                    CommandApplicationResponse::Rejected(CommandRejection {
+                        client_id: packet.client_id,
+                        player_id: command.player_id,
+                        sequence: command.sequence,
+                        reason: acceptance,
+                        authoritative_tick: self.current_tick,
+                    })
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ReliabilityClass {
     Reliable,
     UnreliableSequenced,
@@ -357,7 +423,7 @@ impl ProtocolMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CommandAcceptance {
     Accepted,
     Duplicate,
@@ -365,7 +431,7 @@ pub enum CommandAcceptance {
     TooFarInFuture,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommandSequenceTracker {
     latest_sequences: BTreeMap<(ClientId, PlayerId), InputSequence>,
 }
@@ -690,15 +756,15 @@ pub const fn session_continuity_decision(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientId, CommandAcceptance, CommandSequenceTracker, CommandSource, InputSequence,
-        NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass,
-        SequencedPlayerCommand, SessionToken, SimulationTick, client_authority_allowed,
-        command_conflicts, default_local_client_runtime, disconnect_reservation_policy,
-        host_save_decision, initial_collision_policy, initial_discovery_sharing_policy,
-        initial_message_routing_policy, initial_resource_ownership_policy,
-        initial_transport_policy, packet_recovery_action, per_client_ui_policy,
-        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
-        transport_integration_status,
+        ClientId, CommandAcceptance, CommandNetworkSession, CommandPacket, CommandSequenceTracker,
+        CommandSource, InputSequence, NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage,
+        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        client_authority_allowed, command_conflicts, default_local_client_runtime,
+        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
+        initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
+        per_client_ui_policy, session_continuity_decision, session_shutdown_decision,
+        terrain_recovery_decision, transport_integration_status,
     };
 
     #[test]
@@ -825,6 +891,48 @@ mod tests {
             tracker.latest_sequence(client_id, player_id),
             Some(InputSequence::new(2))
         );
+    }
+
+    #[test]
+    fn command_network_session_acknowledges_and_rejects_packets() {
+        let client_id = ClientId::new(7);
+        let player_id = PlayerId::new(9);
+        let mut network_session = CommandNetworkSession::new(SimulationTick::new(10), 2);
+        let accepted_packet = CommandPacket {
+            client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(10),
+                command: PlayerCommand::Interact,
+            }],
+        };
+        let rejected_packet = CommandPacket {
+            client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(2),
+                target_tick: SimulationTick::new(20),
+                command: PlayerCommand::Interact,
+            }],
+        };
+
+        let accepted = network_session.apply_command_packet(&accepted_packet);
+        let rejected = network_session.apply_command_packet(&rejected_packet);
+
+        assert!(matches!(
+            accepted.as_slice(),
+            [super::CommandApplicationResponse::Acknowledged(_)]
+        ));
+        assert!(matches!(
+            rejected.as_slice(),
+            [super::CommandApplicationResponse::Rejected(
+                super::CommandRejection {
+                    reason: CommandAcceptance::TooFarInFuture,
+                    ..
+                }
+            )]
+        ));
     }
 
     #[test]
