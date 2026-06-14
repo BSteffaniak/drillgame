@@ -21,8 +21,8 @@ use crate::{
     save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
     surface::surface_building_at_tile,
     terrain::{
-        ArtifactKind, MineResult, MineralKind, StrategicResourceKind, Terrain, TileKind,
-        TilePosition,
+        ArtifactKind, DeepStratum, MineResult, MineralKind, StrategicResourceKind, Terrain,
+        TileKind, TilePosition, deep_stratum_at_depth,
     },
 };
 
@@ -1268,7 +1268,21 @@ impl GameState {
                     }
                     if let Some(tile) = self.terrain.tile(position) {
                         self.collection_log.discover_tile(tile.kind);
-                        if scanner_can_mark(tile.kind, self.player.scanner_level)
+                        let can_mark = scanner_can_mark(tile.kind, self.player.scanner_level)
+                            || (self.has_equipped_part(RigPartKind::ProspectorScanner)
+                                && matches!(tile.kind, TileKind::Ore(_)))
+                            || (self.has_equipped_part(RigPartKind::HazardScanner)
+                                && matches!(
+                                    tile.kind,
+                                    TileKind::Gas
+                                        | TileKind::Lava
+                                        | TileKind::MagmaVent
+                                        | TileKind::ExplosivePocket
+                                        | TileKind::PressurePocket
+                                ))
+                            || (self.has_equipped_part(RigPartKind::RelicScanner)
+                                && matches!(tile.kind, TileKind::Artifact(_)));
+                        if can_mark
                             && !self
                                 .scan_markers
                                 .iter()
@@ -3164,14 +3178,36 @@ impl GameState {
         self.sound_cues.push(SoundCue::Upgrade);
     }
 
+    fn has_equipped_part(&self, part: RigPartKind) -> bool {
+        self.equipped_rig_parts
+            .values()
+            .any(|equipped| *equipped == part)
+    }
+
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
         let can_burn_fuel = self.player.fuel > 0.0;
         let grounded = self.is_grounded();
         let cargo_ratio =
             self.player.cargo_used() as f32 / self.player.cargo_capacity.max(1) as f32;
-        let cargo_penalty = 1.0 - cargo_ratio.min(1.0) * 0.18;
-        let engine_multiplier =
+        let cargo_pressure = if self.has_equipped_part(RigPartKind::HaulerEngine) {
+            0.08
+        } else if self.has_equipped_part(RigPartKind::LightweightEngine) {
+            0.28
+        } else {
+            0.18
+        };
+        let cargo_penalty = 1.0 - cargo_ratio.min(1.0) * cargo_pressure;
+        let mut engine_multiplier =
             (1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.28) * cargo_penalty;
+        if self.has_equipped_part(RigPartKind::LightweightEngine) {
+            engine_multiplier *= 1.12;
+        }
+        if self.has_equipped_part(RigPartKind::HaulerEngine) {
+            engine_multiplier *= 0.92;
+        }
+        if self.has_equipped_part(RigPartKind::BurstEngine) {
+            engine_multiplier *= 1.25;
+        }
         let horizontal_acceleration = if grounded {
             HORIZONTAL_ACCELERATION * 1.35
         } else {
@@ -3183,7 +3219,14 @@ impl GameState {
 
         if input.thrust && can_burn_fuel {
             self.player.velocity_y -= THRUST_ACCELERATION * engine_multiplier * delta_seconds;
-            let efficiency = 1.0 - f32::from(self.player.fuel_tank_level.saturating_sub(1)) * 0.06;
+            let mut efficiency =
+                1.0 - f32::from(self.player.fuel_tank_level.saturating_sub(1)) * 0.06;
+            if self.has_equipped_part(RigPartKind::BurstEngine) {
+                efficiency *= 1.22;
+            }
+            if self.has_equipped_part(RigPartKind::TitanDrill) {
+                efficiency *= 1.08;
+            }
             self.player.fuel =
                 (self.player.fuel - FUEL_BURN_PER_SECOND * efficiency * delta_seconds).max(0.0);
         }
@@ -3246,7 +3289,14 @@ impl GameState {
     }
 
     fn mechanic_crash_damage(&self, damage: f32) -> f32 {
-        let mitigation = (f32::from(self.town_development.mechanic_level) * 0.08).min(0.32);
+        let mut mitigation = (f32::from(self.town_development.mechanic_level) * 0.08).min(0.32);
+        if self.has_equipped_part(RigPartKind::ImpactHull) {
+            mitigation += 0.22;
+        }
+        if self.has_equipped_part(RigPartKind::ThermalHull) {
+            mitigation -= 0.10;
+        }
+        let mitigation = mitigation.clamp(0.0, 0.55);
         damage * (1.0 - mitigation)
     }
 
@@ -3304,10 +3354,17 @@ impl GameState {
             self.active_drill = None;
             return;
         }
+        let effective_drill_strength = if self.has_equipped_part(RigPartKind::TitanDrill)
+            || self.has_equipped_part(RigPartKind::ResonanceDrill)
+        {
+            self.player.drill_strength.saturating_add(1)
+        } else {
+            self.player.drill_strength
+        };
         if self
             .terrain
             .hardness_at(target)
-            .is_some_and(|hardness| hardness > self.player.drill_strength)
+            .is_some_and(|hardness| hardness > effective_drill_strength)
         {
             self.active_drill = None;
             self.sound_cues.push(SoundCue::Damage);
@@ -3317,8 +3374,26 @@ impl GameState {
             return;
         }
 
-        let seconds_per_chip =
-            drill_seconds_per_chip(tile.kind, self.player.drill_strength, direction);
+        let mut seconds_per_chip =
+            drill_seconds_per_chip(tile.kind, effective_drill_strength, direction);
+        if self.has_equipped_part(RigPartKind::NeedleDrill) {
+            seconds_per_chip *= match tile.kind {
+                TileKind::Dirt | TileKind::Clay => 0.72,
+                TileKind::Stone | TileKind::HardRock => 1.25,
+                _ => 0.95,
+            };
+        }
+        if self.has_equipped_part(RigPartKind::TitanDrill) {
+            seconds_per_chip *= 1.10;
+        }
+        if self.has_equipped_part(RigPartKind::ResonanceDrill)
+            && matches!(
+                deep_stratum_at_depth(target.y),
+                Some(DeepStratum::CrystalFaults | DeepStratum::AncientMachineLayer)
+            )
+        {
+            seconds_per_chip *= 0.65;
+        }
         let reset = self
             .active_drill
             .is_none_or(|state| state.target != target || state.direction != direction);
@@ -3772,8 +3847,17 @@ impl GameState {
         }
 
         let depth_factor = ((self.player.y - safe_depth) / (12.0 * TILE_SIZE)).max(1.0);
-        let heat_multiplier =
+        let mut heat_multiplier =
             1.0 + self.world_event_severity(WorldEventKind::HeatWave) as f32 * 0.18;
+        if self.has_equipped_part(RigPartKind::ThermalHull) {
+            heat_multiplier *= 0.55;
+        }
+        if self.has_equipped_part(RigPartKind::ImpactHull) {
+            heat_multiplier *= 1.18;
+        }
+        if self.has_equipped_part(RigPartKind::PressureHull) && self.player.y >= 90.0 * TILE_SIZE {
+            heat_multiplier *= 0.72;
+        }
         let damage = HEAT_DAMAGE_PER_SECOND * depth_factor * heat_multiplier * delta_seconds;
         self.player.hull = (self.player.hull - damage).max(0.0);
         "Depth pressure overheating hull. Upgrade radiator.".clone_into(&mut self.message);
@@ -3794,8 +3878,17 @@ impl GameState {
         }
 
         let player_tile = self.player.tile_position(TILE_SIZE);
-        let heat_multiplier =
+        let mut heat_multiplier =
             1.0 + self.world_event_severity(WorldEventKind::HeatWave) as f32 * 0.18;
+        if self.has_equipped_part(RigPartKind::ThermalHull) {
+            heat_multiplier *= 0.55;
+        }
+        if self.has_equipped_part(RigPartKind::ImpactHull) {
+            heat_multiplier *= 1.18;
+        }
+        if self.has_equipped_part(RigPartKind::PressureHull) && self.player.y >= 90.0 * TILE_SIZE {
+            heat_multiplier *= 0.72;
+        }
         let damage = if self.is_pump_protected(player_tile) {
             2.5 * heat_multiplier * delta_seconds
         } else {
