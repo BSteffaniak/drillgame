@@ -431,6 +431,16 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         );
     }
 
+    for item in &game.infrastructure {
+        draw_map_marker(
+            draw,
+            &projection,
+            item.position.x,
+            item.position.y,
+            Color::SKYBLUE,
+        );
+    }
+
     for warning in &game.collapse_warnings {
         draw_map_marker(draw, &projection, warning.x, warning.y, Color::RED);
     }
@@ -1347,6 +1357,13 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_rectangle(px - 2, py - 2, 5, 5, marker_color(marker.kind));
     }
 
+    for item in &game.infrastructure {
+        let px = x + item.position.x * width / terrain_width;
+        let py = y + item.position.y * height / terrain_height;
+        draw.draw_circle_lines(px, py, 6.0, Color::SKYBLUE);
+        draw.draw_text("R", px + 7, py - 6, 10, Color::SKYBLUE);
+    }
+
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     draw.draw_circle(player_x, player_y, 6.0, Color::SKYBLUE);
@@ -1385,7 +1402,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(&format!("{depth}m"), x - 44, py - 6, 12, Color::LIGHTGRAY);
     }
     draw.draw_text(
-        "Legend: gold ore | orange rare/blast | magenta artifact | red lava/vent | green gas | cyan pressure | blue you",
+        "Legend: gold ore | orange rare/blast | magenta artifact | red lava/vent | green gas | cyan pressure | sky relay | blue you",
         190,
         612,
         16,

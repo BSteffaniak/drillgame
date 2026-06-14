@@ -2757,6 +2757,7 @@ impl GameState {
         if self.market_history.len() > 7 {
             self.market_history.remove(0);
         }
+        self.apply_infrastructure_maintenance();
         for mineral in all_minerals() {
             let history = self.mineral_market_history.entry(mineral).or_default();
             history.push(market_factor_for(
@@ -2767,6 +2768,29 @@ impl GameState {
             if history.len() > 7 {
                 history.remove(0);
             }
+        }
+    }
+
+    fn apply_infrastructure_maintenance(&mut self) {
+        let cost = self.infrastructure.len() as u32 * 3;
+        if cost == 0 {
+            return;
+        }
+        let paid = self.player.credits.min(cost);
+        self.player.credits -= paid;
+        if paid < cost {
+            let lost = self
+                .infrastructure
+                .len()
+                .saturating_sub((paid / 3) as usize);
+            for _ in 0..lost {
+                self.infrastructure.pop();
+            }
+            self.message = format!(
+                "Infrastructure maintenance shortfall: paid {paid}/{cost} credits, {lost} relays failed."
+            );
+        } else {
+            self.message = format!("Paid {cost} credits to maintain signal relay network.");
         }
     }
 
