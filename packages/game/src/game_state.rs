@@ -242,6 +242,16 @@ impl Expedition {
             ExpeditionObjectiveKind::ScanHazards => format!("Map {} hazards", self.required),
         }
     }
+    #[must_use]
+    pub const fn risk_label(self) -> &'static str {
+        match self.kind {
+            ExpeditionObjectiveKind::ReachDepth if self.required >= 120 => "extreme",
+            ExpeditionObjectiveKind::ReachDepth if self.required >= 90 => "high",
+            ExpeditionObjectiveKind::DeliverCargo if self.required >= 3 => "medium",
+            ExpeditionObjectiveKind::ScanHazards => "medium",
+            _ => "low",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -783,6 +793,52 @@ impl GameState {
             .and_then(|index| self.explored_tiles.get(index))
             .copied()
             .unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn expedition_progress(&self, expedition: Expedition) -> u32 {
+        match expedition.kind {
+            ExpeditionObjectiveKind::ReachDepth => {
+                (self.deepest_tile_reached as u32).min(expedition.required)
+            }
+            ExpeditionObjectiveKind::DeliverCargo => match expedition.target {
+                TileKind::Ore(mineral) => self
+                    .player
+                    .cargo
+                    .get(&mineral)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(expedition.required),
+                TileKind::Artifact(artifact) => self
+                    .player
+                    .artifacts
+                    .get(&artifact)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(expedition.required),
+                _ => 0,
+            },
+            ExpeditionObjectiveKind::ScanHazards => {
+                self.scan_markers
+                    .iter()
+                    .filter(|marker| marker.kind == expedition.target)
+                    .count()
+                    .min(expedition.required as usize) as u32
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn expedition_status_line(&self, expedition: Expedition) -> String {
+        format!(
+            "{} {}/{} | {} cr | {} risk | day {}",
+            expedition.title(),
+            self.expedition_progress(expedition),
+            expedition.required,
+            expedition.reward,
+            expedition.risk_label(),
+            expedition.expires_day
+        )
     }
 
     #[must_use]

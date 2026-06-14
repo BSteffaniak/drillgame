@@ -69,6 +69,7 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 
     draw.draw_text(&game.town_event, 22, 96, 16, Color::LIGHTGRAY);
+    draw_expedition_tracker(draw, game);
     if game.player.scanner_level > 0 {
         let scanner = if game.scanner_cooldown_seconds > 0.0 {
             format!("Scanner cooldown {:.1}s", game.scanner_cooldown_seconds)
@@ -95,6 +96,22 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     if game.show_details {
         draw_debug_stats(draw, game);
+    }
+}
+
+fn draw_expedition_tracker(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    if game.active_expeditions.is_empty() {
+        return;
+    }
+    draw.draw_text("Expeditions:", 22, 138, 16, Color::GREEN);
+    for (index, expedition) in game.active_expeditions.iter().take(3).enumerate() {
+        draw.draw_text(
+            &game.expedition_status_line(*expedition),
+            36,
+            160 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            15,
+            Color::RAYWHITE,
+        );
     }
 }
 
@@ -907,12 +924,7 @@ fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             Color::RAYWHITE
         };
         draw.draw_text(
-            &format!(
-                "{} | reward {} cr | expires day {}",
-                expedition.title(),
-                expedition.reward,
-                expedition.expires_day
-            ),
+            &game.expedition_status_line(*expedition),
             350,
             265 + i32::try_from(index).unwrap_or(i32::MAX) * 34,
             20,
@@ -925,7 +937,7 @@ fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     for (index, expedition) in game.active_expeditions.iter().enumerate() {
         draw.draw_text(
-            &format!("{} | {} cr", expedition.title(), expedition.reward),
+            &game.expedition_status_line(*expedition),
             350,
             430 + i32::try_from(index).unwrap_or(i32::MAX) * 28,
             19,
