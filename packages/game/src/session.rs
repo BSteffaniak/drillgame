@@ -362,10 +362,6 @@ impl GameSession {
         WorldSnapshot::from_world(self.current_tick, &self.world)
     }
 
-    pub const fn game_mut(&mut self) -> &mut GameState {
-        &mut self.game
-    }
-
     #[must_use]
     pub fn local_client(&self) -> &ClientState {
         self.clients

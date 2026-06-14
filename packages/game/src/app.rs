@@ -52,6 +52,7 @@ pub fn run() {
         let _local_player = session
             .world()
             .player(session.local_client().controlled_player_id);
+        let _legacy_visual_changes = session.game().visual_changes();
         let _player_count = session.world().player_count();
         let _world_snapshot = session.world_snapshot();
         let _sequenced_commands = session.sequence_local_commands(mapped_input.player_commands);
@@ -84,7 +85,7 @@ pub fn run() {
             audio.play(&session.game().sound_cues);
         }
 
-        renderer.sync(&mut raylib, &thread, session.game_mut());
+        renderer.sync_delta(&mut raylib, &thread, session.game(), &world_delta);
 
         let mut draw = raylib.begin_drawing(&thread);
         let client_views = session.client_views();

@@ -26,7 +26,7 @@ use world::{
 
 use crate::{
     game_state::{GameState, RunMode},
-    session::ClientView,
+    session::{ClientView, WorldDelta, WorldEvent},
 };
 
 const SCREEN_WIDTH: i32 = 1280;
@@ -43,13 +43,30 @@ impl GameRenderer {
         }
     }
 
-    pub fn sync(&mut self, raylib: &mut RaylibHandle, thread: &RaylibThread, game: &mut GameState) {
-        let visual_changes = game.take_visual_changes();
-        if visual_changes.full_terrain_refresh {
-            self.terrain.mark_all_dirty();
-        }
-        for tile in visual_changes.changed_tiles {
-            self.terrain.mark_tile_dirty(tile);
+    pub fn sync_delta(
+        &mut self,
+        raylib: &mut RaylibHandle,
+        thread: &RaylibThread,
+        game: &GameState,
+        delta: &WorldDelta,
+    ) {
+        for event in &delta.events {
+            match event {
+                WorldEvent::TerrainRefreshRequested => self.terrain.mark_all_dirty(),
+                WorldEvent::TerrainTilesChanged { positions } => {
+                    for tile in positions {
+                        self.terrain.mark_tile_dirty(*tile);
+                    }
+                }
+                WorldEvent::TickAdvanced { .. }
+                | WorldEvent::CommandsProcessed { .. }
+                | WorldEvent::TerrainChunksChanged { .. }
+                | WorldEvent::SnapshotKeyframeReady { .. }
+                | WorldEvent::MessageChanged { .. }
+                | WorldEvent::PlayerChanged { .. }
+                | WorldEvent::ClientExitRequested { .. }
+                | WorldEvent::ClientSettingsChanged { .. } => {}
+            }
         }
         self.terrain.sync(raylib, thread, game);
     }

@@ -1091,8 +1091,9 @@ impl GameState {
         }
     }
 
-    pub fn take_visual_changes(&mut self) -> VisualChanges {
-        std::mem::take(&mut self.visual_changes)
+    #[must_use]
+    pub const fn visual_changes(&self) -> &VisualChanges {
+        &self.visual_changes
     }
 
     pub const fn mark_full_terrain_refresh(&mut self) {
