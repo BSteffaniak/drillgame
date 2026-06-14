@@ -295,6 +295,58 @@ impl CommandSequenceTracker {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PerClientUiPolicy {
+    SharedLegacyUi,
+    IndependentClientUi,
+}
+
+#[must_use]
+pub const fn per_client_ui_policy(client_count: usize) -> PerClientUiPolicy {
+    if client_count <= 1 {
+        PerClientUiPolicy::SharedLegacyUi
+    } else {
+        PerClientUiPolicy::IndependentClientUi
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostSaveDecision {
+    SaveImmediately,
+    CoordinateConnectedClients,
+}
+
+#[must_use]
+pub const fn host_save_decision(connected_client_count: usize) -> HostSaveDecision {
+    if connected_client_count <= 1 {
+        HostSaveDecision::SaveImmediately
+    } else {
+        HostSaveDecision::CoordinateConnectedClients
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionShutdownDecision {
+    Continue,
+    EndSession,
+    RemoveDisconnectedClient,
+}
+
+#[must_use]
+pub const fn session_shutdown_decision(
+    host_left: bool,
+    client_left: bool,
+    shutdown_requested: bool,
+) -> SessionShutdownDecision {
+    if shutdown_requested || host_left {
+        SessionShutdownDecision::EndSession
+    } else if client_left {
+        SessionShutdownDecision::RemoveDisconnectedClient
+    } else {
+        SessionShutdownDecision::Continue
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CommandConflict {
     SameTickMining,
@@ -381,7 +433,8 @@ mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
         PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
-        SimulationTick, command_conflicts, session_continuity_decision, terrain_recovery_decision,
+        SimulationTick, command_conflicts, host_save_decision, per_client_ui_policy,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
     };
 
     #[test]
@@ -524,6 +577,50 @@ mod tests {
         assert_eq!(
             session_continuity_decision(Some(token), Some(SessionToken::new(999))),
             super::SessionContinuityDecision::AssignNewPlayer
+        );
+    }
+
+    #[test]
+    fn split_screen_ui_policy_changes_for_multiple_clients() {
+        assert_eq!(
+            per_client_ui_policy(1),
+            super::PerClientUiPolicy::SharedLegacyUi
+        );
+        assert_eq!(
+            per_client_ui_policy(2),
+            super::PerClientUiPolicy::IndependentClientUi
+        );
+    }
+
+    #[test]
+    fn host_save_coordinates_when_clients_are_connected() {
+        assert_eq!(
+            host_save_decision(1),
+            super::HostSaveDecision::SaveImmediately
+        );
+        assert_eq!(
+            host_save_decision(2),
+            super::HostSaveDecision::CoordinateConnectedClients
+        );
+    }
+
+    #[test]
+    fn session_shutdown_policy_handles_host_and_client_leaves() {
+        assert_eq!(
+            session_shutdown_decision(false, false, false),
+            super::SessionShutdownDecision::Continue
+        );
+        assert_eq!(
+            session_shutdown_decision(false, true, false),
+            super::SessionShutdownDecision::RemoveDisconnectedClient
+        );
+        assert_eq!(
+            session_shutdown_decision(true, false, false),
+            super::SessionShutdownDecision::EndSession
+        );
+        assert_eq!(
+            session_shutdown_decision(false, false, true),
+            super::SessionShutdownDecision::EndSession
         );
     }
 }
