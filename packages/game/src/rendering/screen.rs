@@ -10,7 +10,7 @@ use crate::{
     game_state::{GameState, ModalScreen, PauseOption, RunMode, SideContractKind, TILE_SIZE},
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
-    terrain::{MineralKind, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
 };
 
 struct MinimapProjection {
@@ -585,6 +585,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::Help => draw_help(draw),
         ModalScreen::TownDevelopment => draw_town_development(draw, game),
         ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
+        ModalScreen::ResearchLog => draw_research_log(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -764,6 +765,7 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.deep_claim_status == DeepClaimStatus::Unlocked {
         options.push("Deep Claim town development".to_owned());
         options.push("Expedition board".to_owned());
+        options.push("Research log".to_owned());
     }
     for (index, option) in options.iter().enumerate() {
         draw.draw_text(
@@ -785,6 +787,82 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+}
+
+fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Research Log", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        "Discover minerals by mining/scanning. Discover hazards by scanner contact.",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
+    let mineral_total = 10;
+    let artifact_total = 4;
+    draw.draw_text(
+        &format!(
+            "Minerals: {}/{} | Artifacts: {}/{} | Hazards: {} | Strata: {}",
+            game.collection_log.minerals.len(),
+            mineral_total,
+            game.collection_log.artifacts.len(),
+            artifact_total,
+            game.collection_log.hazards.len(),
+            game.collection_log.strata.len()
+        ),
+        330,
+        220,
+        20,
+        Color::SKYBLUE,
+    );
+    let minerals = [
+        MineralKind::Copper,
+        MineralKind::Iron,
+        MineralKind::Silver,
+        MineralKind::Gold,
+        MineralKind::Emerald,
+        MineralKind::Ruby,
+        MineralKind::Diamond,
+        MineralKind::Platinum,
+        MineralKind::Uranium,
+        MineralKind::Mythril,
+    ];
+    for (index, mineral) in minerals.iter().enumerate() {
+        let known = game.collection_log.minerals.contains(mineral);
+        draw.draw_text(
+            if known { mineral.name() } else { "???" },
+            350 + i32::try_from(index % 2).unwrap_or_default() * 160,
+            265 + i32::try_from(index / 2).unwrap_or_default() * 28,
+            20,
+            if known { Color::RAYWHITE } else { Color::GRAY },
+        );
+    }
+    let artifacts = [
+        ArtifactKind::Fossil,
+        ArtifactKind::OldCircuit,
+        ArtifactKind::BuriedIdol,
+        ArtifactKind::StarCore,
+    ];
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let known = game.collection_log.artifacts.contains(artifact);
+        draw.draw_text(
+            if known { artifact.name() } else { "???" },
+            350 + i32::try_from(index % 2).unwrap_or_default() * 190,
+            430 + i32::try_from(index / 2).unwrap_or_default() * 28,
+            20,
+            if known { Color::RAYWHITE } else { Color::GRAY },
+        );
+    }
+    draw.draw_text("Hazards", 620, 265, 20, Color::ORANGE);
+    for (index, hazard) in game.collection_log.hazards.iter().enumerate() {
+        draw.draw_text(
+            hazard.name(),
+            620,
+            300 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
+            18,
+            Color::RAYWHITE,
+        );
+    }
 }
 
 fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {

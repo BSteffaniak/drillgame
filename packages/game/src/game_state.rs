@@ -108,6 +108,7 @@ pub enum ModalScreen {
     Help,
     TownDevelopment,
     ExpeditionBoard,
+    ResearchLog,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -175,6 +176,39 @@ pub enum SideContractKind {
     DepthSurvey,
     HazardScan,
     Rush,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CollectionLog {
+    #[serde(default)]
+    pub minerals: std::collections::BTreeSet<MineralKind>,
+    #[serde(default)]
+    pub artifacts: std::collections::BTreeSet<ArtifactKind>,
+    #[serde(default)]
+    pub hazards: std::collections::BTreeSet<TileKind>,
+    #[serde(default)]
+    pub strata: std::collections::BTreeSet<i32>,
+}
+
+impl CollectionLog {
+    fn discover_tile(&mut self, tile: TileKind) {
+        match tile {
+            TileKind::Ore(mineral) => {
+                self.minerals.insert(mineral);
+            }
+            TileKind::Artifact(artifact) => {
+                self.artifacts.insert(artifact);
+            }
+            TileKind::Lava
+            | TileKind::Gas
+            | TileKind::ExplosivePocket
+            | TileKind::PressurePocket
+            | TileKind::MagmaVent => {
+                self.hazards.insert(tile);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -291,6 +325,8 @@ pub struct GameState {
     pub deep_claim_status: DeepClaimStatus,
     #[serde(default)]
     pub town_development: TownDevelopment,
+    #[serde(default)]
+    pub collection_log: CollectionLog,
     #[serde(default)]
     pub escape_sequence_seconds: f32,
     #[serde(default)]
@@ -450,6 +486,7 @@ impl GameState {
             won_game: false,
             deep_claim_status: DeepClaimStatus::Locked,
             town_development: TownDevelopment::default(),
+            collection_log: CollectionLog::default(),
             escape_sequence_seconds: 0.0,
             explored_tiles: vec![false; (WORLD_WIDTH * WORLD_HEIGHT) as usize],
             last_depot_receipt: String::new(),
@@ -715,17 +752,19 @@ impl GameState {
                         self.explored_tiles[index] = true;
                         self.mark_exploration_visual_changed(position);
                     }
-                    if let Some(tile) = self.terrain.tile(position)
-                        && scanner_can_mark(tile.kind, self.player.scanner_level)
-                        && !self
-                            .scan_markers
-                            .iter()
-                            .any(|marker| marker.position == position)
-                    {
-                        self.scan_markers.push(ScanMarker {
-                            position,
-                            kind: tile.kind,
-                        });
+                    if let Some(tile) = self.terrain.tile(position) {
+                        self.collection_log.discover_tile(tile.kind);
+                        if scanner_can_mark(tile.kind, self.player.scanner_level)
+                            && !self
+                                .scan_markers
+                                .iter()
+                                .any(|marker| marker.position == position)
+                        {
+                            self.scan_markers.push(ScanMarker {
+                                position,
+                                kind: tile.kind,
+                            });
+                        }
                     }
                 }
             }
@@ -965,7 +1004,7 @@ impl GameState {
                 | ModalScreen::Salvage => 2,
                 ModalScreen::Headquarters => {
                     if self.deep_claim_status == DeepClaimStatus::Unlocked {
-                        4
+                        5
                     } else {
                         2
                     }
@@ -1011,7 +1050,10 @@ impl GameState {
                 ModalScreen::Options => self.confirm_options(),
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
-                ModalScreen::ExitConfirm | ModalScreen::Map | ModalScreen::Help => {}
+                ModalScreen::ExitConfirm
+                | ModalScreen::Map
+                | ModalScreen::Help
+                | ModalScreen::ResearchLog => {}
             }
         }
 
@@ -1127,9 +1169,13 @@ impl GameState {
                 self.modal = Some(ModalScreen::TownDevelopment);
                 self.selected_menu_item = 0;
             }
-            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+            4 if self.deep_claim_status == DeepClaimStatus::Unlocked => {
                 self.refresh_expedition_offers();
                 self.modal = Some(ModalScreen::ExpeditionBoard);
+                self.selected_menu_item = 0;
+            }
+            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+                self.modal = Some(ModalScreen::ResearchLog);
                 self.selected_menu_item = 0;
             }
             _ => self.confirm_finance(),
@@ -1958,6 +2004,8 @@ impl GameState {
         self.spawn_dust();
         self.drill_flash_seconds = 0.12;
 
+        self.collection_log.discover_tile(mined);
+
         if let TileKind::Ore(mineral) = mined {
             if self.player.add_cargo(mineral) {
                 self.message = format!("Loaded {} ore worth {}.", mineral.name(), mineral.value());
@@ -2363,6 +2411,7 @@ impl GameState {
             return;
         }
         self.current_layer_band = band;
+        self.collection_log.strata.insert(band);
         let layer = match band {
             1 => "Clay Belt",
             2 => "Silver Caverns",
