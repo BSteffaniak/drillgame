@@ -64,6 +64,13 @@ impl GameRenderer {
                 | WorldEvent::SnapshotKeyframeReady { .. }
                 | WorldEvent::MessageChanged { .. }
                 | WorldEvent::PlayerChanged { .. }
+                | WorldEvent::CargoChanged { .. }
+                | WorldEvent::PlayerDamaged { .. }
+                | WorldEvent::PurchaseCompleted { .. }
+                | WorldEvent::RescueTriggered { .. }
+                | WorldEvent::BombPlaced { .. }
+                | WorldEvent::HazardChanged
+                | WorldEvent::ImportantEffectTriggered
                 | WorldEvent::ClientExitRequested { .. }
                 | WorldEvent::ClientSettingsChanged { .. } => {}
             }

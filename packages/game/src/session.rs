@@ -191,6 +191,22 @@ pub const fn planned_player_scoped_systems() -> [PlayerScopedSystem; 8] {
     ]
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotPurpose {
+    SaveFile,
+    NetworkSync,
+    RenderSync,
+}
+
+#[must_use]
+pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
+    [
+        SnapshotPurpose::SaveFile,
+        SnapshotPurpose::NetworkSync,
+        SnapshotPurpose::RenderSync,
+    ]
+}
+
 /// Compact player data for render/network/save-adjacent synchronization experiments.
 ///
 /// This is not a save format. It is an explicit snapshot boundary that can later be split into
@@ -356,6 +372,23 @@ pub enum WorldEvent {
     PlayerChanged {
         player_id: PlayerId,
     },
+    CargoChanged {
+        player_id: PlayerId,
+    },
+    PlayerDamaged {
+        player_id: PlayerId,
+    },
+    PurchaseCompleted {
+        player_id: PlayerId,
+    },
+    RescueTriggered {
+        player_id: PlayerId,
+    },
+    BombPlaced {
+        player_id: PlayerId,
+    },
+    HazardChanged,
+    ImportantEffectTriggered,
     ClientExitRequested {
         client_id: ClientId,
     },
@@ -665,6 +698,34 @@ impl GameSession {
     #[must_use]
     pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
         fixed_tick_audit_items()
+    }
+
+    #[must_use]
+    pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
+        snapshot_purposes()
+    }
+
+    #[must_use]
+    pub fn world_event_catalog() -> Vec<WorldEvent> {
+        vec![
+            WorldEvent::CargoChanged {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::PlayerDamaged {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::PurchaseCompleted {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::RescueTriggered {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::BombPlaced {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::HazardChanged,
+            WorldEvent::ImportantEffectTriggered,
+        ]
     }
 
     #[must_use]
@@ -1144,6 +1205,41 @@ mod tests {
             item.system == "drilling_progress"
                 && item.status == super::FixedTickMigrationStatus::StillVariableDelta
         }));
+    }
+
+    #[test]
+    fn world_event_catalog_covers_future_authoritative_events() {
+        let events = GameSession::world_event_catalog();
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::CargoChanged { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::PlayerDamaged { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::PurchaseCompleted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::BombPlaced { .. }))
+        );
+    }
+
+    #[test]
+    fn snapshot_purposes_keep_save_network_and_render_boundaries_separate() {
+        let purposes = GameSession::snapshot_purposes();
+
+        assert!(purposes.contains(&super::SnapshotPurpose::SaveFile));
+        assert!(purposes.contains(&super::SnapshotPurpose::NetworkSync));
+        assert!(purposes.contains(&super::SnapshotPurpose::RenderSync));
     }
 
     #[test]
