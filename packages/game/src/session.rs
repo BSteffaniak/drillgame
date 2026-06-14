@@ -12,6 +12,55 @@ use crate::{
     terrain::TilePosition,
 };
 
+/// Compact player data for render/network/save-adjacent synchronization experiments.
+///
+/// This is not a save format. It is an explicit snapshot boundary that can later be split into
+/// network snapshots, render snapshots, and persistent save models as the legacy world is migrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerSnapshot {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+    pub fuel: f32,
+    pub hull: f32,
+    pub credits: u32,
+}
+
+impl PlayerSnapshot {
+    #[must_use]
+    pub const fn from_player(player_id: PlayerId, player: &Player) -> Self {
+        Self {
+            player_id,
+            x: player.x,
+            y: player.y,
+            velocity_x: player.velocity_x,
+            velocity_y: player.velocity_y,
+            fuel: player.fuel,
+            hull: player.hull,
+            credits: player.credits,
+        }
+    }
+}
+
+/// Compatibility world snapshot keyed by authoritative simulation tick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldSnapshot {
+    pub tick: SimulationTick,
+    pub players: Vec<PlayerSnapshot>,
+}
+
+impl WorldSnapshot {
+    #[must_use]
+    pub fn from_world(tick: SimulationTick, world: &WorldState) -> Self {
+        Self {
+            tick,
+            players: world.player_snapshots(),
+        }
+    }
+}
+
 /// Lightweight simulation events emitted by the session compatibility layer.
 ///
 /// These are intentionally separate from save data and renderer snapshots. As systems migrate out
@@ -67,6 +116,14 @@ impl WorldState {
     #[must_use]
     pub fn player_count(&self) -> usize {
         self.players.len()
+    }
+
+    #[must_use]
+    pub fn player_snapshots(&self) -> Vec<PlayerSnapshot> {
+        self.players
+            .iter()
+            .map(|(player_id, player)| PlayerSnapshot::from_player(*player_id, player))
+            .collect()
     }
 
     fn sync_from_legacy_game(&mut self, game: &GameState) {
@@ -153,6 +210,11 @@ impl GameSession {
     #[must_use]
     pub const fn world(&self) -> &WorldState {
         &self.world
+    }
+
+    #[must_use]
+    pub fn world_snapshot(&self) -> WorldSnapshot {
+        WorldSnapshot::from_world(self.current_tick, &self.world)
     }
 
     pub const fn game_mut(&mut self) -> &mut GameState {
@@ -390,6 +452,17 @@ mod tests {
 
         assert_eq!(session.world().player_count(), 1);
         assert!(session.world().player(LOCAL_PLAYER_ID).is_some());
+    }
+
+    #[test]
+    fn world_snapshot_contains_tick_and_players() {
+        let session = GameSession::new();
+
+        let snapshot = session.world_snapshot();
+
+        assert_eq!(snapshot.tick, session.current_tick());
+        assert_eq!(snapshot.players.len(), 1);
+        assert_eq!(snapshot.players[0].player_id, LOCAL_PLAYER_ID);
     }
 
     #[test]
