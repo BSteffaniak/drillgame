@@ -74,13 +74,22 @@ pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixedTickMigrationStatus {
     FixedTickReady,
+    CompatibilityFixedStep,
     StillVariableDelta,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixedTickMigrationPlan {
+    MigrateToAuthoritativeTick,
+    KeepVariablePresentationOnly,
+    AlreadyFixedStep,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedTickAuditItem {
     pub system: &'static str,
     pub status: FixedTickMigrationStatus,
+    pub plan: FixedTickMigrationPlan,
 }
 
 #[must_use]
@@ -89,34 +98,42 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
         FixedTickAuditItem {
             system: "session_tick_counter",
             status: FixedTickMigrationStatus::FixedTickReady,
+            plan: FixedTickMigrationPlan::AlreadyFixedStep,
         },
         FixedTickAuditItem {
             system: "physics",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "fuel_burn",
             status: FixedTickMigrationStatus::StillVariableDelta,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "drilling_progress",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "hazards",
             status: FixedTickMigrationStatus::StillVariableDelta,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "bombs",
             status: FixedTickMigrationStatus::StillVariableDelta,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "market_event_timers",
             status: FixedTickMigrationStatus::StillVariableDelta,
+            plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "animations",
             status: FixedTickMigrationStatus::StillVariableDelta,
+            plan: FixedTickMigrationPlan::KeepVariablePresentationOnly,
         },
     ]
 }
@@ -1724,11 +1741,16 @@ mod tests {
 
         assert!(audit_items.iter().any(|item| {
             item.system == "physics"
-                && item.status == super::FixedTickMigrationStatus::StillVariableDelta
+                && item.status == super::FixedTickMigrationStatus::CompatibilityFixedStep
+                && item.plan == super::FixedTickMigrationPlan::MigrateToAuthoritativeTick
+        }));
+        assert!(audit_items.iter().any(|item| {
+            item.system == "animations"
+                && item.plan == super::FixedTickMigrationPlan::KeepVariablePresentationOnly
         }));
         assert!(audit_items.iter().any(|item| {
             item.system == "drilling_progress"
-                && item.status == super::FixedTickMigrationStatus::StillVariableDelta
+                && item.status == super::FixedTickMigrationStatus::CompatibilityFixedStep
         }));
     }
 
