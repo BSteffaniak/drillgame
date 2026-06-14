@@ -75,6 +75,18 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(&scanner, 22, 116, 16, Color::SKYBLUE);
     }
 
+    if game.escape_sequence_seconds > 0.0 {
+        draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
+        draw.draw_rectangle_lines(470, 70, 340, 34, Color::RED);
+        draw.draw_text(
+            &format!("CORE ESCAPE {:.0}s", game.escape_sequence_seconds.ceil()),
+            500,
+            78,
+            22,
+            Color::RAYWHITE,
+        );
+    }
+
     if game.show_details || game.modal == Some(ModalScreen::Depot) {
         draw_detail_panel(draw, game);
     }
@@ -619,10 +631,13 @@ fn draw_bank(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     } else {
         "Buy rescue insurance: 90 cr".to_owned()
     };
-    let side = if game.side_contract_active {
-        "Side contract already posted".to_owned()
+    let side = if game.active_side_contracts.len() >= 3 {
+        "Side board full (3 active)".to_owned()
     } else {
-        "Post side contract".to_owned()
+        format!(
+            "Post side contract ({}/3 active)",
+            game.active_side_contracts.len()
+        )
     };
     draw_options_list(
         draw,

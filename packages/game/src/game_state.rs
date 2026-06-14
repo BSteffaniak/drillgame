@@ -167,6 +167,13 @@ pub enum SideContractKind {
     HazardScan,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct SideContract {
+    pub kind: SideContractKind,
+    pub target: TileKind,
+    pub required: u32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ServiceAnimation {
     Fuel,
@@ -318,6 +325,8 @@ pub struct GameState {
     #[serde(default)]
     pub side_contract_required: u32,
     #[serde(default)]
+    pub active_side_contracts: Vec<SideContract>,
+    #[serde(default)]
     pub falling_boulders: Vec<FallingBoulder>,
     #[serde(default)]
     pub spark_particles: Vec<SparkParticle>,
@@ -421,6 +430,7 @@ impl GameState {
             side_contract_kind: SideContractKind::Cargo,
             side_contract_target: None,
             side_contract_required: 0,
+            active_side_contracts: Vec::new(),
             falling_boulders: Vec::new(),
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
@@ -742,6 +752,16 @@ impl GameState {
             if self.side_contract_active && self.side_contract_required == 0 {
                 self.side_contract_active = false;
             }
+            if self.side_contract_active
+                && self.active_side_contracts.is_empty()
+                && let Some(target) = self.side_contract_target
+            {
+                self.active_side_contracts.push(SideContract {
+                    kind: self.side_contract_kind,
+                    target,
+                    required: self.side_contract_required.max(1),
+                });
+            }
             self.save_version = current_save_version();
         }
     }
@@ -1047,6 +1067,10 @@ impl GameState {
     }
 
     fn start_side_contract(&mut self) {
+        if self.active_side_contracts.len() >= 3 {
+            "Bank board only allows three active side contracts.".clone_into(&mut self.message);
+            return;
+        }
         self.side_contract_active = true;
         self.side_contract_kind = match self.town_event_day % 3 {
             0 => SideContractKind::Cargo,
@@ -1078,6 +1102,13 @@ impl GameState {
                 self.side_contract_required
             ),
         };
+        if let Some(target) = self.side_contract_target {
+            self.active_side_contracts.push(SideContract {
+                kind: self.side_contract_kind,
+                target,
+                required: self.side_contract_required,
+            });
+        }
     }
 
     fn confirm_finance(&mut self) {
@@ -1138,6 +1169,30 @@ impl GameState {
     }
 
     fn try_complete_side_contract(&mut self) {
+        if !self.active_side_contracts.is_empty() {
+            let mut completed_index = None;
+            let mut completed_reward = 0;
+            for (index, contract) in self.active_side_contracts.iter().enumerate() {
+                if side_contract_satisfied(*contract, self) {
+                    completed_index = Some(index);
+                    completed_reward = 420 + contract.required.min(10) * 80;
+                    break;
+                }
+            }
+            if let Some(index) = completed_index {
+                let contract = self.active_side_contracts.remove(index);
+                if contract.kind == SideContractKind::Cargo {
+                    consume_side_contract_cargo(contract, &mut self.player);
+                }
+                self.player.credits += completed_reward;
+                self.total_earnings += completed_reward;
+                self.side_contract_active = !self.active_side_contracts.is_empty();
+                self.message =
+                    format!("Side contract fulfilled: {completed_reward} credits bonus.");
+                self.sound_cues.push(SoundCue::Sell);
+                return;
+            }
+        }
         if !self.side_contract_active {
             return;
         }
@@ -1358,7 +1413,11 @@ impl GameState {
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
         let can_burn_fuel = self.player.fuel > 0.0;
         let grounded = self.is_grounded();
-        let engine_multiplier = 1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.28;
+        let cargo_ratio =
+            self.player.cargo_used() as f32 / self.player.cargo_capacity.max(1) as f32;
+        let cargo_penalty = 1.0 - cargo_ratio.min(1.0) * 0.18;
+        let engine_multiplier =
+            (1.0 + f32::from(self.player.engine_level.saturating_sub(1)) * 0.28) * cargo_penalty;
         let horizontal_acceleration = if grounded {
             HORIZONTAL_ACCELERATION * 1.35
         } else {
@@ -1370,7 +1429,9 @@ impl GameState {
 
         if input.thrust && can_burn_fuel {
             self.player.velocity_y -= THRUST_ACCELERATION * engine_multiplier * delta_seconds;
-            self.player.fuel = (self.player.fuel - FUEL_BURN_PER_SECOND * delta_seconds).max(0.0);
+            let efficiency = 1.0 - f32::from(self.player.fuel_tank_level.saturating_sub(1)) * 0.06;
+            self.player.fuel =
+                (self.player.fuel - FUEL_BURN_PER_SECOND * efficiency * delta_seconds).max(0.0);
         }
 
         self.player.velocity_y += GRAVITY * delta_seconds;
@@ -2278,6 +2339,51 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
             },
         )
     })
+}
+
+fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {
+    match contract.kind {
+        SideContractKind::Cargo => match contract.target {
+            TileKind::Ore(mineral) => {
+                game.player.cargo.get(&mineral).copied().unwrap_or(0) >= contract.required
+            }
+            TileKind::Artifact(artifact) => {
+                game.player.artifacts.get(&artifact).copied().unwrap_or(0) >= contract.required
+            }
+            _ => false,
+        },
+        SideContractKind::DepthSurvey => {
+            u32::try_from(game.deepest_tile_reached).unwrap_or(0) >= contract.required
+        }
+        SideContractKind::HazardScan => {
+            game.scan_markers
+                .iter()
+                .filter(|marker| {
+                    matches!(
+                        marker.kind,
+                        TileKind::Gas
+                            | TileKind::Lava
+                            | TileKind::MagmaVent
+                            | TileKind::ExplosivePocket
+                            | TileKind::PressurePocket
+                    )
+                })
+                .count()
+                >= usize::try_from(contract.required).unwrap_or(usize::MAX)
+        }
+    }
+}
+
+fn consume_side_contract_cargo(contract: SideContract, player: &mut Player) {
+    match contract.target {
+        TileKind::Ore(mineral) => {
+            consume_side_count(&mut player.cargo, &mineral, contract.required);
+        }
+        TileKind::Artifact(artifact) => {
+            consume_side_count(&mut player.artifacts, &artifact, contract.required);
+        }
+        _ => {}
+    }
 }
 
 fn consume_side_count<K: Ord>(items: &mut std::collections::BTreeMap<K, u32>, key: &K, count: u32) {
