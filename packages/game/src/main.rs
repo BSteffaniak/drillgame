@@ -8,6 +8,7 @@ mod contract;
 mod economy;
 mod game_state;
 mod input;
+pub mod multiplayer;
 mod player;
 mod rendering;
 mod save;

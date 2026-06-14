@@ -2,6 +2,7 @@ use crate::{
     audio::AudioBus,
     game_state::GameState,
     input::read_input,
+    multiplayer::FIXED_DELTA_SECONDS,
     rendering::GameRenderer,
     save::{SettingsFile, load_settings, save_settings},
 };
@@ -9,6 +10,7 @@ use crate::{
 const WINDOW_WIDTH: i32 = 1280;
 const WINDOW_HEIGHT: i32 = 720;
 const TARGET_FPS: u32 = 60;
+const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
 
 pub fn run() {
     let (mut raylib, thread) = raylib::init()
@@ -38,6 +40,10 @@ pub fn run() {
 
     while !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
+        debug_assert!(
+            delta_seconds <= FRAME_DELTA_SPIKE_WARN_SECONDS,
+            "large frame delta detected before fixed-tick simulation migration"
+        );
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
 
