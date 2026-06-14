@@ -2370,7 +2370,7 @@ impl GameState {
         }
 
         let depot_bonus = u32::from(self.town_development.depot_level) * 3;
-        let adjusted = self
+        let mut adjusted = self
             .player
             .cargo
             .iter()
@@ -2384,6 +2384,11 @@ impl GameState {
                 .iter()
                 .map(|(artifact, count)| artifact.value() * count)
                 .sum::<u32>();
+        let cargo_count = self.player.cargo_used();
+        let bulk_bonus = self.town_development.depot_level >= 2 && cargo_count >= 8;
+        if bulk_bonus {
+            adjusted += adjusted / 10;
+        }
         let payout = sell_cargo(&mut self.player);
         if adjusted != payout {
             self.player.credits = self
@@ -2397,7 +2402,8 @@ impl GameState {
             self.total_earnings += adjusted;
             let _ = writeln!(
                 &mut self.last_depot_receipt,
-                "MARKET mineral pricing applied"
+                "MARKET mineral pricing applied{}",
+                if bulk_bonus { " + bulk-sale bonus" } else { "" }
             );
             let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {adjusted} cr");
             self.depot_receipts.push(self.last_depot_receipt.clone());
@@ -2409,7 +2415,11 @@ impl GameState {
             "No cargo to sell.".clone_into(&mut self.message);
         } else {
             self.sound_cues.push(SoundCue::Sell);
-            self.message = format!("Sold cargo for {adjusted} credits at current mineral markets.");
+            self.message = if bulk_bonus {
+                format!("Sold cargo for {adjusted} credits with depot bulk-sale bonus.")
+            } else {
+                format!("Sold cargo for {adjusted} credits at current mineral markets.")
+            };
         }
     }
 
@@ -3411,6 +3421,13 @@ impl GameState {
             y: depth.clamp(10, self.terrain.height() - 2),
         };
         let reward_tile = if depth >= 120 {
+            let material = match depth {
+                180.. => StrategicResourceKind::RadiantFossil,
+                160..=179 => StrategicResourceKind::VoidGlass,
+                140..=159 => StrategicResourceKind::MachineRelic,
+                _ => StrategicResourceKind::PressurePearl,
+            };
+            self.player.add_material(material, 1);
             self.player
                 .add_material(StrategicResourceKind::CoreShard, 1);
             self.award_legendary_blueprint(depth);
@@ -4045,7 +4062,7 @@ impl Default for GameState {
 
 fn hq_story_message(game: &GameState) -> String {
     if game.won_game {
-        return "Director Vale: The Star Core is secure. The mine is yours to master.".to_owned();
+        return "Director Vale: The Star Core is secure. Deep Claim operations are open: build relays, chase expeditions, catalogue strata, and push for legendary blueprints.".to_owned();
     }
     match game.deepest_tile_reached {
         0..=19 => "Director Vale: Bring us contract cargo and prove this shaft is profitable.".to_owned(),

@@ -921,6 +921,10 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         StrategicResourceKind::AncientAlloy,
         StrategicResourceKind::CoreShard,
         StrategicResourceKind::CrystalLens,
+        StrategicResourceKind::PressurePearl,
+        StrategicResourceKind::MachineRelic,
+        StrategicResourceKind::VoidGlass,
+        StrategicResourceKind::RadiantFossil,
     ];
     for (index, material) in materials.iter().enumerate() {
         draw.draw_text(
@@ -1109,6 +1113,10 @@ fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
         StrategicResourceKind::AncientAlloy,
         StrategicResourceKind::CoreShard,
         StrategicResourceKind::CrystalLens,
+        StrategicResourceKind::PressurePearl,
+        StrategicResourceKind::MachineRelic,
+        StrategicResourceKind::VoidGlass,
+        StrategicResourceKind::RadiantFossil,
     ];
     for (index, material) in materials.iter().enumerate() {
         let count = game.player.materials.get(material).copied().unwrap_or(0);

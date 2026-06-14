@@ -60,6 +60,10 @@ pub enum StrategicResourceKind {
     AncientAlloy,
     CoreShard,
     CrystalLens,
+    PressurePearl,
+    MachineRelic,
+    VoidGlass,
+    RadiantFossil,
 }
 
 impl StrategicResourceKind {
@@ -69,6 +73,10 @@ impl StrategicResourceKind {
             Self::AncientAlloy => "Ancient Alloy",
             Self::CoreShard => "Core Shard",
             Self::CrystalLens => "Crystal Lens",
+            Self::PressurePearl => "Pressure Pearl",
+            Self::MachineRelic => "Machine Relic",
+            Self::VoidGlass => "Void Glass",
+            Self::RadiantFossil => "Radiant Fossil",
         }
     }
 }
