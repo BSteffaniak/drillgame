@@ -30,6 +30,7 @@ pub struct PlayerInput {
     pub scan: bool,
     pub place_relay: bool,
     pub place_drone: bool,
+    pub place_lift: bool,
 }
 
 #[must_use]
@@ -75,6 +76,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         scan: raylib.is_key_pressed(KeyboardKey::KEY_C),
         place_relay: raylib.is_key_pressed(KeyboardKey::KEY_R),
         place_drone: raylib.is_key_pressed(KeyboardKey::KEY_T),
+        place_lift: raylib.is_key_pressed(KeyboardKey::KEY_L),
     }
 }
 

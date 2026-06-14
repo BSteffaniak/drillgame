@@ -48,6 +48,8 @@ pub struct Player {
     pub signal_relay_kits: u32,
     #[serde(default)]
     pub survey_drone_kits: u32,
+    #[serde(default)]
+    pub cargo_lift_kits: u32,
 }
 
 #[allow(
@@ -85,6 +87,7 @@ impl Player {
             crafted_sorters: 0,
             signal_relay_kits: 0,
             survey_drone_kits: 0,
+            cargo_lift_kits: 0,
         }
     }
 

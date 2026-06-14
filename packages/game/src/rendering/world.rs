@@ -105,10 +105,12 @@ fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: 
         let label = match item.kind {
             crate::game_state::InfrastructureKind::SignalRelay => "R",
             crate::game_state::InfrastructureKind::SurveyDrone => "D",
+            crate::game_state::InfrastructureKind::CargoLift => "L",
         };
         let color = match item.kind {
             crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
             crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
+            crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
         };
         draw.draw_circle_lines(x, y, 11.0 + pulse * 3.0, color);
         draw.draw_rectangle(x - 4, y - 10, 8, 20, Color::DARKBLUE);

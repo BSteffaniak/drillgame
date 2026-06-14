@@ -156,6 +156,7 @@ pub struct DustParticle {
 pub enum InfrastructureKind {
     SignalRelay,
     SurveyDrone,
+    CargoLift,
 }
 
 impl InfrastructureKind {
@@ -164,6 +165,7 @@ impl InfrastructureKind {
         match self {
             Self::SignalRelay => "Signal Relay",
             Self::SurveyDrone => "Survey Drone",
+            Self::CargoLift => "Cargo Lift",
         }
     }
 }
@@ -217,15 +219,17 @@ pub enum RecipeKind {
     ExpandedSorter,
     SignalRelayKit,
     SurveyDroneKit,
+    CargoLiftKit,
 }
 
 impl RecipeKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ReinforcedBulkhead,
         Self::AuxiliaryTank,
         Self::ExpandedSorter,
         Self::SignalRelayKit,
         Self::SurveyDroneKit,
+        Self::CargoLiftKit,
     ];
 
     #[must_use]
@@ -236,6 +240,7 @@ impl RecipeKind {
             Self::ExpandedSorter => "Expanded Sorter",
             Self::SignalRelayKit => "Signal Relay Kit",
             Self::SurveyDroneKit => "Survey Drone Kit",
+            Self::CargoLiftKit => "Cargo Lift Kit",
         }
     }
 
@@ -247,6 +252,7 @@ impl RecipeKind {
             Self::ExpandedSorter => "+4 cargo capacity rig part",
             Self::SignalRelayKit => "crafted infrastructure item",
             Self::SurveyDroneKit => "reveals nearby map over time",
+            Self::CargoLiftKit => "sends cargo upward from a station",
         }
     }
 
@@ -265,6 +271,10 @@ impl RecipeKind {
             Self::SignalRelayKit => &[(StrategicResourceKind::CoreShard, 2)],
             Self::SurveyDroneKit => &[
                 (StrategicResourceKind::CrystalLens, 1),
+                (StrategicResourceKind::CoreShard, 1),
+            ],
+            Self::CargoLiftKit => &[
+                (StrategicResourceKind::AncientAlloy, 2),
                 (StrategicResourceKind::CoreShard, 1),
             ],
         }
@@ -1110,11 +1120,60 @@ impl GameState {
             return;
         }
 
+        if self.try_use_cargo_lift() {
+            return;
+        }
+
         if let Some(zone) = self.current_zone {
             self.enter_interior(zone);
         } else {
             "No surface service here.".clone_into(&mut self.message);
         }
+    }
+
+    fn try_use_cargo_lift(&mut self) -> bool {
+        let position = self.player.tile_position(TILE_SIZE);
+        let Some(lift_index) = self.infrastructure.iter().position(|item| {
+            item.kind == InfrastructureKind::CargoLift
+                && (item.position.x - position.x).abs() <= 1
+                && (item.position.y - position.y).abs() <= 1
+        }) else {
+            return false;
+        };
+        if self.player.cargo.is_empty() {
+            "Cargo lift ready, but mineral cargo is empty.".clone_into(&mut self.message);
+            return true;
+        }
+        let capacity = 8_u32;
+        let mut remaining = capacity;
+        let mut value = 0;
+        for mineral in all_minerals() {
+            if remaining == 0 {
+                break;
+            }
+            let Some(count) = self.player.cargo.get_mut(&mineral) else {
+                continue;
+            };
+            let sent = (*count).min(remaining);
+            *count -= sent;
+            remaining -= sent;
+            value += self.mineral_market_value(mineral) * sent;
+        }
+        self.player.cargo.retain(|_, count| *count > 0);
+        if value == 0 {
+            "Cargo lift found no mineral cargo to send.".clone_into(&mut self.message);
+            return true;
+        }
+        if let Some(lift) = self.infrastructure.get_mut(lift_index) {
+            lift.durability = lift.durability.saturating_sub(5);
+        }
+        self.player.credits += value;
+        self.message = format!(
+            "Cargo lift sent {} unit(s) upward for {value} credits.",
+            capacity - remaining
+        );
+        self.sound_cues.push(SoundCue::Sell);
+        true
     }
 
     fn enter_interior(&mut self, zone: SurfaceZone) {
@@ -1430,6 +1489,9 @@ impl GameState {
             }
             RecipeKind::SurveyDroneKit => {
                 self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_add(1);
+            }
+            RecipeKind::CargoLiftKit => {
+                self.player.cargo_lift_kits = self.player.cargo_lift_kits.saturating_add(1);
             }
         }
         self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
@@ -2037,12 +2099,19 @@ impl GameState {
                 "No survey drone kits. Craft one at HQ first.",
             );
         }
+        if input.place_lift {
+            self.place_infrastructure_kit(
+                InfrastructureKind::CargoLift,
+                "No cargo lift kits. Craft one at HQ first.",
+            );
+        }
     }
 
     fn place_infrastructure_kit(&mut self, kind: InfrastructureKind, empty_message: &str) {
         let kits = match kind {
             InfrastructureKind::SignalRelay => self.player.signal_relay_kits,
             InfrastructureKind::SurveyDrone => self.player.survey_drone_kits,
+            InfrastructureKind::CargoLift => self.player.cargo_lift_kits,
         };
         if kits == 0 {
             empty_message.clone_into(&mut self.message);
@@ -2068,6 +2137,9 @@ impl GameState {
             InfrastructureKind::SurveyDrone => {
                 self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_sub(1);
             }
+            InfrastructureKind::CargoLift => {
+                self.player.cargo_lift_kits = self.player.cargo_lift_kits.saturating_sub(1);
+            }
         }
         self.infrastructure.push(PlacedInfrastructure {
             kind,
@@ -2080,6 +2152,9 @@ impl GameState {
             }
             InfrastructureKind::SurveyDrone => {
                 "Placed Survey Drone. Nearby map will reveal over time.".to_owned()
+            }
+            InfrastructureKind::CargoLift => {
+                "Placed Cargo Lift. Press E on it to send cargo upward.".to_owned()
             }
         };
         self.sound_cues.push(SoundCue::Upgrade);
