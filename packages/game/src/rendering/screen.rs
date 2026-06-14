@@ -7,7 +7,9 @@ use crate::{
         DeepClaimStatus, TownBuilding, UpgradeKind, upgrade_effect, upgrade_offers,
         upgrade_tier_name,
     },
-    game_state::{GameState, ModalScreen, PauseOption, RunMode, SideContractKind, TILE_SIZE},
+    game_state::{
+        GameState, ModalScreen, PauseOption, RecipeKind, RunMode, SideContractKind, TILE_SIZE,
+    },
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
     terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TileKind, TilePosition},
@@ -603,6 +605,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::TownDevelopment => draw_town_development(draw, game),
         ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
         ModalScreen::ResearchLog => draw_research_log(draw, game),
+        ModalScreen::Crafting => draw_crafting(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -783,6 +786,7 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         options.push("Deep Claim town development".to_owned());
         options.push("Expedition board".to_owned());
         options.push("Research log".to_owned());
+        options.push("Crafting bench".to_owned());
     }
     for (index, option) in options.iter().enumerate() {
         draw.draw_text(
@@ -803,6 +807,67 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         505,
         18,
         Color::LIGHTGRAY,
+    );
+}
+
+fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Crafting Bench", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        "Enter/E crafts selected recipe using strategic materials.",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
+    let materials = [
+        StrategicResourceKind::AncientAlloy,
+        StrategicResourceKind::CoreShard,
+        StrategicResourceKind::CrystalLens,
+    ];
+    for (index, material) in materials.iter().enumerate() {
+        draw.draw_text(
+            &format!(
+                "{}: {}",
+                material.name(),
+                game.player.materials.get(material).copied().unwrap_or(0)
+            ),
+            330 + i32::try_from(index).unwrap_or(i32::MAX) * 190,
+            220,
+            18,
+            Color::SKYBLUE,
+        );
+    }
+    for (index, recipe) in RecipeKind::ALL.iter().enumerate() {
+        let color = if index == game.selected_menu_item {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        let costs = recipe
+            .cost()
+            .iter()
+            .map(|(material, count)| format!("{} {count}", material.name()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        draw.draw_text(
+            &format!("{} - {} [{}]", recipe.name(), recipe.description(), costs),
+            350,
+            270 + i32::try_from(index).unwrap_or(i32::MAX) * 34,
+            20,
+            color,
+        );
+    }
+    draw.draw_text(
+        &format!(
+            "Crafted: bulkheads {} | sorters {} | relay kits {}",
+            game.player.crafted_bulkheads,
+            game.player.crafted_sorters,
+            game.player.signal_relay_kits
+        ),
+        350,
+        450,
+        18,
+        Color::GREEN,
     );
 }
 

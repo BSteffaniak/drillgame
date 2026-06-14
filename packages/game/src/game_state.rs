@@ -112,6 +112,7 @@ pub enum ModalScreen {
     TownDevelopment,
     ExpeditionBoard,
     ResearchLog,
+    Crafting,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -179,6 +180,59 @@ pub enum SideContractKind {
     DepthSurvey,
     HazardScan,
     Rush,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecipeKind {
+    ReinforcedBulkhead,
+    AuxiliaryTank,
+    ExpandedSorter,
+    SignalRelayKit,
+}
+
+impl RecipeKind {
+    pub const ALL: [Self; 4] = [
+        Self::ReinforcedBulkhead,
+        Self::AuxiliaryTank,
+        Self::ExpandedSorter,
+        Self::SignalRelayKit,
+    ];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ReinforcedBulkhead => "Reinforced Bulkhead",
+            Self::AuxiliaryTank => "Auxiliary Tank",
+            Self::ExpandedSorter => "Expanded Sorter",
+            Self::SignalRelayKit => "Signal Relay Kit",
+        }
+    }
+
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::ReinforcedBulkhead => "+15 max hull rig part",
+            Self::AuxiliaryTank => "+20 fuel capacity rig part",
+            Self::ExpandedSorter => "+4 cargo capacity rig part",
+            Self::SignalRelayKit => "crafted infrastructure item",
+        }
+    }
+
+    #[must_use]
+    pub const fn cost(self) -> &'static [(StrategicResourceKind, u32)] {
+        match self {
+            Self::ReinforcedBulkhead => &[(StrategicResourceKind::AncientAlloy, 2)],
+            Self::AuxiliaryTank => &[
+                (StrategicResourceKind::AncientAlloy, 1),
+                (StrategicResourceKind::CrystalLens, 1),
+            ],
+            Self::ExpandedSorter => &[
+                (StrategicResourceKind::AncientAlloy, 1),
+                (StrategicResourceKind::CoreShard, 1),
+            ],
+            Self::SignalRelayKit => &[(StrategicResourceKind::CoreShard, 2)],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1082,11 +1136,12 @@ impl GameState {
                 | ModalScreen::Salvage => 2,
                 ModalScreen::Headquarters => {
                     if self.deep_claim_status == DeepClaimStatus::Unlocked {
-                        5
+                        6
                     } else {
                         2
                     }
                 }
+                ModalScreen::Crafting => RecipeKind::ALL.len() - 1,
                 ModalScreen::TownDevelopment => TownBuilding::ALL.len() - 1,
                 ModalScreen::ExpeditionBoard => self
                     .expedition_offers
@@ -1129,6 +1184,7 @@ impl GameState {
                 ModalScreen::Salvage => self.confirm_salvage_menu(),
                 ModalScreen::TownDevelopment => self.confirm_town_development(),
                 ModalScreen::ExpeditionBoard => self.accept_expedition_offer(),
+                ModalScreen::Crafting => self.confirm_crafting(),
                 ModalScreen::Options => self.confirm_options(),
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
@@ -1256,12 +1312,52 @@ impl GameState {
                 self.modal = Some(ModalScreen::ExpeditionBoard);
                 self.selected_menu_item = 0;
             }
-            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+            5 if self.deep_claim_status == DeepClaimStatus::Unlocked => {
                 self.modal = Some(ModalScreen::ResearchLog);
+                self.selected_menu_item = 0;
+            }
+            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+                self.modal = Some(ModalScreen::Crafting);
                 self.selected_menu_item = 0;
             }
             _ => self.confirm_finance(),
         }
+    }
+
+    fn confirm_crafting(&mut self) {
+        let recipe = RecipeKind::ALL[self.selected_menu_item.min(RecipeKind::ALL.len() - 1)];
+        for (material, required) in recipe.cost() {
+            if self.player.materials.get(material).copied().unwrap_or(0) < *required {
+                self.message =
+                    format!("Need {required} {} for {}.", material.name(), recipe.name());
+                return;
+            }
+        }
+        for (material, required) in recipe.cost() {
+            if let Some(count) = self.player.materials.get_mut(material) {
+                *count = count.saturating_sub(*required);
+            }
+        }
+        self.player.materials.retain(|_, count| *count > 0);
+        match recipe {
+            RecipeKind::ReinforcedBulkhead => {
+                self.player.crafted_bulkheads = self.player.crafted_bulkheads.saturating_add(1);
+                self.player.hull = self.player.max_hull();
+            }
+            RecipeKind::AuxiliaryTank => {
+                self.player.fuel_capacity += 20.0;
+                self.player.fuel = self.player.fuel_capacity;
+            }
+            RecipeKind::ExpandedSorter => {
+                self.player.crafted_sorters = self.player.crafted_sorters.saturating_add(1);
+                self.player.cargo_capacity = self.player.cargo_capacity.saturating_add(4);
+            }
+            RecipeKind::SignalRelayKit => {
+                self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_add(1);
+            }
+        }
+        self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
+        self.sound_cues.push(SoundCue::Upgrade);
     }
 
     fn confirm_town_development(&mut self) {

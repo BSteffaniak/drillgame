@@ -40,6 +40,12 @@ pub struct Player {
     pub insured: bool,
     #[serde(default)]
     pub insurance_tier: u8,
+    #[serde(default)]
+    pub crafted_bulkheads: u8,
+    #[serde(default)]
+    pub crafted_sorters: u8,
+    #[serde(default)]
+    pub signal_relay_kits: u32,
 }
 
 #[allow(
@@ -73,6 +79,9 @@ impl Player {
             loan_debt: 0,
             insured: false,
             insurance_tier: 0,
+            crafted_bulkheads: 0,
+            crafted_sorters: 0,
+            signal_relay_kits: 0,
         }
     }
 
@@ -96,7 +105,10 @@ impl Player {
 
     #[must_use]
     pub fn max_hull(&self) -> f32 {
-        100.0 + f32::from(self.hull_level.saturating_sub(1)) * 35.0
+        f32::from(self.crafted_bulkheads).mul_add(
+            15.0,
+            100.0 + f32::from(self.hull_level.saturating_sub(1)) * 35.0,
+        )
     }
 
     pub fn add_cargo(&mut self, mineral: MineralKind) -> bool {
