@@ -68,8 +68,23 @@ struct SaveFile {
     world: PersistentWorldSave,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SaveAuthority {
+    #[default]
+    LocalSinglePlayer,
+    HostOwnedSession,
+}
+
+fn default_player_roster() -> Vec<PlayerId> {
+    vec![LOCAL_PLAYER_ID]
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentWorldSave {
+    #[serde(default)]
+    pub save_authority: SaveAuthority,
+    #[serde(default = "default_player_roster")]
+    pub player_roster: Vec<PlayerId>,
     pub default_player_id: PlayerId,
     pub game: GameState,
 }
@@ -78,6 +93,8 @@ impl PersistentWorldSave {
     #[must_use]
     pub fn from_legacy_game(game: &GameState) -> Self {
         Self {
+            save_authority: SaveAuthority::LocalSinglePlayer,
+            player_roster: default_player_roster(),
             default_player_id: LOCAL_PLAYER_ID,
             game: game.clone_for_save(),
         }
@@ -139,6 +156,8 @@ fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     let legacy_save: LegacySaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
     validate_save_version(legacy_save.version)?;
     let mut game = PersistentWorldSave {
+        save_authority: SaveAuthority::LocalSinglePlayer,
+        player_roster: default_player_roster(),
         default_player_id: LOCAL_PLAYER_ID,
         game: legacy_save.game,
     }
@@ -301,7 +320,7 @@ mod tests {
     use crate::{
         game_state::GameState,
         multiplayer::LOCAL_PLAYER_ID,
-        save::{LegacySaveFile, PersistentWorldSave, SaveFile},
+        save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile},
     };
 
     #[test]
@@ -315,7 +334,12 @@ mod tests {
         let loaded: SaveFile = serde_json::from_str(&json).expect("deserialize game");
 
         assert_eq!(loaded.version, 2);
+        assert_eq!(
+            loaded.world.save_authority,
+            SaveAuthority::LocalSinglePlayer
+        );
         assert_eq!(loaded.world.default_player_id, LOCAL_PLAYER_ID);
+        assert_eq!(loaded.world.player_roster, vec![LOCAL_PLAYER_ID]);
         assert_eq!(
             loaded.world.game.player.cargo_capacity,
             game.player.cargo_capacity
