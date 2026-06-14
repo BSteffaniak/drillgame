@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    game_state::{GameState, RunMode},
+    game_state::{DrillState, GameState, RunMode},
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
@@ -446,6 +446,8 @@ pub struct WorldState {
     simulation_tick: SimulationTick,
     authoritative_summary: AuthoritativeWorldSummary,
     players: BTreeMap<PlayerId, Player>,
+    active_drills: BTreeMap<PlayerId, DrillState>,
+    scanner_cooldowns: BTreeMap<PlayerId, f32>,
 }
 
 impl WorldState {
@@ -459,6 +461,11 @@ impl WorldState {
                 1,
             ),
             players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
+            active_drills: game
+                .active_drill
+                .map(|drill| BTreeMap::from([(LOCAL_PLAYER_ID, drill)]))
+                .unwrap_or_default(),
+            scanner_cooldowns: BTreeMap::from([(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds)]),
         }
     }
 
@@ -475,6 +482,28 @@ impl WorldState {
     #[must_use]
     pub const fn authoritative_summary(&self) -> &AuthoritativeWorldSummary {
         &self.authoritative_summary
+    }
+
+    #[must_use]
+    pub fn active_drill(&self, player_id: PlayerId) -> Option<&DrillState> {
+        self.active_drills.get(&player_id)
+    }
+
+    pub fn set_active_drill(&mut self, player_id: PlayerId, drill: Option<DrillState>) {
+        if let Some(drill) = drill {
+            self.active_drills.insert(player_id, drill);
+        } else {
+            self.active_drills.remove(&player_id);
+        }
+    }
+
+    #[must_use]
+    pub fn scanner_cooldown_seconds(&self, player_id: PlayerId) -> Option<f32> {
+        self.scanner_cooldowns.get(&player_id).copied()
+    }
+
+    pub fn set_scanner_cooldown_seconds(&mut self, player_id: PlayerId, seconds: f32) {
+        self.scanner_cooldowns.insert(player_id, seconds.max(0.0));
     }
 
     #[must_use]
@@ -520,6 +549,10 @@ impl WorldState {
                 player.artifacts.clear();
                 PlayerScopedCommandOutcome::Applied
             }
+            PlayerCommand::UseScanner => {
+                self.scanner_cooldowns.insert(player_id, 1.0);
+                PlayerScopedCommandOutcome::Applied
+            }
             PlayerCommand::PlaceBomb => {
                 if player.bombs == 0 {
                     PlayerScopedCommandOutcome::IgnoredUnavailable
@@ -532,7 +565,6 @@ impl WorldState {
             | PlayerCommand::Interact
             | PlayerCommand::Cancel
             | PlayerCommand::Confirm
-            | PlayerCommand::UseScanner
             | PlayerCommand::PlaceInfrastructure { .. }
             | PlayerCommand::SelectUpgrade { .. }
             | PlayerCommand::Rescue => PlayerScopedCommandOutcome::IgnoredUnavailable,
@@ -555,6 +587,13 @@ impl WorldState {
     fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
         self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
+        if let Some(drill) = game.active_drill {
+            self.active_drills.insert(LOCAL_PLAYER_ID, drill);
+        } else {
+            self.active_drills.remove(&LOCAL_PLAYER_ID);
+        }
+        self.scanner_cooldowns
+            .insert(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds);
         self.authoritative_summary =
             AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
     }
@@ -1355,7 +1394,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        game_state::GameState,
+        game_state::{DrillState, GameState},
         multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId, SimulationTick},
     };
 
@@ -1528,6 +1567,44 @@ mod tests {
         assert!((player.fuel - player.fuel_capacity).abs() < f32::EPSILON);
         assert!((player.hull - player.max_hull()).abs() < f32::EPSILON);
         assert_eq!(player.bombs, 0);
+    }
+
+    #[test]
+    fn compatibility_world_tracks_per_player_active_drill_and_scanner_cooldown() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let drill = DrillState {
+            target: crate::terrain::TilePosition { x: 1, y: 2 },
+            direction: crate::game_state::DrillDirection::Down,
+            progress: 0.5,
+            initial_durability: 3,
+            seconds_per_chip: 0.25,
+            sound_timer: 0.0,
+            dust_timer: 0.0,
+        };
+
+        world.set_active_drill(LOCAL_PLAYER_ID, Some(drill));
+        world.set_scanner_cooldown_seconds(LOCAL_PLAYER_ID, 2.0);
+
+        assert_eq!(
+            world
+                .active_drill(LOCAL_PLAYER_ID)
+                .expect("drill set")
+                .target
+                .y,
+            2
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::UseScanner),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert!(
+            world
+                .scanner_cooldown_seconds(LOCAL_PLAYER_ID)
+                .expect("cooldown set")
+                > 0.0
+        );
+        world.set_active_drill(LOCAL_PLAYER_ID, None);
+        assert!(world.active_drill(LOCAL_PLAYER_ID).is_none());
     }
 
     #[test]

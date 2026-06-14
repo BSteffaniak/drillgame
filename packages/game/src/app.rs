@@ -100,6 +100,11 @@ fn observe_multiplayer_scaffolding(
             drill_down: false,
         },
     );
+    world_probe.set_scanner_cooldown_seconds(crate::multiplayer::LOCAL_PLAYER_ID, 0.0);
+    world_probe.set_active_drill(crate::multiplayer::LOCAL_PLAYER_ID, None);
+    let _scanner_cooldown =
+        world_probe.scanner_cooldown_seconds(crate::multiplayer::LOCAL_PLAYER_ID);
+    let _active_drill = world_probe.active_drill(crate::multiplayer::LOCAL_PLAYER_ID);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _sequenced_commands = session.sequence_local_commands(player_commands);
