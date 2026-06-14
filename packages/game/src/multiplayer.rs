@@ -753,6 +753,130 @@ pub const fn session_continuity_decision(
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "edge-case proof summary intentionally records checklist-style scaffold coverage"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EdgeCaseProofSummary {
+    pub mining_conflicts_detected: bool,
+    pub economy_conflict_detected: bool,
+    pub underground_disconnect_reserves_player: bool,
+    pub reconnect_reserves_identity: bool,
+    pub join_carries_snapshot_and_player: bool,
+    pub terrain_mismatch_requests_recovery: bool,
+    pub command_rejections_detected: bool,
+    pub prediction_and_policy_helpers_available: bool,
+}
+
+impl EdgeCaseProofSummary {
+    #[must_use]
+    pub const fn all_scaffolded_edges_covered(&self) -> bool {
+        self.mining_conflicts_detected
+            && self.economy_conflict_detected
+            && self.underground_disconnect_reserves_player
+            && self.reconnect_reserves_identity
+            && self.join_carries_snapshot_and_player
+            && self.terrain_mismatch_requests_recovery
+            && self.command_rejections_detected
+            && self.prediction_and_policy_helpers_available
+    }
+}
+
+#[must_use]
+pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
+    let mining_commands = [
+        SequencedPlayerCommand {
+            player_id: PlayerId::new(1),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(2),
+            command: PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+        },
+        SequencedPlayerCommand {
+            player_id: PlayerId::new(2),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(2),
+            command: PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+        },
+        SequencedPlayerCommand {
+            player_id: PlayerId::new(3),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(3),
+            command: PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+        },
+        SequencedPlayerCommand {
+            player_id: PlayerId::new(4),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(4),
+            command: PlayerCommand::BuyUpgrade { index: 0 },
+        },
+        SequencedPlayerCommand {
+            player_id: PlayerId::new(5),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(4),
+            command: PlayerCommand::Repair,
+        },
+    ];
+    let conflicts = command_conflicts(&mining_commands);
+    let runtime_plan = NetworkRuntimePlan::default();
+    let join_messages = runtime_plan.reliable_exchange_messages(SimulationTick::new(9));
+    let mut command_session = CommandNetworkSession::new(SimulationTick::new(10), 1);
+    let rejection_packet = CommandPacket {
+        client_id: ClientId::new(7),
+        commands: vec![SequencedPlayerCommand {
+            player_id: PlayerId::new(8),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(20),
+            command: PlayerCommand::Interact,
+        }],
+    };
+
+    EdgeCaseProofSummary {
+        mining_conflicts_detected: conflicts.contains(&CommandConflict::SameTickMining)
+            && conflicts.contains(&CommandConflict::NearbyTickMining),
+        economy_conflict_detected: conflicts.contains(&CommandConflict::SimultaneousEconomyAction),
+        underground_disconnect_reserves_player: disconnect_reservation_policy(true)
+            == DisconnectReservationPolicy::ReserveForReconnect,
+        reconnect_reserves_identity: session_continuity_decision(
+            Some(SessionToken::new(4)),
+            Some(SessionToken::new(4)),
+        ) == SessionContinuityDecision::ReservePlayerForReconnect,
+        join_carries_snapshot_and_player: matches!(
+            join_messages[1],
+            ProtocolMessage::JoinAccepted {
+                player_id: LOCAL_PLAYER_ID,
+                snapshot_tick,
+                ..
+            } if snapshot_tick.get() == 9
+        ),
+        terrain_mismatch_requests_recovery: terrain_recovery_decision(1, 2)
+            == TerrainRecoveryDecision::RequestChunk,
+        command_rejections_detected: matches!(
+            command_session
+                .apply_command_packet(&rejection_packet)
+                .as_slice(),
+            [CommandApplicationResponse::Rejected(_)]
+        ),
+        prediction_and_policy_helpers_available: initial_message_routing_policy()
+            == MessageRoutingPolicy::SharedWorldLogAndPerClientHud
+            && per_client_ui_policy(2) == PerClientUiPolicy::IndependentClientUi
+            && host_save_decision(2) == HostSaveDecision::CoordinateConnectedClients
+            && session_shutdown_decision(true, false, false) == SessionShutdownDecision::EndSession,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -763,8 +887,8 @@ mod tests {
         disconnect_reservation_policy, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
-        per_client_ui_policy, session_continuity_decision, session_shutdown_decision,
-        terrain_recovery_decision, transport_integration_status,
+        per_client_ui_policy, scaffolded_edge_case_proof, session_continuity_decision,
+        session_shutdown_decision, terrain_recovery_decision, transport_integration_status,
     };
 
     #[test]
@@ -1069,6 +1193,13 @@ mod tests {
             session_shutdown_decision(false, false, true),
             super::SessionShutdownDecision::EndSession
         );
+    }
+
+    #[test]
+    fn scaffolded_edge_case_proof_covers_all_design_helpers() {
+        let proof = scaffolded_edge_case_proof();
+
+        assert!(proof.all_scaffolded_edges_covered());
     }
 
     #[test]
