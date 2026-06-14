@@ -172,6 +172,12 @@ impl InfrastructureKind {
 pub struct PlacedInfrastructure {
     pub kind: InfrastructureKind,
     pub position: TilePosition,
+    #[serde(default = "default_infrastructure_durability")]
+    pub durability: u8,
+}
+
+const fn default_infrastructure_durability() -> u8 {
+    100
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -2063,8 +2069,11 @@ impl GameState {
                 self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_sub(1);
             }
         }
-        self.infrastructure
-            .push(PlacedInfrastructure { kind, position });
+        self.infrastructure.push(PlacedInfrastructure {
+            kind,
+            position,
+            durability: default_infrastructure_durability(),
+        });
         self.message = match kind {
             InfrastructureKind::SignalRelay => {
                 "Placed Signal Relay. Deep rescue signal improved.".to_owned()
@@ -2862,6 +2871,48 @@ impl GameState {
             );
         } else {
             self.message = format!("Paid {cost} credits to maintain signal relay network.");
+        }
+        self.apply_infrastructure_wear();
+    }
+
+    fn apply_infrastructure_wear(&mut self) {
+        let hazard_positions = self
+            .infrastructure
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                let near_hazard = (-2..=2).any(|dy| {
+                    (-2..=2).any(|dx| {
+                        self.terrain
+                            .tile(TilePosition {
+                                x: item.position.x + dx,
+                                y: item.position.y + dy,
+                            })
+                            .is_some_and(|tile| {
+                                matches!(
+                                    tile.kind,
+                                    TileKind::Gas
+                                        | TileKind::Lava
+                                        | TileKind::MagmaVent
+                                        | TileKind::ExplosivePocket
+                                        | TileKind::PressurePocket
+                                )
+                            })
+                    })
+                });
+                near_hazard.then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in hazard_positions {
+            if let Some(item) = self.infrastructure.get_mut(index) {
+                item.durability = item.durability.saturating_sub(20);
+            }
+        }
+        let before = self.infrastructure.len();
+        self.infrastructure.retain(|item| item.durability > 0);
+        let lost = before.saturating_sub(self.infrastructure.len());
+        if lost > 0 {
+            self.message = format!("{lost} infrastructure unit(s) failed in dangerous ground.");
         }
     }
 
