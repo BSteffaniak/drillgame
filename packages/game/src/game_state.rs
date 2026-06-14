@@ -1889,8 +1889,8 @@ impl GameState {
                 | ModalScreen::Repair
                 | ModalScreen::Options
                 | ModalScreen::Bank
-                | ModalScreen::Explosives
-                | ModalScreen::Salvage => 2,
+                | ModalScreen::Explosives => 2,
+                ModalScreen::Salvage => 5,
                 ModalScreen::Headquarters => {
                     if self.deep_claim_status == DeepClaimStatus::Unlocked {
                         6
@@ -2380,6 +2380,9 @@ impl GameState {
         match self.selected_menu_item {
             0 => self.salvage_recover_lost_cargo(),
             1 => self.salvage_patch_hull(),
+            2 => self.salvage_launch_drone(),
+            3 => self.salvage_recover_wrecked_part(),
+            4 => self.salvage_clear_collapse_zone(),
             _ => self.salvage_sell_scrap_tip(),
         }
     }
@@ -2533,6 +2536,62 @@ impl GameState {
         self.player.hull = (self.player.hull + patch).min(self.player.max_hull());
         self.message = format!("Salvage Yard patch job restored {patch:.0} hull.");
         self.sound_cues.push(SoundCue::Upgrade);
+    }
+
+    fn salvage_launch_drone(&mut self) {
+        if self.town_development.salvage_yard_level < 2 {
+            "Salvage drones unlock at Salvage Yard level 2.".clone_into(&mut self.message);
+            return;
+        }
+        let Some(x) = self.lost_cargo_x else {
+            "No rescue beacon for a salvage drone to follow.".clone_into(&mut self.message);
+            return;
+        };
+        let y = self.lost_cargo_y.unwrap_or(10.0 * TILE_SIZE);
+        self.infrastructure.push(PlacedInfrastructure {
+            kind: InfrastructureKind::SurveyDrone,
+            position: TilePosition {
+                x: (x / TILE_SIZE).floor() as i32,
+                y: (y / TILE_SIZE).floor() as i32,
+            },
+            durability: default_infrastructure_durability(),
+        });
+        self.salvage_recover_lost_cargo();
+        "Salvage drone deployed to the rescue beacon and recovered marked cargo."
+            .clone_into(&mut self.message);
+    }
+
+    fn salvage_recover_wrecked_part(&mut self) {
+        if self.town_development.salvage_yard_level < 3 {
+            "Wrecked rig part recovery unlocks at Salvage Yard level 3."
+                .clone_into(&mut self.message);
+            return;
+        }
+        let part = match self.rescue_count % 4 {
+            0 => RigPartKind::ImpactHull,
+            1 => RigPartKind::ArmoredCargoBay,
+            2 => RigPartKind::HazardScanner,
+            _ => RigPartKind::NeedleDrill,
+        };
+        self.rig_part_inventory.insert(part);
+        self.sound_cues.push(SoundCue::Upgrade);
+        self.message = format!("Mara recovered a wrecked {} rig part.", part.title());
+    }
+
+    fn salvage_clear_collapse_zone(&mut self) {
+        if self.town_development.salvage_yard_level < 4 {
+            "Collapse-zone contracts unlock at Salvage Yard level 4.".clone_into(&mut self.message);
+            return;
+        }
+        let cleared = self.collapse_warnings.len();
+        self.collapse_warnings.clear();
+        let payout = u32::try_from(cleared)
+            .unwrap_or(u32::MAX)
+            .saturating_mul(45);
+        self.player.credits = self.player.credits.saturating_add(payout);
+        self.total_earnings = self.total_earnings.saturating_add(payout);
+        self.sound_cues.push(SoundCue::Milestone);
+        self.message = format!("Cleared {cleared} collapse-zone warning(s) for {payout} credits.");
     }
 
     fn salvage_sell_scrap_tip(&mut self) {

@@ -851,6 +851,9 @@ fn draw_salvage(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         &[
             "Recover lost cargo markers".to_owned(),
             "Patch hull free".to_owned(),
+            "Launch salvage drone".to_owned(),
+            "Recover wrecked rig part".to_owned(),
+            "Clear collapse-zone mission".to_owned(),
             "Sell scrap telemetry: +35 cr".to_owned(),
         ],
     );
