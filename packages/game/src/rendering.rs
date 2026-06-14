@@ -26,7 +26,7 @@ use world::{
 
 use crate::{
     game_state::{GameState, RunMode},
-    session::{ClientView, WorldDelta, WorldEvent},
+    session::{ClientView, SplitScreenLayout, WorldDelta, WorldEvent, split_screen_layout},
 };
 
 const SCREEN_WIDTH: i32 = 1280;
@@ -37,6 +37,11 @@ pub struct GameRenderer {
 }
 
 impl GameRenderer {
+    #[must_use]
+    pub const fn split_screen_layout(client_count: usize) -> SplitScreenLayout {
+        split_screen_layout(client_count)
+    }
+
     pub fn new(raylib: &mut RaylibHandle, thread: &RaylibThread, game: &GameState) -> Self {
         Self {
             terrain: TerrainRenderer::new(raylib, thread, game),
@@ -84,6 +89,7 @@ impl GameRenderer {
         game: &GameState,
         views: &[&ClientView],
     ) {
+        let _layout = Self::split_screen_layout(views.len());
         let Some(view) = views.first() else {
             return;
         };

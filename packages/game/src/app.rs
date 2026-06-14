@@ -106,6 +106,7 @@ fn observe_multiplayer_scaffolding(
     let _planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
     let _fixed_tick_audit_items = GameSession::fixed_tick_audit_items();
     let _snapshot_purposes = GameSession::snapshot_purposes();
+    let _split_screen_viewports = GameSession::split_screen_viewports(session.client_count());
     let _world_event_catalog = GameSession::world_event_catalog();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();

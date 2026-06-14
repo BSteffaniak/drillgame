@@ -459,6 +459,69 @@ impl Viewport {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SplitScreenLayout {
+    Single,
+    VerticalTwoUp,
+    Quad,
+}
+
+#[must_use]
+pub const fn split_screen_layout(client_count: usize) -> SplitScreenLayout {
+    match client_count {
+        0 | 1 => SplitScreenLayout::Single,
+        2 => SplitScreenLayout::VerticalTwoUp,
+        _ => SplitScreenLayout::Quad,
+    }
+}
+
+#[must_use]
+pub fn split_screen_viewports(client_count: usize) -> Vec<Viewport> {
+    match split_screen_layout(client_count) {
+        SplitScreenLayout::Single => vec![Viewport::new(
+            0,
+            0,
+            DEFAULT_VIEWPORT_WIDTH,
+            DEFAULT_VIEWPORT_HEIGHT,
+        )],
+        SplitScreenLayout::VerticalTwoUp => vec![
+            Viewport::new(0, 0, DEFAULT_VIEWPORT_WIDTH / 2, DEFAULT_VIEWPORT_HEIGHT),
+            Viewport::new(
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                0,
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT,
+            ),
+        ],
+        SplitScreenLayout::Quad => vec![
+            Viewport::new(
+                0,
+                0,
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+            ),
+            Viewport::new(
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                0,
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+            ),
+            Viewport::new(
+                0,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+            ),
+            Viewport::new(
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+                DEFAULT_VIEWPORT_WIDTH / 2,
+                DEFAULT_VIEWPORT_HEIGHT / 2,
+            ),
+        ],
+    }
+}
+
 /// Per-client presentation state used by renderers and future split-screen views.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClientView {
@@ -703,6 +766,11 @@ impl GameSession {
     #[must_use]
     pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
         snapshot_purposes()
+    }
+
+    #[must_use]
+    pub fn split_screen_viewports(client_count: usize) -> Vec<Viewport> {
+        split_screen_viewports(client_count)
     }
 
     #[must_use]
@@ -1240,6 +1308,25 @@ mod tests {
         assert!(purposes.contains(&super::SnapshotPurpose::SaveFile));
         assert!(purposes.contains(&super::SnapshotPurpose::NetworkSync));
         assert!(purposes.contains(&super::SnapshotPurpose::RenderSync));
+    }
+
+    #[test]
+    fn split_screen_viewports_cover_single_two_up_and_quad_layouts() {
+        assert_eq!(
+            super::split_screen_layout(1),
+            super::SplitScreenLayout::Single
+        );
+        assert_eq!(
+            super::split_screen_layout(2),
+            super::SplitScreenLayout::VerticalTwoUp
+        );
+        assert_eq!(
+            super::split_screen_layout(3),
+            super::SplitScreenLayout::Quad
+        );
+        assert_eq!(GameSession::split_screen_viewports(1).len(), 1);
+        assert_eq!(GameSession::split_screen_viewports(2).len(), 2);
+        assert_eq!(GameSession::split_screen_viewports(4).len(), 4);
     }
 
     #[test]
