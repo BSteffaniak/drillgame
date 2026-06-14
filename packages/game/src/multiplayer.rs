@@ -296,6 +296,49 @@ impl CommandSequenceTracker {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResourceOwnershipPolicy {
+    PerPlayer,
+    SharedTeam,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscoverySharingPolicy {
+    SharedAcrossSession,
+    PerPlayer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollisionPolicy {
+    PlayerCollisionDisabled,
+    PlayerCollisionEnabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportPolicy {
+    TransportAgnosticProtocolFirst,
+}
+
+#[must_use]
+pub const fn initial_resource_ownership_policy() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::PerPlayer
+}
+
+#[must_use]
+pub const fn initial_discovery_sharing_policy() -> DiscoverySharingPolicy {
+    DiscoverySharingPolicy::SharedAcrossSession
+}
+
+#[must_use]
+pub const fn initial_collision_policy() -> CollisionPolicy {
+    CollisionPolicy::PlayerCollisionDisabled
+}
+
+#[must_use]
+pub const fn initial_transport_policy() -> TransportPolicy {
+    TransportPolicy::TransportAgnosticProtocolFirst
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PerClientUiPolicy {
     SharedLegacyUi,
     IndependentClientUi,
@@ -433,8 +476,10 @@ mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
         PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
-        SimulationTick, command_conflicts, host_save_decision, per_client_ui_policy,
-        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        SimulationTick, command_conflicts, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_resource_ownership_policy,
+        initial_transport_policy, per_client_ui_policy, session_continuity_decision,
+        session_shutdown_decision, terrain_recovery_decision,
     };
 
     #[test]
@@ -621,6 +666,26 @@ mod tests {
         assert_eq!(
             session_shutdown_decision(false, false, true),
             super::SessionShutdownDecision::EndSession
+        );
+    }
+
+    #[test]
+    fn initial_multiplayer_policy_decisions_are_explicit() {
+        assert_eq!(
+            initial_resource_ownership_policy(),
+            super::ResourceOwnershipPolicy::PerPlayer
+        );
+        assert_eq!(
+            initial_discovery_sharing_policy(),
+            super::DiscoverySharingPolicy::SharedAcrossSession
+        );
+        assert_eq!(
+            initial_collision_policy(),
+            super::CollisionPolicy::PlayerCollisionDisabled
+        );
+        assert_eq!(
+            initial_transport_policy(),
+            super::TransportPolicy::TransportAgnosticProtocolFirst
         );
     }
 }
