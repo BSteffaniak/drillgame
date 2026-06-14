@@ -52,6 +52,9 @@ pub struct SaveSlotMetadata {
     pub cargo_capacity: u32,
     pub contracts_completed: u32,
     pub play_seconds: f32,
+    pub total_earnings: u32,
+    pub mode: String,
+    pub deep_claim_unlocked: bool,
     pub modified_unix_seconds: Option<u64>,
     pub won_game: bool,
 }
@@ -97,6 +100,21 @@ fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     Ok(save.game)
 }
 
+const fn save_mode_label(game: &GameState) -> &'static str {
+    if game.game_over {
+        "rescue"
+    } else if game.won_game {
+        "deep claim"
+    } else {
+        match game.run_mode {
+            crate::game_state::RunMode::Title => "title",
+            crate::game_state::RunMode::Playing => "playing",
+            crate::game_state::RunMode::Interior => "interior",
+            crate::game_state::RunMode::Paused => "paused",
+        }
+    }
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     reason = "save slot depth is displayed as an integral tile depth"
@@ -116,6 +134,9 @@ pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
         cargo_capacity: game.player.cargo_capacity,
         contracts_completed: game.contracts.completed,
         play_seconds: game.play_seconds,
+        total_earnings: game.total_earnings,
+        mode: save_mode_label(&game).to_owned(),
+        deep_claim_unlocked: game.deep_claim_status == crate::economy::DeepClaimStatus::Unlocked,
         modified_unix_seconds,
         won_game: game.won_game,
     })

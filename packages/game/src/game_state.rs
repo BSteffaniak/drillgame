@@ -1200,6 +1200,31 @@ impl GameState {
     }
 
     #[must_use]
+    pub fn warning_summary(&self) -> String {
+        let mut warnings = Vec::new();
+        if self.player.fuel <= self.player.fuel_capacity * 0.2 {
+            warnings.push("fuel");
+        }
+        if self.player.hull <= self.player.max_hull() * 0.35 {
+            warnings.push("hull");
+        }
+        if self.player.tile_position(TILE_SIZE).y >= 60 {
+            warnings.push("heat");
+        }
+        if self.deep_instability >= 60.0 {
+            warnings.push("instability");
+        }
+        if self.player.tile_position(TILE_SIZE).y >= 80 && self.signal_relay_count() == 0 {
+            warnings.push("signal");
+        }
+        if warnings.is_empty() {
+            "Warnings: nominal".to_owned()
+        } else {
+            format!("Warnings: {}", warnings.join(", "))
+        }
+    }
+
+    #[must_use]
     pub const fn reputation_rank(&self) -> &'static str {
         match self.town_development.reputation {
             0..=2 => "Prospector",

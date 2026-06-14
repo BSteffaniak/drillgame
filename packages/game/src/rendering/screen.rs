@@ -90,6 +90,17 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         },
     );
     draw_expedition_tracker(draw, game);
+    draw.draw_text(
+        &game.warning_summary(),
+        22,
+        176,
+        16,
+        if game.warning_summary() == "Warnings: nominal" {
+            Color::LIGHTGRAY
+        } else {
+            Color::RED
+        },
+    );
     if game.player.scanner_level > 0 {
         let scanner = if game.scanner_cooldown_seconds > 0.0 {
             format!("Scanner cooldown {:.1}s", game.scanner_cooldown_seconds)
@@ -688,7 +699,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::SaveSlots => draw_save_slots(draw, game, true),
         ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
         ModalScreen::Map => draw_large_map(draw, game),
-        ModalScreen::Help => draw_help(draw),
+        ModalScreen::Help => draw_help(draw, game),
         ModalScreen::TownDevelopment => draw_town_development(draw, game),
         ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
         ModalScreen::ResearchLog => draw_research_log(draw, game),
@@ -1292,6 +1303,32 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+    draw.draw_text(
+        &format!("Market: {}", game.active_world_event_summary()),
+        330,
+        374,
+        18,
+        Color::GOLD,
+    );
+    let preview_value: u32 = game
+        .player
+        .cargo
+        .iter()
+        .map(|(mineral, count)| game.mineral_market_value(*mineral).saturating_mul(*count))
+        .sum::<u32>()
+        + game
+            .player
+            .artifacts
+            .iter()
+            .map(|(artifact, count)| artifact.value().saturating_mul(*count))
+            .sum::<u32>();
+    draw.draw_text(
+        &format!("Sell preview: {preview_value} cr at current market rates"),
+        330,
+        398,
+        18,
+        Color::GREEN,
+    );
     draw.draw_text("Active side contracts:", 700, 230, 18, Color::LIGHTGRAY);
     if game.active_side_contracts.is_empty() {
         draw.draw_text("None posted", 720, 258, 16, Color::GRAY);
@@ -1565,7 +1602,7 @@ fn draw_large_map_infrastructure(
     }
 }
 
-fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
+fn draw_help(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(260, 110, 760, 500, Color::new(0, 0, 0, 235));
     draw.draw_rectangle_lines(260, 110, 760, 500, Color::RAYWHITE);
     draw.draw_text("Controls", 300, 145, 32, Color::GOLD);
@@ -1580,6 +1617,7 @@ fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
         "Surface: Fuel, Repair, Depot, HQ, Shop",
         "HQ: contracts and radio briefings",
         "Return safely for trip-streak bonuses",
+        "Warnings: watch fuel, hull, heat, signal, instability",
     ];
     for (index, line) in lines.iter().enumerate() {
         draw.draw_text(
@@ -1590,6 +1628,14 @@ fn draw_help(draw: &mut RaylibDrawHandle<'_>) {
             Color::RAYWHITE,
         );
     }
+    let codex = if game.deep_claim_status == crate::economy::DeepClaimStatus::Unlocked {
+        "Unlocked codex: Expeditions, infrastructure, deep instability, legendary blueprints"
+    } else if game.player.scanner_level > 0 {
+        "Unlocked codex: Scanner contacts reveal ores, artifacts, hazards, and strata"
+    } else {
+        "Unlock codex entries through HQ contracts, scanner upgrades, and Deep Claim mode"
+    };
+    draw.draw_text(codex, 320, 585, 18, Color::SKYBLUE);
 }
 
 fn draw_shop_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -1828,16 +1874,19 @@ fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bo
             || label.to_owned(),
             |meta| {
                 format!(
-                    "depth {}m | {} cr | cargo {}/{} | contracts {} | time {}m | saved {}{}",
+                    "depth {}m | {} cr | earned {} | cargo {}/{} | contracts {} | mode {} | time {}m | saved {}{}{}",
                     meta.depth,
                     meta.credits,
+                    meta.total_earnings,
                     meta.cargo_used,
                     meta.cargo_capacity,
                     meta.contracts_completed,
+                    meta.mode,
                     (meta.play_seconds / 60.0).floor() as u32,
                     meta.modified_unix_seconds
                         .map_or_else(|| "unknown".to_owned(), |seconds| format!("unix {seconds}")),
-                    if meta.won_game { " | core secured" } else { "" }
+                    if meta.won_game { " | core secured" } else { "" },
+                    if meta.deep_claim_unlocked { " | deep claim" } else { "" }
                 )
             },
         );
