@@ -2986,6 +2986,16 @@ impl GameState {
         if bulk_bonus {
             adjusted += adjusted / 10;
         }
+        let diverse_bonus = self.has_equipped_part(RigPartKind::SortedCargoRack)
+            && self
+                .player
+                .cargo
+                .len()
+                .saturating_add(self.player.artifacts.len())
+                >= 4;
+        if diverse_bonus {
+            adjusted += adjusted / 8;
+        }
         let payout = sell_cargo(&mut self.player);
         if adjusted != payout {
             self.player.credits = self
@@ -2999,8 +3009,13 @@ impl GameState {
             self.total_earnings += adjusted;
             let _ = writeln!(
                 &mut self.last_depot_receipt,
-                "MARKET mineral pricing applied{}",
-                if bulk_bonus { " + bulk-sale bonus" } else { "" }
+                "MARKET mineral pricing applied{}{}",
+                if bulk_bonus { " + bulk-sale bonus" } else { "" },
+                if diverse_bonus {
+                    " + sorted-rack diversity bonus"
+                } else {
+                    ""
+                }
             );
             let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {adjusted} cr");
             self.depot_receipts.push(self.last_depot_receipt.clone());
@@ -3012,7 +3027,9 @@ impl GameState {
             "No cargo to sell.".clone_into(&mut self.message);
         } else {
             self.sound_cues.push(SoundCue::Sell);
-            self.message = if bulk_bonus {
+            self.message = if diverse_bonus {
+                format!("Sold cargo for {adjusted} credits with sorted-rack diversity bonus.")
+            } else if bulk_bonus {
                 format!("Sold cargo for {adjusted} credits with depot bulk-sale bonus.")
             } else {
                 format!("Sold cargo for {adjusted} credits at current mineral markets.")
@@ -3355,6 +3372,39 @@ impl GameState {
         self.sound_cues.push(SoundCue::Upgrade);
     }
 
+    fn effective_cargo_capacity(&self) -> u32 {
+        let mut capacity = self.player.cargo_capacity;
+        if self.has_equipped_part(RigPartKind::CargoBalloon) {
+            capacity = capacity.saturating_add(20);
+        }
+        if self.has_equipped_part(RigPartKind::ArmoredCargoBay) {
+            capacity = capacity.saturating_sub(4).max(1);
+        }
+        capacity
+    }
+
+    fn add_mined_cargo(&mut self, mineral: MineralKind) -> bool {
+        if self.effective_cargo_capacity() == self.player.cargo_capacity {
+            return self.player.add_cargo(mineral);
+        }
+        if self.player.cargo_used() >= self.effective_cargo_capacity() {
+            return false;
+        }
+        *self.player.cargo.entry(mineral).or_default() += 1;
+        true
+    }
+
+    fn add_mined_artifact(&mut self, artifact: ArtifactKind) -> bool {
+        if self.effective_cargo_capacity() == self.player.cargo_capacity {
+            return self.player.add_artifact(artifact);
+        }
+        if self.player.cargo_used() >= self.effective_cargo_capacity() {
+            return false;
+        }
+        *self.player.artifacts.entry(artifact).or_default() += 1;
+        true
+    }
+
     fn has_equipped_part(&self, part: RigPartKind) -> bool {
         self.equipped_rig_parts
             .values()
@@ -3365,7 +3415,7 @@ impl GameState {
         let can_burn_fuel = self.player.fuel > 0.0;
         let grounded = self.is_grounded();
         let cargo_ratio =
-            self.player.cargo_used() as f32 / self.player.cargo_capacity.max(1) as f32;
+            self.player.cargo_used() as f32 / self.effective_cargo_capacity().max(1) as f32;
         let cargo_pressure = if self.has_equipped_part(RigPartKind::HaulerEngine) {
             0.08
         } else if self.has_equipped_part(RigPartKind::LightweightEngine) {
@@ -3384,6 +3434,9 @@ impl GameState {
         }
         if self.has_equipped_part(RigPartKind::BurstEngine) {
             engine_multiplier *= 1.25;
+        }
+        if self.has_equipped_part(RigPartKind::CargoBalloon) {
+            engine_multiplier *= 0.88;
         }
         let horizontal_acceleration = if grounded {
             HORIZONTAL_ACCELERATION * 1.35
@@ -3728,7 +3781,7 @@ impl GameState {
         self.collection_log.discover_tile(mined);
 
         if let TileKind::Ore(mineral) = mined {
-            if self.player.add_cargo(mineral) {
+            if self.add_mined_cargo(mineral) {
                 self.message = format!("Loaded {} ore worth {}.", mineral.name(), mineral.value());
                 if self.deep_claim_status == DeepClaimStatus::Unlocked
                     && target.y >= 70
@@ -3741,7 +3794,7 @@ impl GameState {
                 "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
             }
         } else if let TileKind::Artifact(artifact) = mined {
-            if self.player.add_artifact(artifact) {
+            if self.add_mined_artifact(artifact) {
                 self.artifacts_found += 1;
                 if artifact == ArtifactKind::StarCore {
                     self.escape_sequence_seconds = 120.0;
@@ -4785,9 +4838,10 @@ impl GameState {
         self.rescue_count += 1;
         let before_minerals = self.player.cargo.clone();
         let before_artifacts = self.player.artifacts.clone();
+        let armored_cargo = self.has_equipped_part(RigPartKind::ArmoredCargoBay);
         let mut lost_items = if self.player.insured && self.player.insurance_tier >= 2 {
             0
-        } else if self.player.insured {
+        } else if self.player.insured || armored_cargo {
             drop_quarter_cargo(&mut self.player)
         } else {
             drop_half_cargo(&mut self.player)
