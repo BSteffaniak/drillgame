@@ -108,6 +108,7 @@ fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: 
             crate::game_state::InfrastructureKind::CargoLift => "L",
             crate::game_state::InfrastructureKind::TunnelSupport => "S",
             crate::game_state::InfrastructureKind::PumpStation => "P",
+            crate::game_state::InfrastructureKind::OreProcessor => "O",
         };
         let color = match item.kind {
             crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
@@ -115,6 +116,7 @@ fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: 
             crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
             crate::game_state::InfrastructureKind::TunnelSupport => Color::ORANGE,
             crate::game_state::InfrastructureKind::PumpStation => Color::BLUE,
+            crate::game_state::InfrastructureKind::OreProcessor => Color::PURPLE,
         };
         draw.draw_circle_lines(x, y, 11.0 + pulse * 3.0, color);
         draw.draw_rectangle(x - 4, y - 10, 8, 20, Color::DARKBLUE);

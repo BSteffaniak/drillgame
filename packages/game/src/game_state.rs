@@ -159,6 +159,7 @@ pub enum InfrastructureKind {
     CargoLift,
     TunnelSupport,
     PumpStation,
+    OreProcessor,
 }
 
 impl InfrastructureKind {
@@ -170,6 +171,7 @@ impl InfrastructureKind {
             Self::CargoLift => "Cargo Lift",
             Self::TunnelSupport => "Tunnel Support",
             Self::PumpStation => "Pump Station",
+            Self::OreProcessor => "Ore Processor",
         }
     }
 }
@@ -226,10 +228,11 @@ pub enum RecipeKind {
     CargoLiftKit,
     TunnelSupportKit,
     PumpStationKit,
+    OreProcessorKit,
 }
 
 impl RecipeKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ReinforcedBulkhead,
         Self::AuxiliaryTank,
         Self::ExpandedSorter,
@@ -238,6 +241,7 @@ impl RecipeKind {
         Self::CargoLiftKit,
         Self::TunnelSupportKit,
         Self::PumpStationKit,
+        Self::OreProcessorKit,
     ];
 
     #[must_use]
@@ -251,6 +255,7 @@ impl RecipeKind {
             Self::CargoLiftKit => "Cargo Lift Kit",
             Self::TunnelSupportKit => "Tunnel Support Kit",
             Self::PumpStationKit => "Pump Station Kit",
+            Self::OreProcessorKit => "Ore Processor Kit",
         }
     }
 
@@ -265,6 +270,7 @@ impl RecipeKind {
             Self::CargoLiftKit => "sends cargo upward from a station",
             Self::TunnelSupportKit => "protects nearby tunnel from collapses",
             Self::PumpStationKit => "suppresses nearby gas and heat hazards",
+            Self::OreProcessorKit => "refines cheap ore into strategic materials",
         }
     }
 
@@ -294,6 +300,10 @@ impl RecipeKind {
                 (StrategicResourceKind::AncientAlloy, 1),
                 (StrategicResourceKind::CrystalLens, 1),
                 (StrategicResourceKind::CoreShard, 1),
+            ],
+            Self::OreProcessorKit => &[
+                (StrategicResourceKind::AncientAlloy, 2),
+                (StrategicResourceKind::CrystalLens, 1),
             ],
         }
     }
@@ -1151,6 +1161,9 @@ impl GameState {
             return;
         }
 
+        if self.try_use_ore_processor() {
+            return;
+        }
         if self.try_use_cargo_lift() {
             return;
         }
@@ -1160,6 +1173,45 @@ impl GameState {
         } else {
             "No surface service here.".clone_into(&mut self.message);
         }
+    }
+
+    fn try_use_ore_processor(&mut self) -> bool {
+        let position = self.player.tile_position(TILE_SIZE);
+        let Some(processor_index) = self.infrastructure.iter().position(|item| {
+            item.kind == InfrastructureKind::OreProcessor
+                && (item.position.x - position.x).abs() <= 1
+                && (item.position.y - position.y).abs() <= 1
+        }) else {
+            return false;
+        };
+        let recipes = [
+            (MineralKind::Copper, StrategicResourceKind::AncientAlloy),
+            (MineralKind::Iron, StrategicResourceKind::AncientAlloy),
+            (MineralKind::Silver, StrategicResourceKind::CrystalLens),
+        ];
+        for (mineral, material) in recipes {
+            let Some(count) = self.player.cargo.get_mut(&mineral) else {
+                continue;
+            };
+            if *count < 5 {
+                continue;
+            }
+            *count -= 5;
+            self.player.cargo.retain(|_, count| *count > 0);
+            self.player.add_material(material, 1);
+            if let Some(processor) = self.infrastructure.get_mut(processor_index) {
+                processor.durability = processor.durability.saturating_sub(8);
+            }
+            self.message = format!(
+                "Ore processor refined 5 {} into 1 {}.",
+                mineral.name(),
+                material.name()
+            );
+            self.sound_cues.push(SoundCue::Upgrade);
+            return true;
+        }
+        "Ore processor needs 5 Copper, Iron, or Silver cargo.".clone_into(&mut self.message);
+        true
     }
 
     fn try_use_cargo_lift(&mut self) -> bool {
@@ -1529,6 +1581,9 @@ impl GameState {
             }
             RecipeKind::PumpStationKit => {
                 self.player.pump_station_kits = self.player.pump_station_kits.saturating_add(1);
+            }
+            RecipeKind::OreProcessorKit => {
+                self.player.ore_processor_kits = self.player.ore_processor_kits.saturating_add(1);
             }
         }
         self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
@@ -2161,6 +2216,12 @@ impl GameState {
                 "No pump station kits. Craft one at HQ first.",
             );
         }
+        if input.place_processor {
+            self.place_infrastructure_kit(
+                InfrastructureKind::OreProcessor,
+                "No ore processor kits. Craft one at HQ first.",
+            );
+        }
     }
 
     fn place_infrastructure_kit(&mut self, kind: InfrastructureKind, empty_message: &str) {
@@ -2170,6 +2231,7 @@ impl GameState {
             InfrastructureKind::CargoLift => self.player.cargo_lift_kits,
             InfrastructureKind::TunnelSupport => self.player.tunnel_support_kits,
             InfrastructureKind::PumpStation => self.player.pump_station_kits,
+            InfrastructureKind::OreProcessor => self.player.ore_processor_kits,
         };
         if kits == 0 {
             empty_message.clone_into(&mut self.message);
@@ -2204,6 +2266,9 @@ impl GameState {
             InfrastructureKind::PumpStation => {
                 self.player.pump_station_kits = self.player.pump_station_kits.saturating_sub(1);
             }
+            InfrastructureKind::OreProcessor => {
+                self.player.ore_processor_kits = self.player.ore_processor_kits.saturating_sub(1);
+            }
         }
         self.infrastructure.push(PlacedInfrastructure {
             kind,
@@ -2225,6 +2290,9 @@ impl GameState {
             }
             InfrastructureKind::PumpStation => {
                 "Placed Pump Station. Nearby gas and heat hazards are suppressed.".to_owned()
+            }
+            InfrastructureKind::OreProcessor => {
+                "Placed Ore Processor. Press E nearby to refine cheap ore.".to_owned()
             }
         };
         self.sound_cues.push(SoundCue::Upgrade);

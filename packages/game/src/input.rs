@@ -33,6 +33,7 @@ pub struct PlayerInput {
     pub place_lift: bool,
     pub place_support: bool,
     pub place_pump: bool,
+    pub place_processor: bool,
 }
 
 #[must_use]
@@ -81,6 +82,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         place_lift: raylib.is_key_pressed(KeyboardKey::KEY_L),
         place_support: raylib.is_key_pressed(KeyboardKey::KEY_U),
         place_pump: raylib.is_key_pressed(KeyboardKey::KEY_O),
+        place_processor: raylib.is_key_pressed(KeyboardKey::KEY_P),
     }
 }
 

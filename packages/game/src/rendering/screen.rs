@@ -140,6 +140,13 @@ fn draw_infrastructure_kit_prompts(draw: &mut RaylibDrawHandle<'_>, game: &GameS
                 game.player.pump_station_kits
             ),
         ),
+        (
+            game.player.ore_processor_kits,
+            format!(
+                "Ore processors: {} kit(s) (P to place)",
+                game.player.ore_processor_kits
+            ),
+        ),
     ];
     let mut row = 0;
     for (count, prompt) in prompts {
@@ -476,6 +483,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
             crate::game_state::InfrastructureKind::TunnelSupport => Color::ORANGE,
             crate::game_state::InfrastructureKind::PumpStation => Color::BLUE,
+            crate::game_state::InfrastructureKind::OreProcessor => Color::PURPLE,
         };
         draw_map_marker(draw, &projection, item.position.x, item.position.y, color);
     }
@@ -920,14 +928,15 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     draw.draw_text(
         &format!(
-            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {} | support kits {} | pump kits {}",
+            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {} | support kits {} | pump kits {} | processor kits {}",
             game.player.crafted_bulkheads,
             game.player.crafted_sorters,
             game.player.signal_relay_kits,
             game.player.survey_drone_kits,
             game.player.cargo_lift_kits,
             game.player.tunnel_support_kits,
-            game.player.pump_station_kits
+            game.player.pump_station_kits,
+            game.player.ore_processor_kits
         ),
         350,
         450,
@@ -1400,19 +1409,12 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_rectangle(px - 2, py - 2, 5, 5, marker_color(marker.kind));
     }
 
-    for item in &game.infrastructure {
-        let px = x + item.position.x * width / terrain_width;
-        let py = y + item.position.y * height / terrain_height;
-        let (label, color) = match item.kind {
-            crate::game_state::InfrastructureKind::SignalRelay => ("R", Color::SKYBLUE),
-            crate::game_state::InfrastructureKind::SurveyDrone => ("D", Color::GREEN),
-            crate::game_state::InfrastructureKind::CargoLift => ("L", Color::GOLD),
-            crate::game_state::InfrastructureKind::TunnelSupport => ("S", Color::ORANGE),
-            crate::game_state::InfrastructureKind::PumpStation => ("P", Color::BLUE),
-        };
-        draw.draw_circle_lines(px, py, 6.0, color);
-        draw.draw_text(label, px + 7, py - 6, 10, color);
-    }
+    draw_large_map_infrastructure(
+        draw,
+        game,
+        (x, y, width, height),
+        (terrain_width, terrain_height),
+    );
 
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
@@ -1458,6 +1460,30 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         16,
         Color::LIGHTGRAY,
     );
+}
+
+fn draw_large_map_infrastructure(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    map_rect: (i32, i32, i32, i32),
+    terrain_size: (i32, i32),
+) {
+    let (x, y, width, height) = map_rect;
+    let (terrain_width, terrain_height) = terrain_size;
+    for item in &game.infrastructure {
+        let px = x + item.position.x * width / terrain_width;
+        let py = y + item.position.y * height / terrain_height;
+        let (label, color) = match item.kind {
+            crate::game_state::InfrastructureKind::SignalRelay => ("R", Color::SKYBLUE),
+            crate::game_state::InfrastructureKind::SurveyDrone => ("D", Color::GREEN),
+            crate::game_state::InfrastructureKind::CargoLift => ("L", Color::GOLD),
+            crate::game_state::InfrastructureKind::TunnelSupport => ("S", Color::ORANGE),
+            crate::game_state::InfrastructureKind::PumpStation => ("P", Color::BLUE),
+            crate::game_state::InfrastructureKind::OreProcessor => ("O", Color::PURPLE),
+        };
+        draw.draw_circle_lines(px, py, 6.0, color);
+        draw.draw_text(label, px + 7, py - 6, 10, color);
+    }
 }
 
 fn draw_help(draw: &mut RaylibDrawHandle<'_>) {

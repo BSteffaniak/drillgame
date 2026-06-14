@@ -54,6 +54,8 @@ pub struct Player {
     pub tunnel_support_kits: u32,
     #[serde(default)]
     pub pump_station_kits: u32,
+    #[serde(default)]
+    pub ore_processor_kits: u32,
 }
 
 #[allow(
@@ -94,6 +96,7 @@ impl Player {
             cargo_lift_kits: 0,
             tunnel_support_kits: 0,
             pump_station_kits: 0,
+            ore_processor_kits: 0,
         }
     }
 
