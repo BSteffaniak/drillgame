@@ -13,6 +13,7 @@ pub mod multiplayer;
 mod player;
 mod rendering;
 mod save;
+mod session;
 mod surface;
 mod terrain;
 

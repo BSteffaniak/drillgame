@@ -1,11 +1,11 @@
 use crate::{
     audio::AudioBus,
-    game_state::GameState,
     input::read_input,
     input_mapping::map_local_input,
     multiplayer::FIXED_DELTA_SECONDS,
     rendering::GameRenderer,
     save::{SettingsFile, load_settings, save_settings},
+    session::GameSession,
 };
 
 const WINDOW_WIDTH: i32 = 1280;
@@ -23,10 +23,10 @@ pub fn run() {
     raylib.set_exit_key(None);
 
     let settings = load_settings();
-    let mut game = GameState::new();
-    game.master_volume = settings.master_volume;
-    game.fullscreen = settings.fullscreen;
-    if game.fullscreen {
+    let mut session = GameSession::new();
+    session.game_mut().master_volume = settings.master_volume;
+    session.game_mut().fullscreen = settings.fullscreen;
+    if session.game().fullscreen {
         raylib.toggle_fullscreen();
     }
     let audio = match AudioBus::new() {
@@ -37,9 +37,9 @@ pub fn run() {
         }
     };
 
-    let mut renderer = GameRenderer::new(&mut raylib, &thread, &game);
+    let mut renderer = GameRenderer::new(&mut raylib, &thread, session.game());
 
-    while !game.request_exit {
+    while !session.game().request_exit {
         let delta_seconds = raylib.get_frame_time();
         debug_assert!(
             delta_seconds <= FRAME_DELTA_SPIKE_WARN_SECONDS,
@@ -47,28 +47,34 @@ pub fn run() {
         );
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
-        let _mapped_input = map_local_input(input);
+        let mapped_input = map_local_input(input);
+        let _local_client_id = session.local_client().client_id;
+        let _current_tick = session.current_tick();
+        let _sequenced_commands = session.sequence_local_commands(mapped_input.player_commands);
 
-        game.update(input, delta_seconds);
+        session.update_legacy(input, delta_seconds);
         if input.fullscreen {
             raylib.toggle_fullscreen();
         }
-        if (input.fullscreen || input.volume_up || input.volume_down || game.take_settings_dirty())
+        if (input.fullscreen
+            || input.volume_up
+            || input.volume_down
+            || session.game_mut().take_settings_dirty())
             && let Err(error) = save_settings(SettingsFile {
-                master_volume: game.master_volume,
-                fullscreen: game.fullscreen,
+                master_volume: session.game().master_volume,
+                fullscreen: session.game().fullscreen,
             })
         {
             eprintln!("Settings save failed: {error}");
         }
         if let Some(audio) = &audio {
-            audio.set_volume(game.master_volume);
-            audio.play(&game.sound_cues);
+            audio.set_volume(session.game().master_volume);
+            audio.play(&session.game().sound_cues);
         }
 
-        renderer.sync(&mut raylib, &thread, &mut game);
+        renderer.sync(&mut raylib, &thread, session.game_mut());
 
         let mut draw = raylib.begin_drawing(&thread);
-        renderer.render(&mut draw, &game);
+        renderer.render(&mut draw, session.game());
     }
 }
