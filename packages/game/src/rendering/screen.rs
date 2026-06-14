@@ -66,6 +66,14 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 
     draw.draw_text(&game.town_event, 22, 96, 16, Color::LIGHTGRAY);
+    if game.player.scanner_level > 0 {
+        let scanner = if game.scanner_cooldown_seconds > 0.0 {
+            format!("Scanner cooldown {:.1}s", game.scanner_cooldown_seconds)
+        } else {
+            "Scanner ready (C)".to_owned()
+        };
+        draw.draw_text(&scanner, 22, 116, 16, Color::SKYBLUE);
+    }
 
     if game.show_details || game.modal == Some(ModalScreen::Depot) {
         draw_detail_panel(draw, game);
@@ -367,6 +375,16 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         }
     }
 
+    for marker in &game.scan_markers {
+        draw_map_marker(
+            draw,
+            &projection,
+            marker.position.x,
+            marker.position.y,
+            marker_color(marker.kind),
+        );
+    }
+
     for building in SURFACE_BUILDINGS {
         draw_map_marker(
             draw,
@@ -387,6 +405,19 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         );
     }
     draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
+}
+
+const fn marker_color(kind: TileKind) -> Color {
+    match kind {
+        TileKind::Ore(_) => Color::GOLD,
+        TileKind::Artifact(_) => Color::MAGENTA,
+        TileKind::Gas
+        | TileKind::Lava
+        | TileKind::MagmaVent
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket => Color::RED,
+        _ => Color::WHITE,
+    }
 }
 
 fn draw_map_marker(
@@ -525,6 +556,9 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::DepotReceiptHistory => draw_depot_receipt_history(draw, game),
         ModalScreen::Shop => draw_modal_shop(draw, game),
         ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
+        ModalScreen::Bank => draw_bank(draw, game),
+        ModalScreen::Explosives => draw_explosives(draw, game),
+        ModalScreen::Salvage => draw_salvage(draw, game),
         ModalScreen::Options => draw_options(draw, game),
         ModalScreen::SaveSlots => draw_save_slots(draw, game, true),
         ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
@@ -541,6 +575,106 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
             );
         }
     }
+}
+
+fn draw_options_list(
+    draw: &mut RaylibDrawHandle<'_>,
+    selected: usize,
+    x: i32,
+    y: i32,
+    options: &[String],
+) {
+    draw.draw_text(
+        "Up/Down choose | Enter/E confirm | Backspace/Esc close",
+        x,
+        y - 35,
+        18,
+        Color::LIGHTGRAY,
+    );
+    for (index, option) in options.iter().enumerate() {
+        let color = if index == selected {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(
+            option,
+            x,
+            y + i32::try_from(index).unwrap_or(i32::MAX) * 42,
+            22,
+            color,
+        );
+    }
+}
+
+fn draw_bank(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Iron Ledger Bank", 330, 150, 30, Color::GOLD);
+    let finance = if game.player.loan_debt == 0 {
+        "Take loan: +250 now, owe 300".to_owned()
+    } else {
+        format!("Pay debt: {} owed", game.player.loan_debt)
+    };
+    let insurance = if game.player.insured {
+        "Insurance active".to_owned()
+    } else {
+        "Buy rescue insurance: 90 cr".to_owned()
+    };
+    let side = if game.side_contract_active {
+        "Side contract already posted".to_owned()
+    } else {
+        "Post side contract".to_owned()
+    };
+    draw_options_list(
+        draw,
+        game.selected_menu_item,
+        360,
+        230,
+        &[finance, insurance, side],
+    );
+}
+
+fn draw_explosives(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Nix's Explosive Shack", 330, 150, 30, Color::RED);
+    draw.draw_text(
+        &format!("Bombs carried: {}", game.player.bombs),
+        360,
+        200,
+        20,
+        Color::RAYWHITE,
+    );
+    draw_options_list(
+        draw,
+        game.selected_menu_item,
+        360,
+        245,
+        &[
+            "3 timed charges: 55 cr".to_owned(),
+            "7 timed charges: 120 cr".to_owned(),
+            "Ask Nix for one risky freebie".to_owned(),
+        ],
+    );
+}
+
+fn draw_salvage(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Mara's Salvage Yard", 330, 150, 30, Color::LIME);
+    draw.draw_text(
+        &format!("Lost cargo markers: {}", game.lost_cargo_count),
+        360,
+        200,
+        20,
+        Color::RAYWHITE,
+    );
+    draw_options_list(
+        draw,
+        game.selected_menu_item,
+        360,
+        245,
+        &[
+            "Recover lost cargo markers".to_owned(),
+            "Patch hull free".to_owned(),
+            "Sell scrap telemetry: +35 cr".to_owned(),
+        ],
+    );
 }
 
 fn draw_depot_receipt_history(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -787,6 +921,12 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             };
             draw.draw_rectangle(px, py, 3, 3, color);
         }
+    }
+
+    for marker in &game.scan_markers {
+        let px = x + marker.position.x * width / terrain_width;
+        let py = y + marker.position.y * height / terrain_height;
+        draw.draw_rectangle(px - 2, py - 2, 5, 5, marker_color(marker.kind));
     }
 
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;

@@ -20,7 +20,7 @@ use crate::{
     player::Player,
     save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
     surface::surface_building_at_tile,
-    terrain::{ArtifactKind, MineResult, Terrain, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineResult, MineralKind, Terrain, TileKind, TilePosition},
 };
 
 pub const TILE_SIZE: f32 = 32.0;
@@ -90,6 +90,9 @@ pub enum ModalScreen {
     DepotReceiptHistory,
     Shop,
     ShopConfirm,
+    Bank,
+    Explosives,
+    Salvage,
     Options,
     SaveSlots,
     LoadSlots,
@@ -148,6 +151,12 @@ pub struct PlacedBomb {
     pub x: f32,
     pub y: f32,
     pub timer_seconds: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct ScanMarker {
+    pub position: TilePosition,
+    pub kind: TileKind,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -291,6 +300,14 @@ pub struct GameState {
     #[serde(default)]
     pub town_event: String,
     #[serde(default)]
+    pub scan_markers: Vec<ScanMarker>,
+    #[serde(default)]
+    pub side_contract_active: bool,
+    #[serde(default)]
+    pub side_contract_target: Option<TileKind>,
+    #[serde(default)]
+    pub side_contract_required: u32,
+    #[serde(default)]
     pub falling_boulders: Vec<FallingBoulder>,
     #[serde(default)]
     pub spark_particles: Vec<SparkParticle>,
@@ -389,6 +406,10 @@ impl GameState {
             scanner_cooldown_seconds: 0.0,
             town_event_day: 0,
             town_event: "Normal market conditions.".to_owned(),
+            scan_markers: Vec::new(),
+            side_contract_active: false,
+            side_contract_target: None,
+            side_contract_required: 0,
             falling_boulders: Vec::new(),
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
@@ -589,6 +610,18 @@ impl GameState {
                         self.explored_tiles[index] = true;
                         self.mark_tile_visual_changed(position);
                     }
+                    if let Some(tile) = self.terrain.tile(position)
+                        && scanner_can_mark(tile.kind, self.player.scanner_level)
+                        && !self
+                            .scan_markers
+                            .iter()
+                            .any(|marker| marker.position == position)
+                    {
+                        self.scan_markers.push(ScanMarker {
+                            position,
+                            kind: tile.kind,
+                        });
+                    }
                 }
             }
         }
@@ -762,9 +795,9 @@ impl GameState {
             }
             SurfaceZone::Headquarters => self.modal = Some(ModalScreen::Headquarters),
             SurfaceZone::Shop => self.modal = Some(ModalScreen::Shop),
-            SurfaceZone::Bank => self.confirm_bank_service(),
-            SurfaceZone::Explosives => self.buy_explosive_shack_pack(),
-            SurfaceZone::Salvage => self.salvage_yard_service(),
+            SurfaceZone::Bank => self.modal = Some(ModalScreen::Bank),
+            SurfaceZone::Explosives => self.modal = Some(ModalScreen::Explosives),
+            SurfaceZone::Salvage => self.modal = Some(ModalScreen::Salvage),
         }
         self.sound_cues.push(SoundCue::Ui);
     }
@@ -788,7 +821,10 @@ impl GameState {
                 | ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::Options
-                | ModalScreen::Headquarters => 2,
+                | ModalScreen::Headquarters
+                | ModalScreen::Bank
+                | ModalScreen::Explosives
+                | ModalScreen::Salvage => 2,
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -820,6 +856,9 @@ impl GameState {
                 ModalScreen::DepotReceiptHistory => self.modal = Some(ModalScreen::Depot),
                 ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
                 ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
+                ModalScreen::Bank => self.confirm_bank_menu(),
+                ModalScreen::Explosives => self.confirm_explosives_menu(),
+                ModalScreen::Salvage => self.confirm_salvage_menu(),
                 ModalScreen::Options => self.confirm_options(),
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
@@ -937,19 +976,64 @@ impl GameState {
         }
     }
 
-    fn confirm_bank_service(&mut self) {
-        if !self.player.insured {
-            let cost = 90;
-            if self.player.credits >= cost {
-                self.player.credits -= cost;
-                self.player.insured = true;
-                "Ledger sold you rescue insurance. Next rescue keeps more cargo and halves the fee."
+    fn confirm_bank_menu(&mut self) {
+        match self.selected_menu_item {
+            0 => self.confirm_finance(),
+            1 => self.buy_insurance(),
+            _ => self.start_side_contract(),
+        }
+    }
+
+    fn confirm_explosives_menu(&mut self) {
+        match self.selected_menu_item {
+            0 => self.buy_explosive_shack_pack(3, 55),
+            1 => self.buy_explosive_shack_pack(7, 120),
+            _ => {
+                self.player.bombs = self.player.bombs.saturating_add(1);
+                "Nix comped one test charge. Try not to test it indoors."
                     .clone_into(&mut self.message);
-                self.sound_cues.push(SoundCue::Upgrade);
-                return;
             }
         }
-        self.confirm_finance();
+    }
+
+    fn confirm_salvage_menu(&mut self) {
+        match self.selected_menu_item {
+            0 => self.salvage_recover_lost_cargo(),
+            1 => self.salvage_patch_hull(),
+            _ => self.salvage_sell_scrap_tip(),
+        }
+    }
+
+    fn buy_insurance(&mut self) {
+        if self.player.insured {
+            "Already insured for the next rescue.".clone_into(&mut self.message);
+            return;
+        }
+        let cost = 90;
+        if self.player.credits < cost {
+            self.message = format!("Insurance costs {cost} credits.");
+            return;
+        }
+        self.player.credits -= cost;
+        self.player.insured = true;
+        "Ledger sold you rescue insurance. Next rescue keeps cargo and halves the fee."
+            .clone_into(&mut self.message);
+        self.sound_cues.push(SoundCue::Upgrade);
+    }
+
+    fn start_side_contract(&mut self) {
+        self.side_contract_active = true;
+        self.side_contract_target = Some(match self.town_event_day % 3 {
+            0 => TileKind::Ore(MineralKind::Gold),
+            1 => TileKind::Ore(MineralKind::Platinum),
+            _ => TileKind::Artifact(ArtifactKind::Fossil),
+        });
+        self.side_contract_required = 2;
+        self.message = format!(
+            "Side contract posted: deliver {} x{} for bonus pay.",
+            self.side_contract_target.map_or("sample", TileKind::name),
+            self.side_contract_required
+        );
     }
 
     fn confirm_finance(&mut self) {
@@ -970,37 +1054,92 @@ impl GameState {
         self.sound_cues.push(SoundCue::Sell);
     }
 
-    fn buy_explosive_shack_pack(&mut self) {
-        let cost = 55;
+    fn buy_explosive_shack_pack(&mut self, count: u32, cost: u32) {
         if self.player.credits < cost {
             self.message = format!("Explosive Shack: bomb bundle costs {cost} credits.");
             return;
         }
         self.player.credits -= cost;
-        self.player.bombs += 3;
+        self.player.bombs += count;
         self.sound_cues.push(SoundCue::Upgrade);
-        "Nix at the Explosive Shack sold you 3 timed charges. Don't hug them."
-            .clone_into(&mut self.message);
+        self.message = format!("Nix sold you {count} timed charges. Don't hug them.");
     }
 
-    fn salvage_yard_service(&mut self) {
+    fn salvage_recover_lost_cargo(&mut self) {
         let recovered = self.lost_cargo_count;
         if recovered == 0 {
-            let patch = (self.player.max_hull() * 0.12).ceil();
-            self.player.hull = (self.player.hull + patch).min(self.player.max_hull());
-            self.message = format!("Salvage Yard patch job restored {patch:.0} hull.");
-        } else {
-            self.lost_cargo_count = 0;
-            self.message = format!(
-                "Salvage Yard beaconed your lost cargo field: {recovered} items marked on map."
-            );
+            "No lost cargo beacon is active.".clone_into(&mut self.message);
+            return;
         }
+        let fee = (recovered * 12).min(self.player.credits);
+        self.player.credits -= fee;
+        self.lost_cargo_count = 0;
+        self.lost_cargo_x = None;
+        self.lost_cargo_y = None;
+        self.message = format!("Mara recovered {recovered} lost cargo markers for {fee} credits.");
         self.sound_cues.push(SoundCue::Upgrade);
+    }
+
+    fn salvage_patch_hull(&mut self) {
+        let patch = (self.player.max_hull() * 0.12).ceil();
+        self.player.hull = (self.player.hull + patch).min(self.player.max_hull());
+        self.message = format!("Salvage Yard patch job restored {patch:.0} hull.");
+        self.sound_cues.push(SoundCue::Upgrade);
+    }
+
+    fn salvage_sell_scrap_tip(&mut self) {
+        self.player.credits = self.player.credits.saturating_add(35);
+        "Mara bought scrap telemetry for 35 credits.".clone_into(&mut self.message);
+        self.sound_cues.push(SoundCue::Sell);
+    }
+
+    fn try_complete_side_contract(&mut self) {
+        if !self.side_contract_active {
+            return;
+        }
+        let Some(target) = self.side_contract_target else {
+            return;
+        };
+        let satisfied = match target {
+            TileKind::Ore(mineral) => {
+                self.player.cargo.get(&mineral).copied().unwrap_or(0) >= self.side_contract_required
+            }
+            TileKind::Artifact(artifact) => {
+                self.player.artifacts.get(&artifact).copied().unwrap_or(0)
+                    >= self.side_contract_required
+            }
+            _ => false,
+        };
+        if !satisfied {
+            return;
+        }
+        match target {
+            TileKind::Ore(mineral) => consume_side_count(
+                &mut self.player.cargo,
+                &mineral,
+                self.side_contract_required,
+            ),
+            TileKind::Artifact(artifact) => consume_side_count(
+                &mut self.player.artifacts,
+                &artifact,
+                self.side_contract_required,
+            ),
+            _ => {}
+        }
+        let reward = 420 + self.side_contract_required * 80;
+        self.player.credits += reward;
+        self.total_earnings += reward;
+        self.side_contract_active = false;
+        self.message = format!("Side contract fulfilled: {reward} credits bonus.");
+        self.sound_cues.push(SoundCue::Sell);
     }
 
     fn confirm_depot(&mut self) {
         match self.selected_menu_item {
-            0 => self.confirm_complete_contract(),
+            0 => {
+                self.try_complete_side_contract();
+                self.confirm_complete_contract();
+            }
             1 => self.confirm_sell_cargo(),
             _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
@@ -2051,6 +2190,29 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
             },
         )
     })
+}
+
+fn consume_side_count<K: Ord>(items: &mut std::collections::BTreeMap<K, u32>, key: &K, count: u32) {
+    let Some(available) = items.get_mut(key) else {
+        return;
+    };
+    *available = available.saturating_sub(count);
+    if *available == 0 {
+        items.remove(key);
+    }
+}
+
+const fn scanner_can_mark(kind: TileKind, scanner_level: u8) -> bool {
+    match kind {
+        TileKind::Ore(_) => scanner_level >= 1,
+        TileKind::Gas
+        | TileKind::Lava
+        | TileKind::MagmaVent
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket => scanner_level >= 2,
+        TileKind::Artifact(_) => scanner_level >= 3,
+        _ => false,
+    }
 }
 
 const fn current_save_version() -> u32 {
