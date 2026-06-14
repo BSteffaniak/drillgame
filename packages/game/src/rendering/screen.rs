@@ -397,6 +397,10 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         );
     }
 
+    for warning in &game.collapse_warnings {
+        draw_map_marker(draw, &projection, warning.x, warning.y, Color::RED);
+    }
+
     for building in SURFACE_BUILDINGS {
         draw_map_marker(
             draw,
@@ -840,6 +844,12 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             }
             SideContractKind::DepthSurvey => format!("Survey: reach {}m", contract.required),
             SideContractKind::HazardScan => format!("Scan: {} hazards", contract.required),
+            SideContractKind::Rush => format!(
+                "Rush: {} x{} by day {}",
+                contract.target.name(),
+                contract.required,
+                contract.expires_day.unwrap_or(0)
+            ),
         };
         draw.draw_text(
             &label,
@@ -850,7 +860,18 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         );
     }
 
-    draw.draw_text("Market board:", 700, 350, 18, Color::GOLD);
+    let trend = match game.market_history.as_slice() {
+        [.., previous, current] if current > previous => "trend ↑",
+        [.., previous, current] if current < previous => "trend ↓",
+        _ => "trend →",
+    };
+    draw.draw_text(
+        &format!("Market board ({trend}):"),
+        700,
+        350,
+        18,
+        Color::GOLD,
+    );
     let minerals = [
         MineralKind::Copper,
         MineralKind::Iron,
@@ -996,6 +1017,12 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
     draw.draw_circle(player_x, player_y, 6.0, Color::SKYBLUE);
     draw.draw_text("YOU", player_x + 8, player_y - 7, 12, Color::SKYBLUE);
+
+    for warning in &game.collapse_warnings {
+        let px = x + warning.x * width / terrain_width;
+        let py = y + warning.y * height / terrain_height;
+        draw.draw_circle_lines(px, py, 6.0, Color::RED);
+    }
 
     if let (Some(cargo_x), Some(cargo_y)) = (game.lost_cargo_x, game.lost_cargo_y) {
         let marker_x = x + ((cargo_x / TILE_SIZE) as i32) * width / terrain_width;

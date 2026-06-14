@@ -165,6 +165,7 @@ pub enum SideContractKind {
     Cargo,
     DepthSurvey,
     HazardScan,
+    Rush,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -172,6 +173,8 @@ pub struct SideContract {
     pub kind: SideContractKind,
     pub target: TileKind,
     pub required: u32,
+    #[serde(default)]
+    pub expires_day: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -290,6 +293,10 @@ pub struct GameState {
     pub lost_cargo_y: Option<f32>,
     #[serde(default)]
     pub lost_cargo_count: u32,
+    #[serde(default)]
+    pub lost_minerals: std::collections::BTreeMap<MineralKind, u32>,
+    #[serde(default)]
+    pub lost_artifacts: std::collections::BTreeMap<ArtifactKind, u32>,
     pub camera_x: f32,
     pub camera_y: f32,
     pub drill_flash_seconds: f32,
@@ -307,6 +314,8 @@ pub struct GameState {
     #[serde(default)]
     pub market_salt: u32,
     #[serde(default)]
+    pub market_history: Vec<u32>,
+    #[serde(default)]
     pub scanner_pulse_seconds: f32,
     #[serde(default)]
     pub scanner_cooldown_seconds: f32,
@@ -316,6 +325,8 @@ pub struct GameState {
     pub town_event: String,
     #[serde(default)]
     pub scan_markers: Vec<ScanMarker>,
+    #[serde(default)]
+    pub collapse_warnings: Vec<TilePosition>,
     #[serde(default)]
     pub side_contract_active: bool,
     #[serde(default)]
@@ -411,6 +422,8 @@ impl GameState {
             lost_cargo_x: None,
             lost_cargo_y: None,
             lost_cargo_count: 0,
+            lost_minerals: std::collections::BTreeMap::new(),
+            lost_artifacts: std::collections::BTreeMap::new(),
             camera_x: 0.0,
             camera_y: 0.0,
             drill_flash_seconds: 0.0,
@@ -421,11 +434,13 @@ impl GameState {
             service_animation: None,
             service_animation_seconds: 0.0,
             market_salt: 0,
+            market_history: vec![market_factor(0, 0)],
             scanner_pulse_seconds: 0.0,
             scanner_cooldown_seconds: 0.0,
             town_event_day: 0,
             town_event: "Normal market conditions.".to_owned(),
             scan_markers: Vec::new(),
+            collapse_warnings: Vec::new(),
             side_contract_active: false,
             side_contract_kind: SideContractKind::Cargo,
             side_contract_target: None,
@@ -766,6 +781,7 @@ impl GameState {
                     kind: self.side_contract_kind,
                     target,
                     required: self.side_contract_required.max(1),
+                    expires_day: None,
                 });
             }
             self.save_version = current_save_version();
@@ -1081,20 +1097,23 @@ impl GameState {
             return;
         }
         self.side_contract_active = true;
-        self.side_contract_kind = match self.town_event_day % 3 {
+        self.side_contract_kind = match self.town_event_day % 4 {
             0 => SideContractKind::Cargo,
             1 => SideContractKind::DepthSurvey,
-            _ => SideContractKind::HazardScan,
+            2 => SideContractKind::HazardScan,
+            _ => SideContractKind::Rush,
         };
         self.side_contract_target = Some(match self.side_contract_kind {
             SideContractKind::Cargo => TileKind::Ore(MineralKind::Gold),
             SideContractKind::DepthSurvey => TileKind::Ore(MineralKind::Platinum),
             SideContractKind::HazardScan => TileKind::Gas,
+            SideContractKind::Rush => TileKind::Ore(MineralKind::Ruby),
         });
         self.side_contract_required = match self.side_contract_kind {
             SideContractKind::Cargo => 2,
             SideContractKind::DepthSurvey => 65,
             SideContractKind::HazardScan => 3,
+            SideContractKind::Rush => 1,
         };
         self.message = match self.side_contract_kind {
             SideContractKind::Cargo => format!(
@@ -1110,12 +1129,20 @@ impl GameState {
                 "Side contract posted: scan {} hazards and report to depot.",
                 self.side_contract_required
             ),
+            SideContractKind::Rush => format!(
+                "Rush contract posted: deliver {} x{} before day {}.",
+                self.side_contract_target.map_or("sample", TileKind::name),
+                self.side_contract_required,
+                self.town_event_day + 2
+            ),
         };
         if let Some(target) = self.side_contract_target {
             self.active_side_contracts.push(SideContract {
                 kind: self.side_contract_kind,
                 target,
                 required: self.side_contract_required,
+                expires_day: (self.side_contract_kind == SideContractKind::Rush)
+                    .then_some(self.town_event_day + 2),
             });
         }
     }
@@ -1157,6 +1184,12 @@ impl GameState {
         }
         let fee = (recovered * 12).min(self.player.credits);
         self.player.credits -= fee;
+        for (mineral, count) in std::mem::take(&mut self.lost_minerals) {
+            *self.player.cargo.entry(mineral).or_default() += count;
+        }
+        for (artifact, count) in std::mem::take(&mut self.lost_artifacts) {
+            *self.player.artifacts.entry(artifact).or_default() += count;
+        }
         self.lost_cargo_count = 0;
         self.lost_cargo_x = None;
         self.lost_cargo_y = None;
@@ -1190,7 +1223,10 @@ impl GameState {
             }
             if let Some(index) = completed_index {
                 let contract = self.active_side_contracts.remove(index);
-                if contract.kind == SideContractKind::Cargo {
+                if matches!(
+                    contract.kind,
+                    SideContractKind::Cargo | SideContractKind::Rush
+                ) {
                     consume_side_contract_cargo(contract, &mut self.player);
                 }
                 self.player.credits += completed_reward;
@@ -1209,7 +1245,7 @@ impl GameState {
             return;
         };
         let satisfied = match self.side_contract_kind {
-            SideContractKind::Cargo => match target {
+            SideContractKind::Cargo | SideContractKind::Rush => match target {
                 TileKind::Ore(mineral) => {
                     self.player.cargo.get(&mineral).copied().unwrap_or(0)
                         >= self.side_contract_required
@@ -2054,6 +2090,8 @@ impl GameState {
         }
         if self.update_ticks.is_multiple_of(90) {
             self.seal_escape_tunnel();
+        } else if self.update_ticks % 90 == 75 {
+            self.warn_escape_tunnel_collapse();
         }
         if self.update_ticks.is_multiple_of(120) {
             "CORE CASCADE: tunnels are sealing. Climb now!".clone_into(&mut self.message);
@@ -2063,6 +2101,21 @@ impl GameState {
             self.game_over = true;
             "The mine collapsed around the Star Core. Emergency rescue required."
                 .clone_into(&mut self.message);
+        }
+    }
+
+    fn warn_escape_tunnel_collapse(&mut self) {
+        self.collapse_warnings.clear();
+        let px = (self.player.x / TILE_SIZE).floor() as i32;
+        let py = (self.player.y / TILE_SIZE).floor() as i32 + 5;
+        for dx in -2..=2 {
+            let position = TilePosition { x: px + dx, y: py };
+            if position.y > 7 && !self.terrain.is_solid_at(position) {
+                self.collapse_warnings.push(position);
+            }
+        }
+        if !self.collapse_warnings.is_empty() {
+            "Ceiling stress warning: marked tunnel will seal next.".clone_into(&mut self.message);
         }
     }
 
@@ -2080,6 +2133,7 @@ impl GameState {
                     .retain(|marker| marker.position != position);
             }
         }
+        self.collapse_warnings.clear();
     }
 
     fn update_layer_band(&mut self) {
@@ -2126,6 +2180,11 @@ impl GameState {
             3 => "Cave instability warning: HQ predicts more falling rock.".to_owned(),
             _ => "Explosive Shack overstock: Nix is pushing bomb bundles.".to_owned(),
         };
+        self.market_history
+            .push(market_factor(self.market_salt, self.town_event_day));
+        if self.market_history.len() > 7 {
+            self.market_history.remove(0);
+        }
     }
 
     fn update_status_messages(&mut self) {
@@ -2220,6 +2279,8 @@ impl GameState {
         let fee = (base_fee / fee_divisor).min(self.player.credits);
         self.player.credits -= fee;
         self.rescue_count += 1;
+        let before_minerals = self.player.cargo.clone();
+        let before_artifacts = self.player.artifacts.clone();
         let lost_items = if self.player.insured && self.player.insurance_tier >= 2 {
             0
         } else if self.player.insured {
@@ -2234,6 +2295,8 @@ impl GameState {
             self.lost_cargo_x = Some(self.player.x);
             self.lost_cargo_y = Some(self.player.y);
             self.lost_cargo_count = lost_items;
+            self.lost_minerals = cargo_difference(&before_minerals, &self.player.cargo);
+            self.lost_artifacts = cargo_difference(&before_artifacts, &self.player.artifacts);
         }
         self.last_rescue_summary = format!("Fee: {fee} credits. Cargo lost: {lost_items}.");
         self.depot_receipts.push(format!(
@@ -2281,6 +2344,20 @@ fn hq_story_message(game: &GameState) -> String {
 
 fn rescue_fee(player_y: f32) -> u32 {
     50 + ((player_y / TILE_SIZE).max(0.0) as u32 * 3)
+}
+
+fn cargo_difference<K: Copy + Ord>(
+    before: &std::collections::BTreeMap<K, u32>,
+    after: &std::collections::BTreeMap<K, u32>,
+) -> std::collections::BTreeMap<K, u32> {
+    let mut difference = std::collections::BTreeMap::new();
+    for (key, before_count) in before {
+        let after_count = after.get(key).copied().unwrap_or(0);
+        if *before_count > after_count {
+            difference.insert(*key, *before_count - after_count);
+        }
+    }
+    difference
 }
 
 fn drop_half_cargo(player: &mut Player) -> u32 {
@@ -2374,8 +2451,14 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
 }
 
 fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {
+    if contract
+        .expires_day
+        .is_some_and(|expires_day| game.town_event_day > expires_day)
+    {
+        return false;
+    }
     match contract.kind {
-        SideContractKind::Cargo => match contract.target {
+        SideContractKind::Cargo | SideContractKind::Rush => match contract.target {
             TileKind::Ore(mineral) => {
                 game.player.cargo.get(&mineral).copied().unwrap_or(0) >= contract.required
             }
