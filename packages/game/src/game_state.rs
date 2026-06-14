@@ -572,6 +572,12 @@ pub struct GameState {
     #[serde(default)]
     pub trip_best_depth: i32,
     #[serde(default)]
+    pub trip_seconds: f32,
+    #[serde(default)]
+    pub deep_instability: f32,
+    #[serde(default)]
+    pub deep_reward_milestone: i32,
+    #[serde(default)]
     pub return_streak: u32,
     #[serde(default)]
     pub play_seconds: f32,
@@ -729,6 +735,9 @@ impl GameState {
             rescue_count: 0,
             artifacts_found: 0,
             trip_best_depth: 0,
+            trip_seconds: 0.0,
+            deep_instability: 0.0,
+            deep_reward_milestone: 0,
             return_streak: 0,
             play_seconds: 0.0,
             last_delta_seconds: 0.0,
@@ -949,6 +958,7 @@ impl GameState {
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
+        self.update_deep_run_pressure(delta_seconds);
         self.update_escape_sequence(delta_seconds);
         self.update_layer_band();
         self.award_return_bonus();
@@ -3186,6 +3196,92 @@ impl GameState {
         }
     }
 
+    fn update_deep_run_pressure(&mut self, delta_seconds: f32) {
+        let depth = self.player.tile_position(TILE_SIZE).y;
+        if depth < 80 || self.current_zone.is_some() {
+            self.trip_seconds = 0.0;
+            self.deep_instability = (self.deep_instability - delta_seconds * 2.0).max(0.0);
+            return;
+        }
+        self.trip_seconds += delta_seconds;
+        let rare_cargo = self.rare_cargo_count() as f32;
+        self.deep_instability += delta_seconds
+            * ((depth - 70) as f32 * 0.006 + self.trip_seconds * 0.0006 + rare_cargo * 0.02);
+        if depth >= 105 {
+            self.player.fuel = (self.player.fuel - delta_seconds * 0.25).max(0.0);
+            self.scanner_cooldown_seconds = self.scanner_cooldown_seconds.max(1.2);
+        }
+        if rare_cargo > 0.0 && self.update_ticks.is_multiple_of(240) {
+            self.hazard_clouds.push(HazardCloud {
+                x: self.player.x,
+                y: self.player.y + TILE_SIZE,
+                life: 5.0,
+                radius: 10.0 + rare_cargo.min(4.0),
+            });
+            "Rare cargo is attracting unstable deep vapors.".clone_into(&mut self.message);
+        }
+        if self.deep_instability >= 100.0 {
+            self.deep_instability = 45.0;
+            self.spawn_cave_in();
+            self.player.hull = (self.player.hull - 4.0).max(0.0);
+            "Claim instability spiked: cave-in and hull stress detected."
+                .clone_into(&mut self.message);
+        }
+        self.maybe_spawn_deep_reward(depth);
+    }
+
+    fn rare_cargo_count(&self) -> u32 {
+        let mineral_count: u32 = self
+            .player
+            .cargo
+            .iter()
+            .filter(|(mineral, _)| {
+                matches!(
+                    mineral,
+                    MineralKind::Diamond
+                        | MineralKind::Platinum
+                        | MineralKind::Uranium
+                        | MineralKind::Mythril
+                )
+            })
+            .map(|(_, count)| *count)
+            .sum();
+        let artifact_count: u32 = self.player.artifacts.values().copied().sum();
+        mineral_count + artifact_count
+    }
+
+    fn maybe_spawn_deep_reward(&mut self, depth: i32) {
+        let milestone = depth / 20;
+        if depth < 90 || milestone <= self.deep_reward_milestone {
+            return;
+        }
+        self.deep_reward_milestone = milestone;
+        let position = TilePosition {
+            x: self
+                .player
+                .tile_position(TILE_SIZE)
+                .x
+                .saturating_add(2)
+                .clamp(1, self.terrain.width() - 2),
+            y: depth.clamp(10, self.terrain.height() - 2),
+        };
+        let reward_tile = if depth >= 120 {
+            self.player
+                .add_material(StrategicResourceKind::CoreShard, 1);
+            TileKind::Artifact(ArtifactKind::OldCircuit)
+        } else {
+            TileKind::Ore(MineralKind::Mythril)
+        };
+        if self.terrain.set_kind(position, reward_tile) {
+            self.mark_tile_visual_changed(position);
+        }
+        self.message = if depth >= 120 {
+            "Deep reward signal: unique relic exposed and Core Shard recovered.".to_owned()
+        } else {
+            "Deep reward signal: huge mythril vein migrated nearby.".to_owned()
+        };
+    }
+
     fn update_escape_sequence(&mut self, delta_seconds: f32) {
         if self.escape_sequence_seconds <= 0.0 || self.won_game {
             return;
@@ -3289,6 +3385,9 @@ impl GameState {
             self.trip_best_depth, self.return_streak
         );
         self.trip_best_depth = 0;
+        self.trip_seconds = 0.0;
+        self.deep_instability = 0.0;
+        self.deep_reward_milestone = 0;
         self.advance_town_event();
     }
 

@@ -78,6 +78,17 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         16,
         Color::ORANGE,
     );
+    draw.draw_text(
+        &format!("Deep instability: {:.0}%", game.deep_instability.min(100.0)),
+        22,
+        136,
+        16,
+        if game.deep_instability >= 70.0 {
+            Color::RED
+        } else {
+            Color::LIGHTGRAY
+        },
+    );
     draw_expedition_tracker(draw, game);
     if game.player.scanner_level > 0 {
         let scanner = if game.scanner_cooldown_seconds > 0.0 {
@@ -85,7 +96,7 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         } else {
             "Scanner ready (C)".to_owned()
         };
-        draw.draw_text(&scanner, 22, 136, 16, Color::SKYBLUE);
+        draw.draw_text(&scanner, 22, 156, 16, Color::SKYBLUE);
     }
     draw_infrastructure_kit_prompts(draw, game);
 
