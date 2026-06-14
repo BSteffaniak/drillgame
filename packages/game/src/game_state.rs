@@ -5468,4 +5468,132 @@ mod tests {
             y: position.y
         }));
     }
+
+    #[test]
+    fn movement_regression_updates_position_and_burns_fuel() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        let initial_x = game.player.x;
+        let initial_fuel = game.player.fuel;
+
+        game.update(
+            PlayerInput {
+                horizontal: 1.0,
+                thrust: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert!(game.player.x > initial_x);
+        assert!(game.player.fuel < initial_fuel);
+    }
+
+    #[test]
+    fn drilling_regression_mines_target_tile_and_adds_cargo() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.x = 10.0 * TILE_SIZE;
+        game.player.y = 10.0 * TILE_SIZE;
+        game.terrain.set_kind(
+            TilePosition { x: 10, y: 11 },
+            TileKind::Ore(MineralKind::Copper),
+        );
+
+        for _ in 0..12 {
+            game.update(
+                PlayerInput {
+                    drill_down: true,
+                    ..PlayerInput::default()
+                },
+                0.1,
+            );
+        }
+
+        assert!(matches!(
+            game.terrain
+                .tile(TilePosition { x: 10, y: 11 })
+                .map(|tile| tile.kind),
+            Some(TileKind::Air)
+        ));
+        assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn cargo_and_economy_regression_sells_loaded_ore() {
+        let mut game = GameState::new();
+        let initial_credits = game.player.credits;
+        assert!(game.player.add_cargo(MineralKind::Copper));
+
+        let earnings = sell_cargo(&mut game.player);
+
+        assert!(earnings > 0);
+        assert!(game.player.credits > initial_credits);
+        assert_eq!(game.player.cargo_used(), 0);
+    }
+
+    #[test]
+    fn bombs_regression_arm_and_detonate() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.bombs = 1;
+        game.player.y = MIN_PLAYER_Y;
+        game.town_development.explosives_shack_level = 3;
+
+        game.update(
+            PlayerInput {
+                bomb: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+        assert_eq!(game.placed_bombs.len(), 1);
+        game.update(PlayerInput::default(), 1.0);
+
+        assert!(game.placed_bombs.is_empty());
+        assert!(
+            game.sound_cues
+                .iter()
+                .any(|cue| matches!(cue, SoundCue::Explosion))
+        );
+    }
+
+    #[test]
+    fn rescue_regression_returns_player_to_surface_and_records_fee() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.game_over = true;
+        game.player.y = 40.0 * TILE_SIZE;
+        game.player.credits = 1_000;
+        let initial_credits = game.player.credits;
+
+        game.update(
+            PlayerInput {
+                interact: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert!(!game.game_over);
+        assert!(game.player.y <= 4.0 * TILE_SIZE);
+        assert!(game.player.credits < initial_credits);
+        assert_eq!(game.rescue_count, 1);
+    }
+
+    #[test]
+    fn ui_transition_regression_pauses_from_playing() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+
+        game.update(
+            PlayerInput {
+                pause: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert_eq!(game.run_mode, RunMode::Paused);
+    }
 }
