@@ -10,6 +10,94 @@ use serde::{Deserialize, Serialize};
 use crate::player::Player;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub enum TownBuilding {
+    Depot,
+    Mechanic,
+    Bank,
+    ScannerLab,
+    SalvageYard,
+    ExplosivesShack,
+}
+
+impl TownBuilding {
+    pub const ALL: [Self; 6] = [
+        Self::Depot,
+        Self::Mechanic,
+        Self::Bank,
+        Self::ScannerLab,
+        Self::SalvageYard,
+        Self::ExplosivesShack,
+    ];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Depot => "Depot Expansion",
+            Self::Mechanic => "Mechanic Garage",
+            Self::Bank => "Bank Office",
+            Self::ScannerLab => "Scanner Lab",
+            Self::SalvageYard => "Salvage Yard",
+            Self::ExplosivesShack => "Explosives Shack",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TownDevelopment {
+    #[serde(default)]
+    pub depot_level: u8,
+    #[serde(default)]
+    pub mechanic_level: u8,
+    #[serde(default)]
+    pub bank_level: u8,
+    #[serde(default)]
+    pub scanner_lab_level: u8,
+    #[serde(default)]
+    pub salvage_yard_level: u8,
+    #[serde(default)]
+    pub explosives_shack_level: u8,
+    #[serde(default)]
+    pub reputation: u32,
+}
+
+impl TownDevelopment {
+    #[must_use]
+    pub const fn level(&self, building: TownBuilding) -> u8 {
+        match building {
+            TownBuilding::Depot => self.depot_level,
+            TownBuilding::Mechanic => self.mechanic_level,
+            TownBuilding::Bank => self.bank_level,
+            TownBuilding::ScannerLab => self.scanner_lab_level,
+            TownBuilding::SalvageYard => self.salvage_yard_level,
+            TownBuilding::ExplosivesShack => self.explosives_shack_level,
+        }
+    }
+
+    pub(crate) const fn level_mut(&mut self, building: TownBuilding) -> &mut u8 {
+        match building {
+            TownBuilding::Depot => &mut self.depot_level,
+            TownBuilding::Mechanic => &mut self.mechanic_level,
+            TownBuilding::Bank => &mut self.bank_level,
+            TownBuilding::ScannerLab => &mut self.scanner_lab_level,
+            TownBuilding::SalvageYard => &mut self.salvage_yard_level,
+            TownBuilding::ExplosivesShack => &mut self.explosives_shack_level,
+        }
+    }
+
+    #[must_use]
+    pub fn upgrade_cost(&self, building: TownBuilding) -> u32 {
+        350 + u32::from(self.level(building)) * 275
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DeepClaimStatus {
+    #[default]
+    Locked,
+    Unlocked,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SurfaceZone {
     Fuel,
     Repair,

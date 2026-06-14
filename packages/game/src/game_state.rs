@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     contract::ContractLog,
     economy::{
-        PurchaseError, SurfaceZone, buy_upgrade, refuel_amount, repair_amount, sell_cargo,
-        upgrade_offers, upgrade_tier_name,
+        DeepClaimStatus, PurchaseError, SurfaceZone, TownBuilding, TownDevelopment, buy_upgrade,
+        refuel_amount, repair_amount, sell_cargo, upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
     player::Player,
@@ -106,6 +106,7 @@ pub enum ModalScreen {
     ExitConfirm,
     Map,
     Help,
+    TownDevelopment,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -255,6 +256,10 @@ pub struct GameState {
     pub request_exit: bool,
     #[serde(default)]
     pub won_game: bool,
+    #[serde(default)]
+    pub deep_claim_status: DeepClaimStatus,
+    #[serde(default)]
+    pub town_development: TownDevelopment,
     #[serde(default)]
     pub escape_sequence_seconds: f32,
     #[serde(default)]
@@ -408,6 +413,8 @@ impl GameState {
             show_details: false,
             request_exit: false,
             won_game: false,
+            deep_claim_status: DeepClaimStatus::Locked,
+            town_development: TownDevelopment::default(),
             escape_sequence_seconds: 0.0,
             explored_tiles: vec![false; (WORLD_WIDTH * WORLD_HEIGHT) as usize],
             last_depot_receipt: String::new(),
@@ -658,7 +665,9 @@ impl GameState {
         }
         let center_x = (self.player.x / TILE_SIZE).floor() as i32;
         let center_y = (self.player.y / TILE_SIZE).floor() as i32;
-        let radius = 3 + i32::from(self.player.scanner_level) * 2;
+        let radius = 3
+            + i32::from(self.player.scanner_level) * 2
+            + i32::from(self.town_development.scanner_lab_level);
         for y in center_y - radius..=center_y + radius {
             for x in center_x - radius..=center_x + radius {
                 if (x - center_x).abs() + (y - center_y).abs() <= radius {
@@ -695,8 +704,9 @@ impl GameState {
     }
 
     #[must_use]
-    pub const fn mineral_market_value(&self, mineral: MineralKind) -> u32 {
-        let factor = market_factor(self.market_salt, self.town_event_day);
+    pub fn mineral_market_value(&self, mineral: MineralKind) -> u32 {
+        let factor = market_factor(self.market_salt, self.town_event_day)
+            + u32::from(self.town_development.depot_level) * 3;
         (mineral.value() * factor) / 100
     }
 
@@ -807,6 +817,9 @@ impl GameState {
                     expires_day: None,
                 });
             }
+            if self.won_game {
+                self.deep_claim_status = DeepClaimStatus::Unlocked;
+            }
             self.save_version = current_save_version();
         }
     }
@@ -910,10 +923,17 @@ impl GameState {
                 | ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::Options
-                | ModalScreen::Headquarters
                 | ModalScreen::Bank
                 | ModalScreen::Explosives
                 | ModalScreen::Salvage => 2,
+                ModalScreen::Headquarters => {
+                    if self.deep_claim_status == DeepClaimStatus::Unlocked {
+                        3
+                    } else {
+                        2
+                    }
+                }
+                ModalScreen::TownDevelopment => TownBuilding::ALL.len() - 1,
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -948,6 +968,7 @@ impl GameState {
                 ModalScreen::Bank => self.confirm_bank_menu(),
                 ModalScreen::Explosives => self.confirm_explosives_menu(),
                 ModalScreen::Salvage => self.confirm_salvage_menu(),
+                ModalScreen::TownDevelopment => self.confirm_town_development(),
                 ModalScreen::Options => self.confirm_options(),
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
@@ -1062,8 +1083,31 @@ impl GameState {
                 self.message = hq_story_message(self);
                 self.sound_cues.push(SoundCue::Milestone);
             }
+            2 => self.confirm_finance(),
+            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+                self.modal = Some(ModalScreen::TownDevelopment);
+                self.selected_menu_item = 0;
+            }
             _ => self.confirm_finance(),
         }
+    }
+
+    fn confirm_town_development(&mut self) {
+        let building = TownBuilding::ALL[self.selected_menu_item.min(TownBuilding::ALL.len() - 1)];
+        let cost = self.town_development.upgrade_cost(building);
+        if self.player.credits < cost {
+            self.message = format!("{} upgrade costs {cost} credits.", building.name());
+            return;
+        }
+        self.player.credits -= cost;
+        *self.town_development.level_mut(building) += 1;
+        self.town_development.reputation = self.town_development.reputation.saturating_add(1);
+        self.message = format!(
+            "{} upgraded to level {}. Deep Claim reputation increased.",
+            building.name(),
+            self.town_development.level(building)
+        );
+        self.sound_cues.push(SoundCue::Upgrade);
     }
 
     fn confirm_bank_menu(&mut self) {
@@ -1194,9 +1238,11 @@ impl GameState {
             return;
         }
         self.player.credits -= cost;
-        self.player.bombs += count;
+        let bonus = u32::from(self.town_development.explosives_shack_level / 2);
+        let delivered = count + bonus;
+        self.player.bombs += delivered;
         self.sound_cues.push(SoundCue::Upgrade);
-        self.message = format!("Nix sold you {count} timed charges. Don't hug them.");
+        self.message = format!("Nix sold you {delivered} timed charges. Don't hug them.");
     }
 
     fn salvage_recover_lost_cargo(&mut self) {
@@ -1205,7 +1251,10 @@ impl GameState {
             "No lost cargo beacon is active.".clone_into(&mut self.message);
             return;
         }
-        let fee = (recovered * 12).min(self.player.credits);
+        let discount = u32::from(self.town_development.salvage_yard_level) * 3;
+        let fee = (recovered * 12)
+            .saturating_sub(recovered * discount)
+            .min(self.player.credits);
         self.player.credits -= fee;
         for (mineral, count) in std::mem::take(&mut self.lost_minerals) {
             *self.player.cargo.entry(mineral).or_default() += count;
@@ -1342,8 +1391,9 @@ impl GameState {
             self.total_earnings += completion.reward;
             if completion.finished_story {
                 self.won_game = true;
+                self.deep_claim_status = DeepClaimStatus::Unlocked;
                 self.message = format!(
-                    "{} complete! Star Core secured. You win! Bonus: {} credits.",
+                    "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits.",
                     completion.completed_title, completion.reward
                 );
             } else {
@@ -1379,7 +1429,8 @@ impl GameState {
             );
         }
 
-        let factor = market_factor(self.market_salt, self.town_event_day);
+        let factor = market_factor(self.market_salt, self.town_event_day)
+            + u32::from(self.town_development.depot_level) * 3;
         let payout = sell_cargo(&mut self.player);
         let adjusted = payout.saturating_mul(factor) / 100;
         if adjusted != payout {
@@ -1446,7 +1497,10 @@ impl GameState {
             return;
         }
         self.scanner_pulse_seconds = 1.2;
-        self.scanner_cooldown_seconds = (7.0 - f32::from(self.player.scanner_level)).max(2.0);
+        self.scanner_cooldown_seconds = (7.0
+            - f32::from(self.player.scanner_level)
+            - f32::from(self.town_development.scanner_lab_level) * 0.35)
+            .max(1.5);
         self.reveal_scanner_area();
         self.sound_cues.push(SoundCue::Ui);
         "Scanner pulse mapped ore, hazards, and artifacts nearby.".clone_into(&mut self.message);

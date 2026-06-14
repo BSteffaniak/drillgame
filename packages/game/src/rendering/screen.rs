@@ -3,7 +3,10 @@ use raylib::prelude::*;
 use super::terrain::{artifact_color, mineral_color};
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::{
-    economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
+    economy::{
+        DeepClaimStatus, TownBuilding, UpgradeKind, upgrade_effect, upgrade_offers,
+        upgrade_tier_name,
+    },
     game_state::{GameState, ModalScreen, PauseOption, RunMode, SideContractKind, TILE_SIZE},
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
@@ -580,6 +583,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
         ModalScreen::Map => draw_large_map(draw, game),
         ModalScreen::Help => draw_help(draw),
+        ModalScreen::TownDevelopment => draw_town_development(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -751,11 +755,14 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     } else {
         format!("Pay HQ debt (owed {})", game.player.loan_debt)
     };
-    let options = [
+    let mut options = vec![
         "Complete active contract".to_owned(),
         "Ask for briefing/radio intel".to_owned(),
         finance,
     ];
+    if game.deep_claim_status == DeepClaimStatus::Unlocked {
+        options.push("Deep Claim town development".to_owned());
+    }
     for (index, option) in options.iter().enumerate() {
         draw.draw_text(
             option,
@@ -771,6 +778,55 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     draw.draw_text(
         "Enter/E confirms | Backspace/Esc exits HQ",
+        330,
+        505,
+        18,
+        Color::LIGHTGRAY,
+    );
+}
+
+fn draw_town_development(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Deep Claim Town Development", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        "Post-core charter investments | Enter/E upgrades | Esc closes",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &format!("Reputation: {}", game.town_development.reputation),
+        330,
+        215,
+        20,
+        Color::SKYBLUE,
+    );
+    for (index, building) in TownBuilding::ALL.iter().enumerate() {
+        let level = game.town_development.level(*building);
+        let cost = game.town_development.upgrade_cost(*building);
+        let color = if index == game.selected_menu_item {
+            Color::YELLOW
+        } else if game.player.credits >= cost {
+            Color::RAYWHITE
+        } else {
+            Color::GRAY
+        };
+        draw.draw_text(
+            &format!(
+                "{} L{} -> L{} | {} cr",
+                building.name(),
+                level,
+                level + 1,
+                cost
+            ),
+            350,
+            260 + i32::try_from(index).unwrap_or(i32::MAX) * 38,
+            21,
+            color,
+        );
+    }
+    draw.draw_text(
+        "Current effects: Depot prices, scanner radius/cooldown, salvage fees, bomb bundles.",
         330,
         505,
         18,
