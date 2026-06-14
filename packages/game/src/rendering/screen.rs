@@ -80,55 +80,7 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         };
         draw.draw_text(&scanner, 22, 116, 16, Color::SKYBLUE);
     }
-    if game.player.signal_relay_kits > 0 {
-        draw.draw_text(
-            &format!(
-                "Signal relays: {} kit(s), {} online (R to place)",
-                game.player.signal_relay_kits,
-                game.signal_relay_count()
-            ),
-            720,
-            74,
-            16,
-            Color::GREEN,
-        );
-    }
-    if game.player.survey_drone_kits > 0 {
-        draw.draw_text(
-            &format!(
-                "Survey drones: {} kit(s) (T to place)",
-                game.player.survey_drone_kits
-            ),
-            720,
-            96,
-            16,
-            Color::GREEN,
-        );
-    }
-    if game.player.cargo_lift_kits > 0 {
-        draw.draw_text(
-            &format!(
-                "Cargo lifts: {} kit(s) (L to place)",
-                game.player.cargo_lift_kits
-            ),
-            720,
-            118,
-            16,
-            Color::GREEN,
-        );
-    }
-    if game.player.tunnel_support_kits > 0 {
-        draw.draw_text(
-            &format!(
-                "Tunnel supports: {} kit(s) (U to place)",
-                game.player.tunnel_support_kits
-            ),
-            720,
-            140,
-            16,
-            Color::GREEN,
-        );
-    }
+    draw_infrastructure_kit_prompts(draw, game);
 
     if game.escape_sequence_seconds > 0.0 {
         draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
@@ -147,6 +99,55 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     if game.show_details {
         draw_debug_stats(draw, game);
+    }
+}
+
+fn draw_infrastructure_kit_prompts(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let prompts = [
+        (
+            game.player.signal_relay_kits,
+            format!(
+                "Signal relays: {} kit(s), {} online (R to place)",
+                game.player.signal_relay_kits,
+                game.signal_relay_count()
+            ),
+        ),
+        (
+            game.player.survey_drone_kits,
+            format!(
+                "Survey drones: {} kit(s) (T to place)",
+                game.player.survey_drone_kits
+            ),
+        ),
+        (
+            game.player.cargo_lift_kits,
+            format!(
+                "Cargo lifts: {} kit(s) (L to place)",
+                game.player.cargo_lift_kits
+            ),
+        ),
+        (
+            game.player.tunnel_support_kits,
+            format!(
+                "Tunnel supports: {} kit(s) (U to place)",
+                game.player.tunnel_support_kits
+            ),
+        ),
+        (
+            game.player.pump_station_kits,
+            format!(
+                "Pump stations: {} kit(s) (O to place)",
+                game.player.pump_station_kits
+            ),
+        ),
+    ];
+    let mut row = 0;
+    for (count, prompt) in prompts {
+        if count == 0 {
+            continue;
+        }
+        draw.draw_text(&prompt, 720, 74 + row * 22, 16, Color::GREEN);
+        row += 1;
     }
 }
 
@@ -474,6 +475,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
             crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
             crate::game_state::InfrastructureKind::TunnelSupport => Color::ORANGE,
+            crate::game_state::InfrastructureKind::PumpStation => Color::BLUE,
         };
         draw_map_marker(draw, &projection, item.position.x, item.position.y, color);
     }
@@ -918,13 +920,14 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     draw.draw_text(
         &format!(
-            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {} | support kits {}",
+            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {} | support kits {} | pump kits {}",
             game.player.crafted_bulkheads,
             game.player.crafted_sorters,
             game.player.signal_relay_kits,
             game.player.survey_drone_kits,
             game.player.cargo_lift_kits,
-            game.player.tunnel_support_kits
+            game.player.tunnel_support_kits,
+            game.player.pump_station_kits
         ),
         350,
         450,
@@ -1405,6 +1408,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             crate::game_state::InfrastructureKind::SurveyDrone => ("D", Color::GREEN),
             crate::game_state::InfrastructureKind::CargoLift => ("L", Color::GOLD),
             crate::game_state::InfrastructureKind::TunnelSupport => ("S", Color::ORANGE),
+            crate::game_state::InfrastructureKind::PumpStation => ("P", Color::BLUE),
         };
         draw.draw_circle_lines(px, py, 6.0, color);
         draw.draw_text(label, px + 7, py - 6, 10, color);

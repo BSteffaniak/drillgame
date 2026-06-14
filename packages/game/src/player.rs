@@ -52,6 +52,8 @@ pub struct Player {
     pub cargo_lift_kits: u32,
     #[serde(default)]
     pub tunnel_support_kits: u32,
+    #[serde(default)]
+    pub pump_station_kits: u32,
 }
 
 #[allow(
@@ -91,6 +93,7 @@ impl Player {
             survey_drone_kits: 0,
             cargo_lift_kits: 0,
             tunnel_support_kits: 0,
+            pump_station_kits: 0,
         }
     }
 

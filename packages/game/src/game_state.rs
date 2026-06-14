@@ -158,6 +158,7 @@ pub enum InfrastructureKind {
     SurveyDrone,
     CargoLift,
     TunnelSupport,
+    PumpStation,
 }
 
 impl InfrastructureKind {
@@ -168,6 +169,7 @@ impl InfrastructureKind {
             Self::SurveyDrone => "Survey Drone",
             Self::CargoLift => "Cargo Lift",
             Self::TunnelSupport => "Tunnel Support",
+            Self::PumpStation => "Pump Station",
         }
     }
 }
@@ -223,10 +225,11 @@ pub enum RecipeKind {
     SurveyDroneKit,
     CargoLiftKit,
     TunnelSupportKit,
+    PumpStationKit,
 }
 
 impl RecipeKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::ReinforcedBulkhead,
         Self::AuxiliaryTank,
         Self::ExpandedSorter,
@@ -234,6 +237,7 @@ impl RecipeKind {
         Self::SurveyDroneKit,
         Self::CargoLiftKit,
         Self::TunnelSupportKit,
+        Self::PumpStationKit,
     ];
 
     #[must_use]
@@ -246,6 +250,7 @@ impl RecipeKind {
             Self::SurveyDroneKit => "Survey Drone Kit",
             Self::CargoLiftKit => "Cargo Lift Kit",
             Self::TunnelSupportKit => "Tunnel Support Kit",
+            Self::PumpStationKit => "Pump Station Kit",
         }
     }
 
@@ -259,6 +264,7 @@ impl RecipeKind {
             Self::SurveyDroneKit => "reveals nearby map over time",
             Self::CargoLiftKit => "sends cargo upward from a station",
             Self::TunnelSupportKit => "protects nearby tunnel from collapses",
+            Self::PumpStationKit => "suppresses nearby gas and heat hazards",
         }
     }
 
@@ -284,6 +290,11 @@ impl RecipeKind {
                 (StrategicResourceKind::CoreShard, 1),
             ],
             Self::TunnelSupportKit => &[(StrategicResourceKind::AncientAlloy, 1)],
+            Self::PumpStationKit => &[
+                (StrategicResourceKind::AncientAlloy, 1),
+                (StrategicResourceKind::CrystalLens, 1),
+                (StrategicResourceKind::CoreShard, 1),
+            ],
         }
     }
 }
@@ -1503,6 +1514,9 @@ impl GameState {
             RecipeKind::TunnelSupportKit => {
                 self.player.tunnel_support_kits = self.player.tunnel_support_kits.saturating_add(1);
             }
+            RecipeKind::PumpStationKit => {
+                self.player.pump_station_kits = self.player.pump_station_kits.saturating_add(1);
+            }
         }
         self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
         self.sound_cues.push(SoundCue::Upgrade);
@@ -2121,6 +2135,12 @@ impl GameState {
                 "No tunnel support kits. Craft one at HQ first.",
             );
         }
+        if input.place_pump {
+            self.place_infrastructure_kit(
+                InfrastructureKind::PumpStation,
+                "No pump station kits. Craft one at HQ first.",
+            );
+        }
     }
 
     fn place_infrastructure_kit(&mut self, kind: InfrastructureKind, empty_message: &str) {
@@ -2129,6 +2149,7 @@ impl GameState {
             InfrastructureKind::SurveyDrone => self.player.survey_drone_kits,
             InfrastructureKind::CargoLift => self.player.cargo_lift_kits,
             InfrastructureKind::TunnelSupport => self.player.tunnel_support_kits,
+            InfrastructureKind::PumpStation => self.player.pump_station_kits,
         };
         if kits == 0 {
             empty_message.clone_into(&mut self.message);
@@ -2160,6 +2181,9 @@ impl GameState {
             InfrastructureKind::TunnelSupport => {
                 self.player.tunnel_support_kits = self.player.tunnel_support_kits.saturating_sub(1);
             }
+            InfrastructureKind::PumpStation => {
+                self.player.pump_station_kits = self.player.pump_station_kits.saturating_sub(1);
+            }
         }
         self.infrastructure.push(PlacedInfrastructure {
             kind,
@@ -2178,6 +2202,9 @@ impl GameState {
             }
             InfrastructureKind::TunnelSupport => {
                 "Placed Tunnel Support. Nearby collapse warnings will be suppressed.".to_owned()
+            }
+            InfrastructureKind::PumpStation => {
+                "Placed Pump Station. Nearby gas and heat hazards are suppressed.".to_owned()
             }
         };
         self.sound_cues.push(SoundCue::Upgrade);
@@ -2433,23 +2460,31 @@ impl GameState {
     }
 
     fn trigger_gas_explosion(&mut self) {
+        let protected = self.is_pump_protected(self.player.tile_position(TILE_SIZE));
         self.player.fuel = (self.player.fuel - DRILL_FUEL_COST).max(0.0);
         self.player.velocity_x *= -0.25;
         self.player.velocity_y = -90.0;
         self.sound_cues.push(SoundCue::Damage);
         self.drill_flash_seconds = 0.2;
         self.screen_flash_seconds = 0.12;
-        self.hazard_clouds.push(HazardCloud {
-            x: self.player.x,
-            y: self.player.y + TILE_SIZE,
-            life: 8.0,
-            radius: 10.0,
-        });
+        if !protected {
+            self.hazard_clouds.push(HazardCloud {
+                x: self.player.x,
+                y: self.player.y + TILE_SIZE,
+                life: 8.0,
+                radius: 10.0,
+            });
+        }
         for _ in 0..5 {
             self.spawn_dust();
         }
-        "Gas pocket venting! Clear the green leak before it turns corrosive."
-            .clone_into(&mut self.message);
+        if protected {
+            "Pump station vented nearby gas before it became corrosive."
+                .clone_into(&mut self.message);
+        } else {
+            "Gas pocket venting! Clear the green leak before it turns corrosive."
+                .clone_into(&mut self.message);
+        }
     }
 
     fn trigger_explosive_pocket(&mut self) {
@@ -2787,7 +2822,12 @@ impl GameState {
             return;
         }
 
-        let damage = 9.0 * delta_seconds;
+        let player_tile = self.player.tile_position(TILE_SIZE);
+        let damage = if self.is_pump_protected(player_tile) {
+            2.5 * delta_seconds
+        } else {
+            9.0 * delta_seconds
+        };
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
         "Lava heat is burning the hull!".clone_into(&mut self.message);
@@ -3082,6 +3122,15 @@ impl GameState {
             item.kind == InfrastructureKind::TunnelSupport
                 && (item.position.x - position.x).abs() <= 3
                 && (item.position.y - position.y).abs() <= 3
+        })
+    }
+
+    #[must_use]
+    pub fn is_pump_protected(&self, position: TilePosition) -> bool {
+        self.infrastructure.iter().any(|item| {
+            item.kind == InfrastructureKind::PumpStation
+                && (item.position.x - position.x).abs() <= 4
+                && (item.position.y - position.y).abs() <= 4
         })
     }
 
