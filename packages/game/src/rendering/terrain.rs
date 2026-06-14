@@ -15,6 +15,8 @@ const UNEXPLORED_GRADIENT_START_TILE_Y: i32 = SKY_CLEAR_MAX_TILE_Y + 1;
 const UNEXPLORED_FULL_DARK_TILE_Y: i32 = 34;
 const UNEXPLORED_MIN_DARK_ALPHA: i32 = 48;
 const UNEXPLORED_MAX_DARK_ALPHA: i32 = 255;
+const UNEXPLORED_DISTANCE_FADE_START_TILES: i32 = 1;
+const UNEXPLORED_DISTANCE_FULL_DARK_TILES: i32 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ChunkPosition {
@@ -178,7 +180,8 @@ impl TerrainChunk {
                 );
 
                 if !explored {
-                    let darkness_alpha = unexplored_darkness_alpha(tile_y);
+                    let darkness_alpha = unexplored_depth_darkness_alpha(tile_y)
+                        .max(unexplored_distance_darkness_alpha(game, position));
                     if darkness_alpha > 0 {
                         texture_draw.draw_rectangle(
                             local_x,
@@ -352,7 +355,7 @@ pub(super) const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
     base
 }
 
-const fn unexplored_darkness_alpha(tile_y: i32) -> u8 {
+const fn unexplored_depth_darkness_alpha(tile_y: i32) -> u8 {
     if tile_y <= SKY_CLEAR_MAX_TILE_Y {
         return 0;
     }
@@ -365,6 +368,40 @@ const fn unexplored_darkness_alpha(tile_y: i32) -> u8 {
     let distance = tile_y - UNEXPLORED_GRADIENT_START_TILE_Y;
     let alpha_range = UNEXPLORED_MAX_DARK_ALPHA - UNEXPLORED_MIN_DARK_ALPHA;
     (UNEXPLORED_MIN_DARK_ALPHA + (alpha_range * distance) / gradient_span) as u8
+}
+
+fn unexplored_distance_darkness_alpha(game: &GameState, position: TilePosition) -> u8 {
+    if position.y <= SKY_CLEAR_MAX_TILE_Y {
+        return 0;
+    }
+
+    let mut closest_explored_distance = UNEXPLORED_DISTANCE_FULL_DARK_TILES + 1;
+    for y in position.y - UNEXPLORED_DISTANCE_FULL_DARK_TILES
+        ..=position.y + UNEXPLORED_DISTANCE_FULL_DARK_TILES
+    {
+        for x in position.x - UNEXPLORED_DISTANCE_FULL_DARK_TILES
+            ..=position.x + UNEXPLORED_DISTANCE_FULL_DARK_TILES
+        {
+            let distance = (position.x - x).abs() + (position.y - y).abs();
+            if distance >= closest_explored_distance {
+                continue;
+            }
+            if game.is_explored(TilePosition { x, y }) {
+                closest_explored_distance = distance;
+            }
+        }
+    }
+
+    if closest_explored_distance >= UNEXPLORED_DISTANCE_FULL_DARK_TILES {
+        return UNEXPLORED_MAX_DARK_ALPHA as u8;
+    }
+    if closest_explored_distance <= UNEXPLORED_DISTANCE_FADE_START_TILES {
+        return 0;
+    }
+
+    let fade_span = UNEXPLORED_DISTANCE_FULL_DARK_TILES - UNEXPLORED_DISTANCE_FADE_START_TILES;
+    let fade_distance = closest_explored_distance - UNEXPLORED_DISTANCE_FADE_START_TILES;
+    ((UNEXPLORED_MAX_DARK_ALPHA * fade_distance) / fade_span) as u8
 }
 
 const fn tile_color(kind: TileKind) -> Color {
@@ -431,18 +468,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unexplored_darkness_keeps_sky_clear() {
-        assert_eq!(unexplored_darkness_alpha(SKY_CLEAR_MAX_TILE_Y), 0);
+    fn unexplored_depth_darkness_keeps_sky_clear() {
+        assert_eq!(unexplored_depth_darkness_alpha(SKY_CLEAR_MAX_TILE_Y), 0);
     }
 
     #[test]
-    fn unexplored_darkness_increases_with_depth() {
-        let shallow = unexplored_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y);
-        let middle = unexplored_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y + 10);
-        let deep = unexplored_darkness_alpha(UNEXPLORED_FULL_DARK_TILE_Y);
+    fn unexplored_depth_darkness_increases_with_depth() {
+        let shallow = unexplored_depth_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y);
+        let middle = unexplored_depth_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y + 10);
+        let deep = unexplored_depth_darkness_alpha(UNEXPLORED_FULL_DARK_TILE_Y);
 
         assert!(shallow < middle);
         assert!(middle < deep);
         assert_eq!(deep, 255);
+    }
+
+    #[test]
+    fn unexplored_distance_darkness_reaches_full_darkness_far_from_exploration() {
+        let game = GameState::new();
+        let alpha = unexplored_distance_darkness_alpha(&game, TilePosition { x: 30, y: 20 });
+        assert_eq!(alpha, 255);
+    }
+
+    #[test]
+    fn unexplored_distance_darkness_is_low_near_exploration() {
+        let mut game = GameState::new();
+        let explored = TilePosition { x: 10, y: 10 };
+        let index = (explored.y * game.terrain.width() + explored.x) as usize;
+        game.explored_tiles[index] = true;
+
+        let alpha = unexplored_distance_darkness_alpha(&game, TilePosition { x: 11, y: 10 });
+        assert_eq!(alpha, 0);
     }
 }

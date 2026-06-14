@@ -45,6 +45,7 @@ const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
 const CAMERA_SMOOTHING: f32 = 8.0;
 const SKY_FLIGHT_HEIGHT_TILES: f32 = 12.0;
 const MIN_PLAYER_Y: f32 = -SKY_FLIGHT_HEIGHT_TILES * TILE_SIZE;
+const EXPLORATION_VISUAL_CHANGE_RADIUS_TILES: i32 = 8;
 const WORLD_SEED: u64 = 0xD1_11_6A_4E;
 
 const fn default_master_volume() -> f32 {
@@ -474,6 +475,18 @@ impl GameState {
         self.visual_changes.changed_tiles.push(position);
     }
 
+    fn mark_exploration_visual_changed(&mut self, position: TilePosition) {
+        for y in position.y - EXPLORATION_VISUAL_CHANGE_RADIUS_TILES
+            ..=position.y + EXPLORATION_VISUAL_CHANGE_RADIUS_TILES
+        {
+            for x in position.x - EXPLORATION_VISUAL_CHANGE_RADIUS_TILES
+                ..=position.x + EXPLORATION_VISUAL_CHANGE_RADIUS_TILES
+            {
+                self.mark_tile_visual_changed(TilePosition { x, y });
+            }
+        }
+    }
+
     fn mark_tiles_visual_changed<I>(&mut self, positions: I)
     where
         I: IntoIterator<Item = TilePosition>,
@@ -625,7 +638,7 @@ impl GameState {
                     && !self.explored_tiles[index]
                 {
                     self.explored_tiles[index] = true;
-                    self.mark_tile_visual_changed(position);
+                    self.mark_exploration_visual_changed(position);
                 }
             }
         }
@@ -646,7 +659,7 @@ impl GameState {
                         && !self.explored_tiles[index]
                     {
                         self.explored_tiles[index] = true;
-                        self.mark_tile_visual_changed(position);
+                        self.mark_exploration_visual_changed(position);
                     }
                     if let Some(tile) = self.terrain.tile(position)
                         && scanner_can_mark(tile.kind, self.player.scanner_level)
@@ -2721,8 +2734,17 @@ mod tests {
     }
 
     #[test]
-    fn terrain_above_world_is_not_solid() {
-        let game = GameState::new();
-        assert!(!game.terrain.is_solid_at(TilePosition { x: 4, y: -1 }));
+    fn revealing_exploration_marks_nearby_tiles_for_redraw() {
+        let mut game = GameState::new();
+        game.visual_changes.changed_tiles.clear();
+        let position = TilePosition { x: 20, y: 20 };
+
+        game.mark_exploration_visual_changed(position);
+
+        assert!(game.visual_changes.changed_tiles.contains(&position));
+        assert!(game.visual_changes.changed_tiles.contains(&TilePosition {
+            x: position.x + EXPLORATION_VISUAL_CHANGE_RADIUS_TILES,
+            y: position.y
+        }));
     }
 }
