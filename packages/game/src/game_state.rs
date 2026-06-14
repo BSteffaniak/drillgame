@@ -1777,6 +1777,13 @@ impl GameState {
             format!("Hull repaired for {cost} credits.")
         };
         if cost > 0 {
+            if self.town_development.mechanic_level > 0 {
+                let refund =
+                    (cost * u32::from(self.town_development.mechanic_level)).min(cost) / 10;
+                self.player.credits = self.player.credits.saturating_add(refund);
+                self.message =
+                    format!("Hull repaired for {cost} credits. Mechanic upgrade rebate: {refund}.");
+            }
             if self.has_world_event(WorldEventKind::RepairBacklog) {
                 let surcharge = (cost / 4).min(self.player.credits);
                 self.player.credits -= surcharge;
@@ -3776,6 +3783,17 @@ impl GameState {
             .push(market_factor(self.market_salt, self.town_event_day));
         if self.market_history.len() > 7 {
             self.market_history.remove(0);
+        }
+        if self.town_development.bank_level > 0 {
+            let dividend = u32::from(self.town_development.bank_level) * 12;
+            self.player.credits = self.player.credits.saturating_add(dividend);
+            self.total_earnings = self.total_earnings.saturating_add(dividend);
+            if self.player.loan_debt > 0 {
+                self.message = format!(
+                    "Bank office dividend: {dividend} credits. Debt remaining: {}.",
+                    self.player.loan_debt
+                );
+            }
         }
         self.apply_infrastructure_maintenance();
         self.apply_seismic_pump_strain();
