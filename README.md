@@ -30,7 +30,8 @@ Successful return trips award streak bonuses. Emergency rescue returns the rig t
 - `A` / `D` or left/right arrows: move horizontally and drill sideways while grounded
 - `W` / up arrow / space: thrust upward
 - `S` / down arrow: drill downward
-- `B`: detonate a purchased bomb underground
+- `C`: trigger an active scanner pulse when a scanner is installed
+- `B`: place a purchased timed bomb underground
 - `E` / `Enter`: interact with buildings/interior counters, confirm menus, or start game
 - `Backspace` / `Esc`: close menus; `P` pauses/resumes
 - `M`: large mine map with ore, hazard, rescue, and lost-cargo markers

@@ -200,6 +200,8 @@ pub struct VisualChanges {
 pub struct GameState {
     pub terrain: Terrain,
     pub player: Player,
+    #[serde(default = "current_save_version")]
+    pub save_version: u32,
     pub message: String,
     pub current_zone: Option<SurfaceZone>,
     #[serde(default)]
@@ -334,6 +336,7 @@ impl GameState {
         Self {
             terrain: Terrain::new_seeded(WORLD_WIDTH, WORLD_HEIGHT, WORLD_SEED),
             player: Player::new(97.0 * TILE_SIZE, 4.0 * TILE_SIZE),
+            save_version: current_save_version(),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             current_zone: None,
@@ -759,7 +762,7 @@ impl GameState {
             }
             SurfaceZone::Headquarters => self.modal = Some(ModalScreen::Headquarters),
             SurfaceZone::Shop => self.modal = Some(ModalScreen::Shop),
-            SurfaceZone::Bank => self.confirm_finance(),
+            SurfaceZone::Bank => self.confirm_bank_service(),
             SurfaceZone::Explosives => self.buy_explosive_shack_pack(),
             SurfaceZone::Salvage => self.salvage_yard_service(),
         }
@@ -888,6 +891,11 @@ impl GameState {
             format!("Fuel topped up for {cost} credits.")
         };
         if cost > 0 {
+            if self.town_event_day.is_multiple_of(5) {
+                let refund = cost / 5;
+                self.player.credits += refund;
+                self.message = format!("Fuel topped up for {cost} credits. Sale refund: {refund}.");
+            }
             self.sound_cues.push(SoundCue::Upgrade);
             self.service_animation = Some(ServiceAnimation::Fuel);
             self.service_animation_seconds = 1.4;
@@ -904,6 +912,13 @@ impl GameState {
             format!("Hull repaired for {cost} credits.")
         };
         if cost > 0 {
+            if self.town_event_day % 5 == 2 {
+                let surcharge = (cost / 10).min(self.player.credits);
+                self.player.credits -= surcharge;
+                self.message = format!(
+                    "Hull repaired for {cost} credits. Repair backlog surcharge: {surcharge}."
+                );
+            }
             self.sound_cues.push(SoundCue::Upgrade);
             self.service_animation = Some(ServiceAnimation::Repair);
             self.service_animation_seconds = 1.4;
@@ -920,6 +935,21 @@ impl GameState {
             }
             _ => self.confirm_finance(),
         }
+    }
+
+    fn confirm_bank_service(&mut self) {
+        if !self.player.insured {
+            let cost = 90;
+            if self.player.credits >= cost {
+                self.player.credits -= cost;
+                self.player.insured = true;
+                "Ledger sold you rescue insurance. Next rescue keeps more cargo and halves the fee."
+                    .clone_into(&mut self.message);
+                self.sound_cues.push(SoundCue::Upgrade);
+                return;
+            }
+        }
+        self.confirm_finance();
     }
 
     fn confirm_finance(&mut self) {
@@ -1019,7 +1049,7 @@ impl GameState {
             );
         }
 
-        let factor = market_factor(self.market_salt);
+        let factor = market_factor(self.market_salt, self.town_event_day);
         let payout = sell_cargo(&mut self.player);
         let adjusted = payout.saturating_mul(factor) / 100;
         if adjusted != payout {
@@ -1881,10 +1911,21 @@ impl GameState {
             return;
         }
 
-        let fee = rescue_fee(self.player.y).min(self.player.credits);
+        let base_fee = rescue_fee(self.player.y);
+        let fee = if self.player.insured {
+            base_fee / 2
+        } else {
+            base_fee
+        }
+        .min(self.player.credits);
         self.player.credits -= fee;
         self.rescue_count += 1;
-        let lost_items = drop_half_cargo(&mut self.player);
+        let lost_items = if self.player.insured {
+            0
+        } else {
+            drop_half_cargo(&mut self.player)
+        };
+        self.player.insured = false;
         self.last_rescue_x = Some(self.player.x);
         self.last_rescue_y = Some(self.player.y);
         if lost_items > 0 {
@@ -2012,8 +2053,13 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
     })
 }
 
-const fn market_factor(salt: u32) -> u32 {
-    85 + salt.wrapping_mul(37).wrapping_add(11) % 41
+const fn current_save_version() -> u32 {
+    2
+}
+
+const fn market_factor(salt: u32, event_day: u32) -> u32 {
+    let base = 85 + salt.wrapping_mul(37).wrapping_add(11) % 41;
+    if event_day % 5 == 1 { base + 20 } else { base }
 }
 
 const fn surface_zone_label(zone: SurfaceZone) -> &'static str {

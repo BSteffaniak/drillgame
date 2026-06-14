@@ -34,6 +34,8 @@ pub struct Player {
     pub bombs: u32,
     #[serde(default)]
     pub loan_debt: u32,
+    #[serde(default)]
+    pub insured: bool,
 }
 
 #[allow(
@@ -64,6 +66,7 @@ impl Player {
             scanner_level: 0,
             bombs: 0,
             loan_debt: 0,
+            insured: false,
         }
     }
 

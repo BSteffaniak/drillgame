@@ -365,6 +365,9 @@ pub(super) const fn mineral_color(mineral: MineralKind) -> Color {
         MineralKind::Emerald => Color::GREEN,
         MineralKind::Ruby => Color::RED,
         MineralKind::Diamond => Color::SKYBLUE,
+        MineralKind::Platinum => Color::new(210, 230, 245, 255),
+        MineralKind::Uranium => Color::LIME,
+        MineralKind::Mythril => Color::VIOLET,
     }
 }
 

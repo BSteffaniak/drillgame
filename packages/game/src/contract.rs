@@ -54,7 +54,10 @@ impl ContractLog {
             5 => "HQ: Ruby survived high heat. Seek idol chambers deeper down.",
             6 => "HQ: Idol telemetry points to emerald conductors.",
             7 => "HQ: Emerald circuitry is live. A diamond lens can focus the scan.",
-            8 => "HQ: Diamond lens aligned. Recover the old circuit to triangulate the core.",
+            8 => "HQ: Diamond lens aligned. Platinum resonance should stabilize the receiver.",
+            9 => "HQ: Platinum receiver is clean. Uranium traces mark the hot path.",
+            10 => "HQ: Uranium signature confirmed. Mythril lattice should survive the core field.",
+            11 => "HQ: Mythril lattice locked. Recover the old circuit to triangulate the core.",
             _ => "HQ: Star Core coordinates locked. This is the final descent.",
         }
     }
@@ -212,10 +215,31 @@ fn contract_for_index(index: u32) -> Contract {
             false,
         ),
         8 => Contract::new(
+            "Platinum Receiver",
+            ContractTarget::Mineral(MineralKind::Platinum),
+            1,
+            1_350,
+            false,
+        ),
+        9 => Contract::new(
+            "Uranium Trace",
+            ContractTarget::Mineral(MineralKind::Uranium),
+            1,
+            1_650,
+            false,
+        ),
+        10 => Contract::new(
+            "Mythril Lattice",
+            ContractTarget::Mineral(MineralKind::Mythril),
+            1,
+            2_050,
+            false,
+        ),
+        11 => Contract::new(
             "Ancient Machine",
             ContractTarget::Artifact(ArtifactKind::OldCircuit),
             1,
-            1_350,
+            2_350,
             false,
         ),
         _ => Contract::new(

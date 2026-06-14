@@ -16,6 +16,9 @@ pub enum MineralKind {
     Emerald,
     Ruby,
     Diamond,
+    Platinum,
+    Uranium,
+    Mythril,
 }
 
 impl MineralKind {
@@ -29,6 +32,9 @@ impl MineralKind {
             Self::Emerald => "Emerald",
             Self::Ruby => "Ruby",
             Self::Diamond => "Diamond",
+            Self::Platinum => "Platinum",
+            Self::Uranium => "Uranium",
+            Self::Mythril => "Mythril",
         }
     }
 
@@ -42,6 +48,9 @@ impl MineralKind {
             Self::Emerald => 78,
             Self::Ruby => 120,
             Self::Diamond => 190,
+            Self::Platinum => 260,
+            Self::Uranium => 360,
+            Self::Mythril => 520,
         }
     }
 }
@@ -430,9 +439,12 @@ const fn ore_or_base_tile(x: i32, y: i32, base: TileKind, seed: u64) -> TileKind
             1 | 2 => MineralKind::Emerald,
             _ => MineralKind::Gold,
         }),
-        _ => TileKind::Ore(match (x * 19 + y * 23).rem_euclid(9) {
-            0 => MineralKind::Diamond,
-            1 | 2 => MineralKind::Ruby,
+        _ => TileKind::Ore(match (x * 19 + y * 23).rem_euclid(13) {
+            0 => MineralKind::Mythril,
+            1 => MineralKind::Uranium,
+            2 | 3 => MineralKind::Platinum,
+            4 | 5 => MineralKind::Diamond,
+            6 | 7 => MineralKind::Ruby,
             _ => MineralKind::Emerald,
         }),
     }
@@ -469,7 +481,12 @@ const fn tile_hardness(kind: TileKind) -> u8 {
         | TileKind::Ore(MineralKind::Emerald | MineralKind::Ruby)
         | TileKind::Artifact(ArtifactKind::Fossil | ArtifactKind::OldCircuit) => 3,
         TileKind::HardRock
-        | TileKind::Ore(MineralKind::Diamond)
+        | TileKind::Ore(
+            MineralKind::Diamond
+            | MineralKind::Platinum
+            | MineralKind::Uranium
+            | MineralKind::Mythril,
+        )
         | TileKind::Artifact(ArtifactKind::BuriedIdol | ArtifactKind::StarCore) => 4,
     }
 }

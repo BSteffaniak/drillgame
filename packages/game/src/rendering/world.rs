@@ -289,12 +289,16 @@ pub(super) fn draw_scanner_marks(
             };
             let color = match tile.kind {
                 TileKind::Ore(_) => Color::GOLD,
-                TileKind::Artifact(_) => Color::MAGENTA,
+                TileKind::Artifact(_) if game.player.scanner_level >= 3 => Color::MAGENTA,
                 TileKind::Gas
                 | TileKind::Lava
                 | TileKind::MagmaVent
                 | TileKind::ExplosivePocket
-                | TileKind::PressurePocket => Color::RED,
+                | TileKind::PressurePocket
+                    if game.player.scanner_level >= 2 =>
+                {
+                    Color::RED
+                }
                 _ => continue,
             };
             draw.draw_circle_v(
