@@ -8,8 +8,8 @@ use crate::{
     game_state::{GameState, RunMode},
     input::PlayerInput,
     multiplayer::{
-        ClientId, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId,
-        SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
+        PlayerCommand, PlayerId, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -92,6 +92,9 @@ const TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
 const KEYFRAME_INTERVAL_TICKS: u64 = SIMULATION_HZ as u64 * 5;
 const DEFAULT_VIEWPORT_WIDTH: i32 = 1280;
 const DEFAULT_VIEWPORT_HEIGHT: i32 = 720;
+const MIN_INTERPOLATION_DELAY_SECONDS: f32 = 0.05;
+const MAX_INTERPOLATION_DELAY_SECONDS: f32 = 0.25;
+const EXTRAPOLATION_LIMIT_SECONDS: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TerrainChunkPosition {
@@ -310,6 +313,31 @@ impl ClientPredictionState {
         self.remote_player_snapshots
             .get(&player_id)
             .map_or(0, Vec::len)
+    }
+
+    #[must_use]
+    pub fn interpolation_delay_seconds(snapshot_spacing_seconds: f32) -> f32 {
+        (snapshot_spacing_seconds * 2.0).clamp(
+            MIN_INTERPOLATION_DELAY_SECONDS,
+            MAX_INTERPOLATION_DELAY_SECONDS,
+        )
+    }
+
+    #[must_use]
+    pub fn should_extrapolate(stall_seconds: f32) -> bool {
+        stall_seconds <= EXTRAPOLATION_LIMIT_SECONDS
+    }
+
+    #[must_use]
+    pub fn predicted_input_lag_seconds(&self) -> f32 {
+        let command_count = self
+            .unacknowledged_commands
+            .len()
+            .min(SIMULATION_HZ as usize);
+        let seconds_per_command = Duration::from_secs_f32(FIXED_DELTA_SECONDS);
+        seconds_per_command
+            .saturating_mul(u32::try_from(command_count).expect("command count is capped"))
+            .as_secs_f32()
     }
 
     pub fn push_remote_snapshot(&mut self, snapshot: PlayerSnapshot) {
@@ -909,6 +937,30 @@ mod tests {
         });
 
         assert_eq!(prediction.remote_snapshot_count(LOCAL_PLAYER_ID), 1);
+    }
+
+    #[test]
+    fn prediction_state_derives_interpolation_and_extrapolation_timing() {
+        let mut session = GameSession::new();
+        session.sequence_local_commands(vec![PlayerCommand::Interact, PlayerCommand::UseScanner]);
+
+        assert!(
+            (super::ClientPredictionState::interpolation_delay_seconds(0.01) - 0.05).abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (super::ClientPredictionState::interpolation_delay_seconds(1.0) - 0.25).abs()
+                < f32::EPSILON
+        );
+        assert!(super::ClientPredictionState::should_extrapolate(0.12));
+        assert!(!super::ClientPredictionState::should_extrapolate(0.13));
+        assert!(
+            session
+                .local_client()
+                .prediction()
+                .predicted_input_lag_seconds()
+                > 0.0
+        );
     }
 
     #[test]

@@ -75,6 +75,13 @@ pub fn run() {
 
         let _prediction_correction_plan =
             crate::session::ClientPredictionState::correction_plan(0.0, 0.0);
+        let _interpolation_delay =
+            crate::session::ClientPredictionState::interpolation_delay_seconds(delta_seconds);
+        let _can_extrapolate = crate::session::ClientPredictionState::should_extrapolate(0.0);
+        let _predicted_input_lag = session
+            .local_client()
+            .prediction()
+            .predicted_input_lag_seconds();
         let mut prediction_probe = session.local_client().prediction().clone();
         prediction_probe.push_remote_snapshot(crate::session::PlayerSnapshot::from_player(
             crate::multiplayer::LOCAL_PLAYER_ID,
