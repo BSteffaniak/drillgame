@@ -4,7 +4,7 @@ use raylib::prelude::*;
 
 use crate::{
     game_state::{GameState, TILE_SIZE},
-    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition, deep_stratum_at_depth},
 };
 
 pub(super) const TERRAIN_CHUNK_SIZE_TILES: i32 = 32;
@@ -336,6 +336,7 @@ fn draw_tile_durability_lines<D: RaylibDraw>(
 
 pub(super) const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
     let base = tile_color(kind);
+    let stratum_tint = stratum_tint(y);
     if matches!(
         kind,
         TileKind::Dirt
@@ -345,14 +346,44 @@ pub(super) const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
             | TileKind::Foundation
     ) {
         let depth = if y / 12 < 6 { y / 12 } else { 6 } as u8;
-        return Color::new(
-            base.r.saturating_sub(depth * 8),
-            base.g.saturating_sub(depth * 6),
-            base.b.saturating_sub(depth * 4),
-            base.a,
+        return blend_colors(
+            Color::new(
+                base.r.saturating_sub(depth * 8),
+                base.g.saturating_sub(depth * 6),
+                base.b.saturating_sub(depth * 4),
+                base.a,
+            ),
+            stratum_tint,
         );
     }
-    base
+    blend_colors(base, stratum_tint)
+}
+
+const fn stratum_tint(y: i32) -> Option<Color> {
+    let Some(stratum) = deep_stratum_at_depth(y) else {
+        return None;
+    };
+    Some(match stratum {
+        crate::terrain::DeepStratum::CrystalFaults => Color::new(70, 130, 170, 255),
+        crate::terrain::DeepStratum::FossilOceans => Color::new(135, 105, 75, 255),
+        crate::terrain::DeepStratum::PressureCathedrals => Color::new(55, 85, 125, 255),
+        crate::terrain::DeepStratum::RadioactiveHollow => Color::new(85, 135, 55, 255),
+        crate::terrain::DeepStratum::AncientMachineLayer => Color::new(115, 95, 65, 255),
+        crate::terrain::DeepStratum::VoidGeodeFields => Color::new(85, 55, 125, 255),
+        crate::terrain::DeepStratum::MantleStormZone => Color::new(145, 65, 45, 255),
+    })
+}
+
+const fn blend_colors(base: Color, tint: Option<Color>) -> Color {
+    let Some(tint) = tint else {
+        return base;
+    };
+    Color::new(
+        (((base.r as u16 * 3) + tint.r as u16) / 4) as u8,
+        (((base.g as u16 * 3) + tint.g as u16) / 4) as u8,
+        (((base.b as u16 * 3) + tint.b as u16) / 4) as u8,
+        base.a,
+    )
 }
 
 const fn unexplored_depth_darkness_alpha(tile_y: i32) -> u8 {

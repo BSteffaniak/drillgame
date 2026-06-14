@@ -142,6 +142,19 @@ impl DeepStratum {
             Self::MantleStormZone => "storm heat scrambles hazard warnings",
         }
     }
+
+    #[must_use]
+    pub const fn unique_objective(self) -> &'static str {
+        match self {
+            Self::CrystalFaults => "stabilize a crystal fault survey beacon",
+            Self::FossilOceans => "recover a radiant fossil slab",
+            Self::PressureCathedrals => "seal a pressure cathedral pocket",
+            Self::RadioactiveHollow => "scan a radioactive hollow anomaly",
+            Self::AncientMachineLayer => "retrieve a machine relic component",
+            Self::VoidGeodeFields => "reach a temporary void signal",
+            Self::MantleStormZone => "return before a mantle storm surge",
+        }
+    }
 }
 
 #[must_use]

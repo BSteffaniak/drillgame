@@ -1166,9 +1166,10 @@ fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
         if discovered {
             draw.draw_text(
                 &format!(
-                    "{} / {}",
+                    "{} / {}; {}",
                     stratum.primary_resource().name(),
-                    stratum.scanner_twist()
+                    stratum.scanner_twist(),
+                    stratum.unique_objective()
                 ),
                 970,
                 500 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
