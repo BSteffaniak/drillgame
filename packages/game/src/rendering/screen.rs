@@ -952,6 +952,37 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 }
 
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn draw_collection_rewards(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text(
+        &format!(
+            "Rewards claimed: minerals {} | artifacts {} | hazards {}",
+            yes_no(
+                game.collection_log
+                    .rewards_claimed
+                    .contains(&crate::game_state::CollectionRewardKind::Minerals)
+            ),
+            yes_no(
+                game.collection_log
+                    .rewards_claimed
+                    .contains(&crate::game_state::CollectionRewardKind::Artifacts)
+            ),
+            yes_no(
+                game.collection_log
+                    .rewards_claimed
+                    .contains(&crate::game_state::CollectionRewardKind::Hazards)
+            )
+        ),
+        330,
+        246,
+        18,
+        Color::GREEN,
+    );
+}
+
 fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Research Log", 330, 150, 30, Color::GOLD);
     draw.draw_text(
@@ -978,6 +1009,7 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         20,
         Color::SKYBLUE,
     );
+    draw_collection_rewards(draw, game);
     let minerals = [
         MineralKind::Copper,
         MineralKind::Iron,

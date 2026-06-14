@@ -309,6 +309,13 @@ impl RecipeKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum CollectionRewardKind {
+    Minerals,
+    Artifacts,
+    Hazards,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CollectionLog {
     #[serde(default)]
@@ -319,6 +326,8 @@ pub struct CollectionLog {
     pub hazards: std::collections::BTreeSet<TileKind>,
     #[serde(default)]
     pub strata: std::collections::BTreeSet<i32>,
+    #[serde(default)]
+    pub rewards_claimed: std::collections::BTreeSet<CollectionRewardKind>,
 }
 
 impl CollectionLog {
@@ -855,6 +864,7 @@ impl GameState {
         self.recover_lost_cargo_if_near();
         self.reveal_near_player();
         self.reveal_scanner_area();
+        self.update_collection_rewards();
         self.update_survey_drones();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
         if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
@@ -2267,6 +2277,46 @@ impl GameState {
             });
             "Gas bloom: corrosive vapor is spreading through open tunnels."
                 .clone_into(&mut self.message);
+        }
+    }
+
+    fn update_collection_rewards(&mut self) {
+        if self.collection_log.minerals.len() >= 10
+            && self
+                .collection_log
+                .rewards_claimed
+                .insert(CollectionRewardKind::Minerals)
+        {
+            self.player.credits = self.player.credits.saturating_add(500);
+            self.player
+                .add_material(StrategicResourceKind::CrystalLens, 2);
+            "Mineral encyclopedia complete: awarded 500 credits and 2 Crystal Lenses."
+                .clone_into(&mut self.message);
+            self.sound_cues.push(SoundCue::Milestone);
+        }
+        if self.collection_log.artifacts.len() >= 4
+            && self
+                .collection_log
+                .rewards_claimed
+                .insert(CollectionRewardKind::Artifacts)
+        {
+            self.player.credits = self.player.credits.saturating_add(900);
+            self.player
+                .add_material(StrategicResourceKind::CoreShard, 2);
+            "Artifact museum complete: awarded 900 credits and 2 Core Shards."
+                .clone_into(&mut self.message);
+            self.sound_cues.push(SoundCue::Milestone);
+        }
+        if self.collection_log.hazards.len() >= 5
+            && self
+                .collection_log
+                .rewards_claimed
+                .insert(CollectionRewardKind::Hazards)
+        {
+            self.town_development.scanner_lab_level =
+                self.town_development.scanner_lab_level.saturating_add(1);
+            "Hazard research complete: scanner lab upgraded.".clone_into(&mut self.message);
+            self.sound_cues.push(SoundCue::Milestone);
         }
     }
 
