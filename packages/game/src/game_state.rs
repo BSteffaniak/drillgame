@@ -45,8 +45,12 @@ const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
 const CAMERA_SMOOTHING: f32 = 8.0;
 const SKY_FLIGHT_HEIGHT_TILES: f32 = 12.0;
 const MIN_PLAYER_Y: f32 = -SKY_FLIGHT_HEIGHT_TILES * TILE_SIZE;
-const EXPLORATION_VISUAL_CHANGE_RADIUS_TILES: i32 = 8;
+const EXPLORATION_VISUAL_CHANGE_RADIUS_TILES: i32 = 12;
+const CAMERA_INTRO_SECONDS: f32 = 1.0;
+const CAMERA_INTRO_DROP_DISTANCE: f32 = 260.0;
 const WORLD_SEED: u64 = 0xD1_11_6A_4E;
+const PLAYER_SPAWN_X: f32 = 97.0 * TILE_SIZE;
+const PLAYER_SPAWN_Y: f32 = 4.0 * TILE_SIZE;
 
 const fn default_master_volume() -> f32 {
     0.8
@@ -302,6 +306,8 @@ pub struct GameState {
     pub lost_artifacts: std::collections::BTreeMap<ArtifactKind, u32>,
     pub camera_x: f32,
     pub camera_y: f32,
+    #[serde(default)]
+    pub camera_intro_seconds: f32,
     pub drill_flash_seconds: f32,
     #[serde(default)]
     pub active_drill: Option<DrillState>,
@@ -373,6 +379,7 @@ impl GameState {
         saved.spark_particles.clear();
         saved.camera_shake_seconds = 0.0;
         saved.camera_shake_strength = 0.0;
+        saved.camera_intro_seconds = 0.0;
         saved.screen_flash_seconds = 0.0;
         saved.sound_cues.clear();
         saved.settings_dirty = false;
@@ -385,7 +392,7 @@ impl GameState {
     pub fn new() -> Self {
         Self {
             terrain: Terrain::new_seeded(WORLD_WIDTH, WORLD_HEIGHT, WORLD_SEED),
-            player: Player::new(97.0 * TILE_SIZE, 4.0 * TILE_SIZE),
+            player: Player::new(PLAYER_SPAWN_X, PLAYER_SPAWN_Y),
             save_version: current_save_version(),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
@@ -427,8 +434,9 @@ impl GameState {
             lost_cargo_count: 0,
             lost_minerals: std::collections::BTreeMap::new(),
             lost_artifacts: std::collections::BTreeMap::new(),
-            camera_x: 0.0,
-            camera_y: 0.0,
+            camera_x: initial_camera_x(),
+            camera_y: initial_camera_y(),
+            camera_intro_seconds: CAMERA_INTRO_SECONDS,
             drill_flash_seconds: 0.0,
             active_drill: None,
             dust_particles: Vec::new(),
@@ -2073,6 +2081,15 @@ impl GameState {
 
     fn update_camera(&mut self, delta_seconds: f32) {
         let (target_x, target_y) = target_camera_offset(self);
+        if self.camera_intro_seconds > 0.0 {
+            self.camera_intro_seconds = (self.camera_intro_seconds - delta_seconds).max(0.0);
+            let progress = 1.0 - self.camera_intro_seconds / CAMERA_INTRO_SECONDS;
+            let eased = 1.0 - (1.0 - progress).powi(3);
+            self.camera_x = target_x;
+            self.camera_y = target_y - CAMERA_INTRO_DROP_DISTANCE * (1.0 - eased);
+            return;
+        }
+
         let blend = (delta_seconds * CAMERA_SMOOTHING).clamp(0.0, 1.0);
         self.camera_x += (target_x - self.camera_x) * blend;
         self.camera_y += (target_y - self.camera_y) * blend;
@@ -2617,6 +2634,14 @@ const fn falling_rock_roll(position: TilePosition, seed: u64) -> bool {
     value.is_multiple_of(BOULDER_SPAWN_CHANCE)
 }
 
+const fn initial_camera_x() -> f32 {
+    PLAYER_SPAWN_X - 1280.0 / 2.0
+}
+
+const fn initial_camera_y() -> f32 {
+    PLAYER_SPAWN_Y - 720.0 / 2.0 - CAMERA_INTRO_DROP_DISTANCE
+}
+
 fn target_camera_offset(game: &GameState) -> (f32, f32) {
     let screen_width = 1280.0;
     let screen_height = 720.0;
@@ -2731,6 +2756,36 @@ mod tests {
         game.player.y = 2.0;
         game.move_axis(0.0, MIN_PLAYER_Y * 2.0);
         assert!((game.player.y - MIN_PLAYER_Y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_game_starts_camera_intro_above_player() {
+        let game = GameState::new();
+        let (target_x, target_y) = target_camera_offset(&game);
+
+        assert!(game.camera_intro_seconds > 0.0);
+        assert!((game.camera_x - target_x).abs() < f32::EPSILON);
+        assert!(game.camera_y < target_y);
+    }
+
+    #[test]
+    fn saved_game_disables_camera_intro() {
+        let game = GameState::new();
+        let saved = game.clone_for_save();
+
+        assert!(saved.camera_intro_seconds <= f32::EPSILON);
+    }
+
+    #[test]
+    fn camera_intro_drops_toward_target() {
+        let mut game = GameState::new();
+        let (_, target_y) = target_camera_offset(&game);
+        let initial_y = game.camera_y;
+
+        game.update_camera(CAMERA_INTRO_SECONDS * 0.5);
+
+        assert!(game.camera_y > initial_y);
+        assert!(game.camera_y < target_y);
     }
 
     #[test]
