@@ -94,7 +94,7 @@ impl GameRenderer {
         }
 
         if game.run_mode == RunMode::Title {
-            draw_title(draw);
+            draw_title(draw, game);
         } else if game.run_mode == RunMode::Paused {
             draw_pause(draw, game);
         }

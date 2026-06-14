@@ -9,8 +9,9 @@ use crate::{
     },
     game_state::{
         GameState, ModalScreen, PauseOption, RecipeKind, RunMode, SideContractKind, TILE_SIZE,
+        TitleOption,
     },
-    save::{save_slot_count, save_slot_exists, save_slot_metadata},
+    save::{latest_save_summary, save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
     terrain::{
         ArtifactKind, DeepStratum, MineralKind, StrategicResourceKind, TileKind, TilePosition,
@@ -750,6 +751,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
                 Color::WHITE,
             );
         }
+        ModalScreen::UnsavedExitConfirm => draw_unsaved_exit_confirm(draw, game),
     }
 }
 
@@ -2030,15 +2032,85 @@ fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bo
     }
 }
 
-pub(super) fn draw_title(draw: &mut RaylibDrawHandle<'_>) {
-    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 190));
-    draw.draw_text("DRILLGAME", 475, 250, 54, Color::GOLD);
-    draw.draw_text("Press Enter or E to start", 505, 325, 24, Color::RAYWHITE);
+pub(super) fn draw_title(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 210));
+    draw.draw_rectangle(385, 120, 510, 480, Color::new(8, 10, 18, 230));
+    draw.draw_rectangle_lines(385, 120, 510, 480, Color::GOLD);
+    draw.draw_text("DRILLGAME", 472, 155, 54, Color::GOLD);
     draw.draw_text(
-        "P pause/options/slots | H help | M map | F11 fullscreen",
-        455,
-        365,
+        "A frontier mining run awaits below.",
+        462,
+        220,
         20,
+        Color::LIGHTGRAY,
+    );
+
+    let options = GameState::title_options();
+    for (index, option) in options.iter().enumerate() {
+        let y = 285 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
+        let color = if index == game.selected_title_item {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(option.label(), 500, y, 26, color);
+    }
+
+    if options.contains(&TitleOption::Resume)
+        && let Some(meta) = latest_save_summary()
+    {
+        draw.draw_text(
+            &format!(
+                "Last save: depth {}m | {} cr | {:.0} min",
+                meta.depth,
+                meta.credits,
+                (meta.play_seconds / 60.0).floor()
+            ),
+            430,
+            500,
+            18,
+            Color::LIGHTGRAY,
+        );
+    }
+
+    draw.draw_text(
+        "Up/Down select | Enter/E confirm | Esc exits | F11 fullscreen",
+        410,
+        548,
+        18,
+        Color::LIGHTGRAY,
+    );
+}
+
+fn draw_unsaved_exit_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Unsaved Progress", 330, 150, 30, Color::RED);
+    draw.draw_text(
+        "Do you want to save before exiting?",
+        330,
+        198,
+        22,
+        Color::RAYWHITE,
+    );
+    let options = ["Save and Exit", "Exit Without Saving", "Cancel"];
+    for (index, option) in options.iter().enumerate() {
+        let color = if index == game.selected_menu_item {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(
+            option,
+            360,
+            255 + i32::try_from(index).unwrap_or(i32::MAX) * 42,
+            24,
+            color,
+        );
+    }
+    draw.draw_text(
+        "Up/Down choose | Enter/E confirm | Backspace/Esc cancels",
+        330,
+        410,
+        18,
         Color::LIGHTGRAY,
     );
 }

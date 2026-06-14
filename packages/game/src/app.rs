@@ -36,9 +36,10 @@ pub fn run() {
 
     let mut renderer = GameRenderer::new(&mut raylib, &thread, &game);
 
-    while !raylib.window_should_close() && !game.request_exit {
+    while !game.request_exit {
         let delta_seconds = raylib.get_frame_time();
-        let input = read_input(&raylib);
+        let exit_requested = raylib.window_should_close();
+        let input = read_input(&raylib, exit_requested);
 
         game.update(input, delta_seconds);
         if input.fullscreen {

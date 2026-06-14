@@ -90,6 +90,13 @@ pub fn load_game() -> Result<GameState, SaveError> {
     load_game_from_path(save_path())
 }
 
+pub fn load_latest_game() -> Result<GameState, SaveError> {
+    let Some(path) = latest_save_path() else {
+        return Err(SaveError::NoSaveFound);
+    };
+    load_game_from_path(path)
+}
+
 fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     let json = fs::read_to_string(path).map_err(SaveError::Io)?;
     let mut save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
@@ -115,13 +122,18 @@ const fn save_mode_label(game: &GameState) -> &'static str {
     }
 }
 
+#[must_use]
+pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
+    save_metadata_from_path(slot_path(slot))
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     reason = "save slot depth is displayed as an integral tile depth"
 )]
-pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
-    let path = slot_path(slot);
-    let modified_unix_seconds = fs::metadata(&path)
+fn save_metadata_from_path(path: impl AsRef<Path>) -> Option<SaveSlotMetadata> {
+    let path = path.as_ref();
+    let modified_unix_seconds = fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
@@ -145,6 +157,16 @@ pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
 #[must_use]
 pub fn save_exists() -> bool {
     save_path().exists()
+}
+
+#[must_use]
+pub fn saves_exist() -> bool {
+    save_exists() || (0..SAVE_SLOTS).any(save_slot_exists)
+}
+
+#[must_use]
+pub fn latest_save_summary() -> Option<SaveSlotMetadata> {
+    latest_save_path().and_then(save_metadata_from_path)
 }
 
 #[must_use]
@@ -177,6 +199,17 @@ fn slot_path(slot: usize) -> PathBuf {
     default_state_dir().join(format!("save-slot-{}.json", slot + 1))
 }
 
+fn latest_save_path() -> Option<PathBuf> {
+    std::iter::once(save_path())
+        .chain((0..SAVE_SLOTS).map(slot_path))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
 fn default_state_dir() -> PathBuf {
     if let Ok(path) = env::var("DRILLGAME_STATE_DIR") {
         return PathBuf::from(path);
@@ -198,6 +231,7 @@ pub enum SaveError {
     Io(io::Error),
     Serialize(serde_json::Error),
     UnsupportedVersion(u32),
+    NoSaveFound,
 }
 
 impl fmt::Display for SaveError {
@@ -208,6 +242,7 @@ impl fmt::Display for SaveError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "unsupported save version: {version}")
             }
+            Self::NoSaveFound => formatter.write_str("no save file found"),
         }
     }
 }

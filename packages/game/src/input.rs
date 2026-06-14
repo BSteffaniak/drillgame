@@ -34,10 +34,11 @@ pub struct PlayerInput {
     pub place_support: bool,
     pub place_pump: bool,
     pub place_processor: bool,
+    pub exit_requested: bool,
 }
 
 #[must_use]
-pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
+pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
     let left = raylib.is_key_down(KeyboardKey::KEY_A) || raylib.is_key_down(KeyboardKey::KEY_LEFT);
     let right =
         raylib.is_key_down(KeyboardKey::KEY_D) || raylib.is_key_down(KeyboardKey::KEY_RIGHT);
@@ -83,6 +84,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         place_support: raylib.is_key_pressed(KeyboardKey::KEY_U),
         place_pump: raylib.is_key_pressed(KeyboardKey::KEY_O),
         place_processor: raylib.is_key_pressed(KeyboardKey::KEY_P),
+        exit_requested,
     }
 }
 

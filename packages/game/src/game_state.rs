@@ -18,7 +18,10 @@ use crate::{
     },
     input::PlayerInput,
     player::Player,
-    save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
+    save::{
+        load_game, load_game_slot, load_latest_game, save_exists, save_game, save_game_slot,
+        save_slot_count, saves_exist,
+    },
     surface::surface_building_at_tile,
     terrain::{
         ArtifactKind, DeepStratum, MineResult, MineralKind, StrategicResourceKind, Terrain,
@@ -278,6 +281,7 @@ pub enum ModalScreen {
     SaveSlots,
     LoadSlots,
     ExitConfirm,
+    UnsavedExitConfirm,
     Map,
     Help,
     TownDevelopment,
@@ -293,6 +297,28 @@ pub enum PauseOption {
     Load,
     Options,
     ExitToDesktop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TitleOption {
+    Resume,
+    NewGame,
+    LoadSlot,
+    Options,
+    Exit,
+}
+
+impl TitleOption {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Resume => "Resume Saved Session",
+            Self::NewGame => "New Game",
+            Self::LoadSlot => "Load Slot",
+            Self::Options => "Options",
+            Self::Exit => "Exit",
+        }
+    }
 }
 
 impl PauseOption {
@@ -747,6 +773,8 @@ pub struct GameState {
     pub modal: Option<ModalScreen>,
     pub selected_menu_item: usize,
     #[serde(default)]
+    pub selected_title_item: usize,
+    #[serde(default)]
     pub selected_pause_item: usize,
     pub show_details: bool,
     #[serde(default)]
@@ -903,6 +931,8 @@ pub struct GameState {
     pub sound_cues: Vec<SoundCue>,
     #[serde(default)]
     pub settings_dirty: bool,
+    #[serde(default)]
+    pub save_dirty: bool,
     #[serde(skip)]
     visual_changes: VisualChanges,
 }
@@ -916,6 +946,7 @@ impl GameState {
         saved.modal = None;
         saved.request_exit = false;
         saved.show_details = false;
+        saved.save_dirty = false;
         saved.active_drill = None;
         saved.dust_particles.clear();
         saved.hazard_clouds.clear();
@@ -952,6 +983,7 @@ impl GameState {
             run_mode: RunMode::Title,
             modal: None,
             selected_menu_item: 0,
+            selected_title_item: 0,
             selected_pause_item: 0,
             show_details: false,
             request_exit: false,
@@ -1051,6 +1083,7 @@ impl GameState {
             screen_flash_seconds: 0.0,
             sound_cues: Vec::new(),
             settings_dirty: false,
+            save_dirty: false,
             visual_changes: VisualChanges {
                 full_terrain_refresh: true,
                 changed_tiles: Vec::new(),
@@ -1096,6 +1129,7 @@ impl GameState {
             self.explored_tiles = vec![false; expected_tiles];
         }
         self.request_exit = false;
+        self.save_dirty = false;
         self.visual_changes = VisualChanges {
             full_terrain_refresh: true,
             changed_tiles: Vec::new(),
@@ -1113,6 +1147,16 @@ impl GameState {
         self.sound_cues.clear();
         self.show_details = input.details;
         self.handle_save_load(input);
+        if self.handle_exit_modal(input) {
+            return;
+        }
+        if input.exit_requested {
+            self.request_exit_or_prompt();
+            return;
+        }
+        if self.run_mode != RunMode::Title && input_changes_game(input) {
+            self.save_dirty = true;
+        }
         if input.map {
             self.modal = if self.modal == Some(ModalScreen::Map) {
                 None
@@ -1174,12 +1218,10 @@ impl GameState {
 
         match self.run_mode {
             RunMode::Title => {
-                if input.confirm {
-                    self.run_mode = RunMode::Playing;
-                    self.sound_cues.push(SoundCue::Milestone);
-                    "Welcome to the dig site. Visit the depot for contracts."
-                        .clone_into(&mut self.message);
+                if self.handle_modal(input) {
+                    return;
                 }
+                self.handle_title_menu(input);
                 return;
             }
             RunMode::Paused => {
@@ -1229,6 +1271,136 @@ impl GameState {
         self.update_status_messages();
         self.check_failure();
         self.update_camera(delta_seconds);
+    }
+
+    fn handle_title_menu(&mut self, input: PlayerInput) {
+        let options = Self::title_options();
+        if input.menu_up {
+            self.selected_title_item = self.selected_title_item.saturating_sub(1);
+        }
+        if input.menu_down {
+            self.selected_title_item = (self.selected_title_item + 1).min(options.len() - 1);
+        }
+        self.selected_title_item = self.selected_title_item.min(options.len() - 1);
+
+        if input.cancel {
+            self.request_exit = true;
+            return;
+        }
+        if !input.confirm {
+            return;
+        }
+
+        match options[self.selected_title_item] {
+            TitleOption::Resume => self.load_latest_into_self(),
+            TitleOption::NewGame => self.start_new_game(),
+            TitleOption::LoadSlot => {
+                self.modal = Some(ModalScreen::LoadSlots);
+                self.selected_menu_item = 0;
+            }
+            TitleOption::Options => {
+                self.modal = Some(ModalScreen::Options);
+                self.selected_menu_item = 0;
+            }
+            TitleOption::Exit => self.request_exit = true,
+        }
+    }
+
+    #[must_use]
+    pub fn title_options() -> Vec<TitleOption> {
+        if saves_exist() {
+            vec![
+                TitleOption::Resume,
+                TitleOption::NewGame,
+                TitleOption::LoadSlot,
+                TitleOption::Options,
+                TitleOption::Exit,
+            ]
+        } else {
+            vec![
+                TitleOption::NewGame,
+                TitleOption::Options,
+                TitleOption::Exit,
+            ]
+        }
+    }
+
+    fn start_new_game(&mut self) {
+        let master_volume = self.master_volume;
+        let fullscreen = self.fullscreen;
+        *self = Self::new();
+        self.master_volume = master_volume;
+        self.fullscreen = fullscreen;
+        self.run_mode = RunMode::Playing;
+        self.save_dirty = true;
+        self.sound_cues.push(SoundCue::Milestone);
+        "Welcome to the dig site. Visit the depot for contracts.".clone_into(&mut self.message);
+    }
+
+    fn load_latest_into_self(&mut self) {
+        match load_latest_game() {
+            Ok(mut loaded) => {
+                loaded.master_volume = self.master_volume;
+                loaded.fullscreen = self.fullscreen;
+                loaded.migrate_loaded_state();
+                loaded.mark_full_terrain_refresh();
+                *self = loaded;
+                self.save_dirty = false;
+                "Resumed saved session.".clone_into(&mut self.message);
+            }
+            Err(error) => self.message = format!("Resume failed: {error}"),
+        }
+    }
+
+    const fn request_exit_or_prompt(&mut self) {
+        if self.save_dirty {
+            self.modal = Some(ModalScreen::UnsavedExitConfirm);
+            self.selected_menu_item = 0;
+        } else {
+            self.modal = Some(ModalScreen::ExitConfirm);
+        }
+    }
+
+    fn handle_exit_modal(&mut self, input: PlayerInput) -> bool {
+        match self.modal {
+            Some(ModalScreen::ExitConfirm) => {
+                if input.cancel {
+                    self.modal = None;
+                } else if input.confirm {
+                    self.request_exit = true;
+                }
+                true
+            }
+            Some(ModalScreen::UnsavedExitConfirm) => {
+                if input.cancel {
+                    self.modal = None;
+                    return true;
+                }
+                if input.menu_up {
+                    self.selected_menu_item = self.selected_menu_item.saturating_sub(1);
+                }
+                if input.menu_down {
+                    self.selected_menu_item = (self.selected_menu_item + 1).min(2);
+                }
+                if input.confirm {
+                    match self.selected_menu_item {
+                        0 => match save_game(self) {
+                            Ok(()) => {
+                                self.save_dirty = false;
+                                self.request_exit = true;
+                            }
+                            Err(error) => {
+                                self.message = format!("Save before exit failed: {error}");
+                            }
+                        },
+                        1 => self.request_exit = true,
+                        _ => self.modal = None,
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn reveal_near_player(&mut self) {
@@ -1577,14 +1749,10 @@ impl GameState {
     }
 
     fn handle_pause_menu(&mut self, input: PlayerInput) {
-        if self.modal == Some(ModalScreen::ExitConfirm) {
-            if input.cancel {
-                self.modal = None;
-                return;
-            }
-            if input.confirm {
-                self.request_exit = true;
-            }
+        if self.modal == Some(ModalScreen::ExitConfirm)
+            || self.modal == Some(ModalScreen::UnsavedExitConfirm)
+        {
+            self.handle_exit_modal(input);
             return;
         }
 
@@ -1619,14 +1787,17 @@ impl GameState {
                 self.modal = Some(ModalScreen::Options);
                 self.selected_menu_item = 0;
             }
-            PauseOption::ExitToDesktop => self.modal = Some(ModalScreen::ExitConfirm),
+            PauseOption::ExitToDesktop => self.request_exit_or_prompt(),
         }
     }
 
     fn handle_save_load(&mut self, input: PlayerInput) {
         if input.save {
             match save_game(self) {
-                Ok(()) => "Game saved to drillgame-save.json.".clone_into(&mut self.message),
+                Ok(()) => {
+                    self.save_dirty = false;
+                    "Game saved to drillgame-save.json.".clone_into(&mut self.message);
+                }
                 Err(error) => self.message = format!("Save failed: {error}"),
             }
         }
@@ -1648,6 +1819,7 @@ impl GameState {
                 loaded.migrate_loaded_state();
                 loaded.mark_full_terrain_refresh();
                 *self = loaded;
+                self.save_dirty = false;
             }
             Err(error) => self.message = format!("Load failed: {error}"),
         }
@@ -1960,6 +2132,7 @@ impl GameState {
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
                 ModalScreen::ExitConfirm
+                | ModalScreen::UnsavedExitConfirm
                 | ModalScreen::Map
                 | ModalScreen::Help
                 | ModalScreen::ResearchLog => {}
@@ -1994,7 +2167,10 @@ impl GameState {
 
     fn save_slot(&mut self, slot: usize) {
         match save_game_slot(self, slot) {
-            Ok(()) => self.message = format!("Saved to slot {}.", slot + 1),
+            Ok(()) => {
+                self.save_dirty = false;
+                self.message = format!("Saved to slot {}.", slot + 1);
+            }
             Err(error) => self.message = format!("Save slot failed: {error}"),
         }
         self.modal = Some(ModalScreen::SaveSlots);
@@ -2008,6 +2184,7 @@ impl GameState {
                 loaded.migrate_loaded_state();
                 loaded.mark_full_terrain_refresh();
                 *self = loaded;
+                self.save_dirty = false;
                 self.message = format!("Loaded slot {}.", slot + 1);
             }
             Err(error) => self.message = format!("Load slot failed: {error}"),
@@ -5090,6 +5267,22 @@ fn point_to_tile(x: f32, y: f32) -> TilePosition {
 
 fn facing_direction(horizontal: f32) -> i32 {
     if horizontal < 0.0 { -1 } else { 1 }
+}
+
+fn input_changes_game(input: PlayerInput) -> bool {
+    input.horizontal.abs() > f32::EPSILON
+        || input.thrust
+        || input.drill_down
+        || input.interact
+        || input.confirm
+        || input.bomb
+        || input.scan
+        || input.place_relay
+        || input.place_drone
+        || input.place_lift
+        || input.place_support
+        || input.place_pump
+        || input.place_processor
 }
 #[cfg(test)]
 mod tests {
