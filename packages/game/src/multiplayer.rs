@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -295,12 +295,93 @@ impl CommandSequenceTracker {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CommandConflict {
+    SameTickMining,
+    SimultaneousEconomyAction,
+}
+
+#[must_use]
+pub fn command_conflicts(commands: &[SequencedPlayerCommand]) -> BTreeSet<CommandConflict> {
+    let mut mining_by_tick = BTreeMap::<SimulationTick, usize>::new();
+    let mut economy_by_tick = BTreeMap::<SimulationTick, usize>::new();
+
+    for command in commands {
+        match command.command {
+            PlayerCommand::Movement {
+                drill_down: true, ..
+            } => *mining_by_tick.entry(command.target_tick).or_default() += 1,
+            PlayerCommand::BuyUpgrade { .. }
+            | PlayerCommand::Refuel
+            | PlayerCommand::Repair
+            | PlayerCommand::SellCargo => {
+                *economy_by_tick.entry(command.target_tick).or_default() += 1;
+            }
+            PlayerCommand::Movement { .. }
+            | PlayerCommand::Interact
+            | PlayerCommand::Cancel
+            | PlayerCommand::Confirm
+            | PlayerCommand::UseScanner
+            | PlayerCommand::PlaceBomb
+            | PlayerCommand::PlaceInfrastructure { .. }
+            | PlayerCommand::SelectUpgrade { .. }
+            | PlayerCommand::Rescue => {}
+        }
+    }
+
+    let mut conflicts = BTreeSet::new();
+    if mining_by_tick.values().any(|count| *count > 1) {
+        conflicts.insert(CommandConflict::SameTickMining);
+    }
+    if economy_by_tick.values().any(|count| *count > 1) {
+        conflicts.insert(CommandConflict::SimultaneousEconomyAction);
+    }
+    conflicts
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerrainRecoveryDecision {
+    UpToDate,
+    RequestChunk,
+}
+
+#[must_use]
+pub const fn terrain_recovery_decision(
+    known_revision: u64,
+    authoritative_revision: u64,
+) -> TerrainRecoveryDecision {
+    if known_revision == authoritative_revision {
+        TerrainRecoveryDecision::UpToDate
+    } else {
+        TerrainRecoveryDecision::RequestChunk
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionContinuityDecision {
+    ReservePlayerForReconnect,
+    AssignNewPlayer,
+}
+
+#[must_use]
+pub const fn session_continuity_decision(
+    known_token: Option<SessionToken>,
+    reconnect_token: Option<SessionToken>,
+) -> SessionContinuityDecision {
+    match (known_token, reconnect_token) {
+        (Some(known), Some(reconnect)) if known.get() == reconnect.get() => {
+            SessionContinuityDecision::ReservePlayerForReconnect
+        }
+        _ => SessionContinuityDecision::AssignNewPlayer,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
         PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
-        SimulationTick,
+        SimulationTick, command_conflicts, session_continuity_decision, terrain_recovery_decision,
     };
 
     #[test]
@@ -374,6 +455,75 @@ mod tests {
         assert_eq!(
             tracker.latest_sequence(client_id, player_id),
             Some(InputSequence::new(2))
+        );
+    }
+
+    #[test]
+    fn command_conflict_detector_flags_edge_cases() {
+        let commands = vec![
+            SequencedPlayerCommand {
+                player_id: PlayerId::new(1),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(2),
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            },
+            SequencedPlayerCommand {
+                player_id: PlayerId::new(2),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(2),
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            },
+            SequencedPlayerCommand {
+                player_id: PlayerId::new(1),
+                sequence: InputSequence::new(2),
+                target_tick: SimulationTick::new(3),
+                command: PlayerCommand::Refuel,
+            },
+            SequencedPlayerCommand {
+                player_id: PlayerId::new(2),
+                sequence: InputSequence::new(2),
+                target_tick: SimulationTick::new(3),
+                command: PlayerCommand::Repair,
+            },
+        ];
+
+        let conflicts = command_conflicts(&commands);
+
+        assert!(conflicts.contains(&super::CommandConflict::SameTickMining));
+        assert!(conflicts.contains(&super::CommandConflict::SimultaneousEconomyAction));
+    }
+
+    #[test]
+    fn terrain_recovery_detects_revision_mismatch() {
+        assert_eq!(
+            terrain_recovery_decision(4, 4),
+            super::TerrainRecoveryDecision::UpToDate
+        );
+        assert_eq!(
+            terrain_recovery_decision(3, 4),
+            super::TerrainRecoveryDecision::RequestChunk
+        );
+    }
+
+    #[test]
+    fn session_continuity_uses_matching_reconnect_token() {
+        let token = SessionToken::new(123);
+
+        assert_eq!(
+            session_continuity_decision(Some(token), Some(token)),
+            super::SessionContinuityDecision::ReservePlayerForReconnect
+        );
+        assert_eq!(
+            session_continuity_decision(Some(token), Some(SessionToken::new(999))),
+            super::SessionContinuityDecision::AssignNewPlayer
         );
     }
 }
