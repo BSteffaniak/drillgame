@@ -209,6 +209,17 @@ impl Terrain {
         self.tile(position).map(|tile| tile_hardness(tile.kind))
     }
 
+    pub fn set_kind(&mut self, position: TilePosition, kind: TileKind) -> bool {
+        let Some(index) = self.index(position) else {
+            return false;
+        };
+        self.tiles[index] = Tile {
+            kind,
+            durability: tile_durability(kind),
+        };
+        true
+    }
+
     pub fn chip(&mut self, position: TilePosition) -> MineResult {
         let Some(index) = self.index(position) else {
             return MineResult::Blocked;

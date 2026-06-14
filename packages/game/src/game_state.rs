@@ -159,6 +159,14 @@ pub struct ScanMarker {
     pub kind: TileKind,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SideContractKind {
+    #[default]
+    Cargo,
+    DepthSurvey,
+    HazardScan,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ServiceAnimation {
     Fuel,
@@ -304,6 +312,8 @@ pub struct GameState {
     #[serde(default)]
     pub side_contract_active: bool,
     #[serde(default)]
+    pub side_contract_kind: SideContractKind,
+    #[serde(default)]
     pub side_contract_target: Option<TileKind>,
     #[serde(default)]
     pub side_contract_required: u32,
@@ -408,6 +418,7 @@ impl GameState {
             town_event: "Normal market conditions.".to_owned(),
             scan_markers: Vec::new(),
             side_contract_active: false,
+            side_contract_kind: SideContractKind::Cargo,
             side_contract_target: None,
             side_contract_required: 0,
             falling_boulders: Vec::new(),
@@ -715,10 +726,23 @@ impl GameState {
         match load_game() {
             Ok(mut loaded) => {
                 "Game loaded.".clone_into(&mut loaded.message);
+                loaded.migrate_loaded_state();
                 loaded.mark_full_terrain_refresh();
                 *self = loaded;
             }
             Err(error) => self.message = format!("Load failed: {error}"),
+        }
+    }
+
+    fn migrate_loaded_state(&mut self) {
+        if self.save_version < current_save_version() {
+            self.contracts.migrate_after_load();
+            self.scan_markers
+                .retain(|marker| scanner_can_mark(marker.kind, self.player.scanner_level));
+            if self.side_contract_active && self.side_contract_required == 0 {
+                self.side_contract_active = false;
+            }
+            self.save_version = current_save_version();
         }
     }
 
@@ -905,6 +929,7 @@ impl GameState {
             Ok(mut loaded) => {
                 loaded.master_volume = self.master_volume;
                 loaded.fullscreen = self.fullscreen;
+                loaded.migrate_loaded_state();
                 loaded.mark_full_terrain_refresh();
                 *self = loaded;
                 self.message = format!("Loaded slot {}.", slot + 1);
@@ -1023,17 +1048,36 @@ impl GameState {
 
     fn start_side_contract(&mut self) {
         self.side_contract_active = true;
-        self.side_contract_target = Some(match self.town_event_day % 3 {
-            0 => TileKind::Ore(MineralKind::Gold),
-            1 => TileKind::Ore(MineralKind::Platinum),
-            _ => TileKind::Artifact(ArtifactKind::Fossil),
+        self.side_contract_kind = match self.town_event_day % 3 {
+            0 => SideContractKind::Cargo,
+            1 => SideContractKind::DepthSurvey,
+            _ => SideContractKind::HazardScan,
+        };
+        self.side_contract_target = Some(match self.side_contract_kind {
+            SideContractKind::Cargo => TileKind::Ore(MineralKind::Gold),
+            SideContractKind::DepthSurvey => TileKind::Ore(MineralKind::Platinum),
+            SideContractKind::HazardScan => TileKind::Gas,
         });
-        self.side_contract_required = 2;
-        self.message = format!(
-            "Side contract posted: deliver {} x{} for bonus pay.",
-            self.side_contract_target.map_or("sample", TileKind::name),
-            self.side_contract_required
-        );
+        self.side_contract_required = match self.side_contract_kind {
+            SideContractKind::Cargo => 2,
+            SideContractKind::DepthSurvey => 65,
+            SideContractKind::HazardScan => 3,
+        };
+        self.message = match self.side_contract_kind {
+            SideContractKind::Cargo => format!(
+                "Side contract posted: deliver {} x{} for bonus pay.",
+                self.side_contract_target.map_or("sample", TileKind::name),
+                self.side_contract_required
+            ),
+            SideContractKind::DepthSurvey => format!(
+                "Side contract posted: reach {}m and report to depot.",
+                self.side_contract_required
+            ),
+            SideContractKind::HazardScan => format!(
+                "Side contract posted: scan {} hazards and report to depot.",
+                self.side_contract_required
+            ),
+        };
     }
 
     fn confirm_finance(&mut self) {
@@ -1100,31 +1144,55 @@ impl GameState {
         let Some(target) = self.side_contract_target else {
             return;
         };
-        let satisfied = match target {
-            TileKind::Ore(mineral) => {
-                self.player.cargo.get(&mineral).copied().unwrap_or(0) >= self.side_contract_required
+        let satisfied = match self.side_contract_kind {
+            SideContractKind::Cargo => match target {
+                TileKind::Ore(mineral) => {
+                    self.player.cargo.get(&mineral).copied().unwrap_or(0)
+                        >= self.side_contract_required
+                }
+                TileKind::Artifact(artifact) => {
+                    self.player.artifacts.get(&artifact).copied().unwrap_or(0)
+                        >= self.side_contract_required
+                }
+                _ => false,
+            },
+            SideContractKind::DepthSurvey => {
+                u32::try_from(self.deepest_tile_reached).unwrap_or(0) >= self.side_contract_required
             }
-            TileKind::Artifact(artifact) => {
-                self.player.artifacts.get(&artifact).copied().unwrap_or(0)
-                    >= self.side_contract_required
+            SideContractKind::HazardScan => {
+                self.scan_markers
+                    .iter()
+                    .filter(|marker| {
+                        matches!(
+                            marker.kind,
+                            TileKind::Gas
+                                | TileKind::Lava
+                                | TileKind::MagmaVent
+                                | TileKind::ExplosivePocket
+                                | TileKind::PressurePocket
+                        )
+                    })
+                    .count()
+                    >= usize::try_from(self.side_contract_required).unwrap_or(usize::MAX)
             }
-            _ => false,
         };
         if !satisfied {
             return;
         }
-        match target {
-            TileKind::Ore(mineral) => consume_side_count(
-                &mut self.player.cargo,
-                &mineral,
-                self.side_contract_required,
-            ),
-            TileKind::Artifact(artifact) => consume_side_count(
-                &mut self.player.artifacts,
-                &artifact,
-                self.side_contract_required,
-            ),
-            _ => {}
+        if self.side_contract_kind == SideContractKind::Cargo {
+            match target {
+                TileKind::Ore(mineral) => consume_side_count(
+                    &mut self.player.cargo,
+                    &mineral,
+                    self.side_contract_required,
+                ),
+                TileKind::Artifact(artifact) => consume_side_count(
+                    &mut self.player.artifacts,
+                    &artifact,
+                    self.side_contract_required,
+                ),
+                _ => {}
+            }
         }
         let reward = 420 + self.side_contract_required * 80;
         self.player.credits += reward;
@@ -1563,6 +1631,7 @@ impl GameState {
     }
 
     fn collect_mined_tile(&mut self, mined: TileKind, target: TilePosition) {
+        self.scan_markers.retain(|marker| marker.position != target);
         self.player.fuel -= DRILL_FUEL_COST;
         self.sound_cues.push(SoundCue::Drill);
         self.spawn_dust();
@@ -1910,6 +1979,9 @@ impl GameState {
                 6.0 + (120.0 - self.escape_sequence_seconds).max(0.0) * 0.05,
             );
         }
+        if self.update_ticks.is_multiple_of(90) {
+            self.seal_escape_tunnel();
+        }
         if self.update_ticks.is_multiple_of(120) {
             "CORE CASCADE: tunnels are sealing. Climb now!".clone_into(&mut self.message);
         }
@@ -1918,6 +1990,22 @@ impl GameState {
             self.game_over = true;
             "The mine collapsed around the Star Core. Emergency rescue required."
                 .clone_into(&mut self.message);
+        }
+    }
+
+    fn seal_escape_tunnel(&mut self) {
+        let px = (self.player.x / TILE_SIZE).floor() as i32;
+        let py = (self.player.y / TILE_SIZE).floor() as i32 + 5;
+        for dx in -2..=2 {
+            let position = TilePosition { x: px + dx, y: py };
+            if position.y <= 7 || self.terrain.is_solid_at(position) {
+                continue;
+            }
+            if self.terrain.set_kind(position, TileKind::Stone) {
+                self.mark_tile_visual_changed(position);
+                self.scan_markers
+                    .retain(|marker| marker.position != position);
+            }
         }
     }
 
