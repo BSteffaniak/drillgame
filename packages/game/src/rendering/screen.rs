@@ -901,7 +901,7 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Expedition Board", 330, 150, 30, Color::GOLD);
     draw.draw_text(
-        "Enter/E accepts an offer | Complete expeditions at Depot contract desk",
+        "Enter/E accepts offer or abandons selected active expedition | Depot completes",
         330,
         184,
         18,
@@ -931,17 +931,28 @@ fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             color,
         );
     }
-    draw.draw_text("Active", 330, 390, 22, Color::GREEN);
+    draw.draw_text(
+        "Active (select + Enter/E to abandon)",
+        330,
+        390,
+        22,
+        Color::GREEN,
+    );
     if game.active_expeditions.is_empty() {
         draw.draw_text("No active expeditions.", 350, 430, 20, Color::GRAY);
     }
     for (index, expedition) in game.active_expeditions.iter().enumerate() {
+        let active_menu_index = game.expedition_offers.len() + index;
         draw.draw_text(
             &game.expedition_status_line(*expedition),
             350,
             430 + i32::try_from(index).unwrap_or(i32::MAX) * 28,
             19,
-            Color::RAYWHITE,
+            if active_menu_index == game.selected_menu_item {
+                Color::YELLOW
+            } else {
+                Color::RAYWHITE
+            },
         );
     }
 }

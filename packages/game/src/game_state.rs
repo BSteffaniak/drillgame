@@ -1088,7 +1088,11 @@ impl GameState {
                     }
                 }
                 ModalScreen::TownDevelopment => TownBuilding::ALL.len() - 1,
-                ModalScreen::ExpeditionBoard => self.expedition_offers.len().saturating_sub(1),
+                ModalScreen::ExpeditionBoard => self
+                    .expedition_offers
+                    .len()
+                    .saturating_add(self.active_expeditions.len())
+                    .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -1343,6 +1347,10 @@ impl GameState {
         if self.expedition_offers.is_empty() {
             self.refresh_expedition_offers();
         }
+        if self.selected_menu_item >= self.expedition_offers.len() {
+            self.abandon_selected_expedition();
+            return;
+        }
         if self.active_expeditions.len() >= 3 {
             "Expedition board limit reached: complete one before accepting more."
                 .clone_into(&mut self.message);
@@ -1358,6 +1366,20 @@ impl GameState {
         self.active_expeditions.push(expedition);
         self.expedition_offers.remove(index);
         self.message = format!("Accepted expedition: {}.", expedition.title());
+        self.sound_cues.push(SoundCue::Ui);
+    }
+
+    fn abandon_selected_expedition(&mut self) {
+        let active_index = self
+            .selected_menu_item
+            .saturating_sub(self.expedition_offers.len());
+        let Some(expedition) = self.active_expeditions.get(active_index).copied() else {
+            "Select an expedition offer to accept or an active expedition to abandon."
+                .clone_into(&mut self.message);
+            return;
+        };
+        self.active_expeditions.remove(active_index);
+        self.message = format!("Abandoned expedition: {}.", expedition.title());
         self.sound_cues.push(SoundCue::Ui);
     }
 
