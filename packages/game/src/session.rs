@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{
     game_state::GameState,
     input::PlayerInput,
@@ -5,8 +7,39 @@ use crate::{
         ClientId, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId,
         SequencedPlayerCommand, SimulationTick,
     },
+    player::Player,
     save::SettingsFile,
 };
+
+/// Compatibility world wrapper used to introduce explicit player identity before the legacy
+/// monolithic `GameState` is fully split into authoritative world state and local client state.
+#[derive(Clone, Debug)]
+pub struct WorldState {
+    players: BTreeMap<PlayerId, Player>,
+}
+
+impl WorldState {
+    #[must_use]
+    pub fn from_legacy_game(game: &GameState) -> Self {
+        Self {
+            players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
+        }
+    }
+
+    #[must_use]
+    pub fn player(&self, player_id: PlayerId) -> Option<&Player> {
+        self.players.get(&player_id)
+    }
+
+    #[must_use]
+    pub fn player_count(&self) -> usize {
+        self.players.len()
+    }
+
+    fn sync_from_legacy_game(&mut self, game: &GameState) {
+        self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
+    }
+}
 
 /// Local client state that is intentionally separate from authoritative gameplay state.
 #[derive(Clone, Debug)]
@@ -55,6 +88,7 @@ impl Default for ClientState {
 #[derive(Clone, Debug)]
 pub struct GameSession {
     game: GameState,
+    world: WorldState,
     local_client: ClientState,
     current_tick: SimulationTick,
 }
@@ -62,8 +96,11 @@ pub struct GameSession {
 impl GameSession {
     #[must_use]
     pub fn new() -> Self {
+        let game = GameState::new();
+        let world = WorldState::from_legacy_game(&game);
         Self {
-            game: GameState::new(),
+            game,
+            world,
             local_client: ClientState::default(),
             current_tick: SimulationTick::default(),
         }
@@ -72,6 +109,11 @@ impl GameSession {
     #[must_use]
     pub const fn game(&self) -> &GameState {
         &self.game
+    }
+
+    #[must_use]
+    pub const fn world(&self) -> &WorldState {
+        &self.world
     }
 
     pub const fn game_mut(&mut self) -> &mut GameState {
@@ -159,6 +201,7 @@ impl GameSession {
         self.sync_client_settings_to_legacy_game();
         self.game.update(input, delta_seconds);
         self.sync_client_settings_from_legacy_game();
+        self.world.sync_from_legacy_game(&self.game);
     }
 }
 
@@ -180,6 +223,14 @@ mod tests {
 
         assert_eq!(session.local_client().client_id, LOCAL_CLIENT_ID);
         assert_eq!(session.local_client().controlled_player_id, LOCAL_PLAYER_ID);
+    }
+
+    #[test]
+    fn session_world_tracks_legacy_local_player() {
+        let session = GameSession::new();
+
+        assert_eq!(session.world().player_count(), 1);
+        assert!(session.world().player(LOCAL_PLAYER_ID).is_some());
     }
 
     #[test]
