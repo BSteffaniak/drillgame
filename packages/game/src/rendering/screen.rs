@@ -829,6 +829,7 @@ fn draw_explosives(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         &[
             "3 timed charges: 55 cr".to_owned(),
             "7 timed charges: 120 cr".to_owned(),
+            "4 mining rockets: 180 cr".to_owned(),
             "Ask Nix for one risky freebie".to_owned(),
         ],
     );

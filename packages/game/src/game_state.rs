@@ -1888,8 +1888,8 @@ impl GameState {
                 ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::Options
-                | ModalScreen::Bank
-                | ModalScreen::Explosives => 2,
+                | ModalScreen::Bank => 2,
+                ModalScreen::Explosives => 3,
                 ModalScreen::Salvage => 5,
                 ModalScreen::Headquarters => {
                     if self.deep_claim_status == DeepClaimStatus::Unlocked {
@@ -2368,6 +2368,7 @@ impl GameState {
         match self.selected_menu_item {
             0 => self.buy_explosive_shack_pack(3, 55),
             1 => self.buy_explosive_shack_pack(7, 120),
+            2 => self.buy_mining_rocket_pack(),
             _ => {
                 self.player.bombs = self.player.bombs.saturating_add(1);
                 "Nix comped one test charge. Try not to test it indoors."
@@ -2505,6 +2506,21 @@ impl GameState {
         self.player.bombs += delivered;
         self.sound_cues.push(SoundCue::Upgrade);
         self.message = format!("Nix sold you {delivered} timed charges. Don't hug them.");
+    }
+
+    fn buy_mining_rocket_pack(&mut self) {
+        if self.town_development.explosives_shack_level < 4 {
+            "Mining rockets unlock at Explosives Shack level 4.".clone_into(&mut self.message);
+            return;
+        }
+        if self.player.credits < 180 {
+            "Mining rocket bundle costs 180 credits.".clone_into(&mut self.message);
+            return;
+        }
+        self.player.credits -= 180;
+        self.player.bombs = self.player.bombs.saturating_add(4);
+        self.sound_cues.push(SoundCue::Upgrade);
+        "Nix packed 4 mining rockets as high-yield shaped charges.".clone_into(&mut self.message);
     }
 
     fn salvage_recover_lost_cargo(&mut self) {
@@ -3017,14 +3033,19 @@ impl GameState {
             return;
         }
         self.player.bombs -= 1;
+        let remote_timer = if self.town_development.explosives_shack_level >= 3 {
+            0.8
+        } else {
+            2.4
+        };
         self.placed_bombs.push(PlacedBomb {
             x: self.player.x,
             y: self.player.y + TILE_SIZE * 0.4,
-            timer_seconds: 2.4,
+            timer_seconds: remote_timer,
         });
         self.sound_cues.push(SoundCue::Ui);
         self.message = format!(
-            "Bomb armed: 2.4 seconds. {} bombs left. Clear out!",
+            "Bomb armed: {remote_timer:.1} seconds. {} bombs left. Clear out!",
             self.player.bombs
         );
     }
@@ -3544,7 +3565,12 @@ impl GameState {
         }
         self.placed_bombs.retain(|bomb| bomb.timer_seconds > 0.0);
         for center in detonations {
-            self.detonate_bomb(center, 2);
+            let radius = if self.town_development.explosives_shack_level >= 4 {
+                3
+            } else {
+                2
+            };
+            self.detonate_bomb(center, radius);
         }
     }
 
@@ -3564,6 +3590,9 @@ impl GameState {
         .max(0.0);
         if distance <= radius as f32 + 1.0 {
             self.player.hull = (self.player.hull - 22.0).max(0.0);
+        }
+        if self.town_development.explosives_shack_level >= 5 {
+            return;
         }
         self.chain_react_near(center, radius + 2);
         self.message =
