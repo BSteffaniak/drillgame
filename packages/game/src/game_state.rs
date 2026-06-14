@@ -107,6 +107,7 @@ pub enum ModalScreen {
     Map,
     Help,
     TownDevelopment,
+    ExpeditionBoard,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,6 +175,36 @@ pub enum SideContractKind {
     DepthSurvey,
     HazardScan,
     Rush,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ExpeditionObjectiveKind {
+    #[default]
+    ReachDepth,
+    DeliverCargo,
+    ScanHazards,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct Expedition {
+    pub kind: ExpeditionObjectiveKind,
+    pub target: TileKind,
+    pub required: u32,
+    pub reward: u32,
+    pub expires_day: u32,
+}
+
+impl Expedition {
+    #[must_use]
+    pub fn title(self) -> String {
+        match self.kind {
+            ExpeditionObjectiveKind::ReachDepth => format!("Survey {}m claim", self.required),
+            ExpeditionObjectiveKind::DeliverCargo => {
+                format!("Deliver {} x{}", self.target.name(), self.required)
+            }
+            ExpeditionObjectiveKind::ScanHazards => format!("Map {} hazards", self.required),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -352,6 +383,10 @@ pub struct GameState {
     #[serde(default)]
     pub active_side_contracts: Vec<SideContract>,
     #[serde(default)]
+    pub expedition_offers: Vec<Expedition>,
+    #[serde(default)]
+    pub active_expeditions: Vec<Expedition>,
+    #[serde(default)]
     pub falling_boulders: Vec<FallingBoulder>,
     #[serde(default)]
     pub spark_particles: Vec<SparkParticle>,
@@ -464,6 +499,8 @@ impl GameState {
             side_contract_target: None,
             side_contract_required: 0,
             active_side_contracts: Vec::new(),
+            expedition_offers: Vec::new(),
+            active_expeditions: Vec::new(),
             falling_boulders: Vec::new(),
             spark_particles: Vec::new(),
             camera_shake_seconds: 0.0,
@@ -928,12 +965,13 @@ impl GameState {
                 | ModalScreen::Salvage => 2,
                 ModalScreen::Headquarters => {
                     if self.deep_claim_status == DeepClaimStatus::Unlocked {
-                        3
+                        4
                     } else {
                         2
                     }
                 }
                 ModalScreen::TownDevelopment => TownBuilding::ALL.len() - 1,
+                ModalScreen::ExpeditionBoard => self.expedition_offers.len().saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
                 _ => 0,
             };
@@ -969,6 +1007,7 @@ impl GameState {
                 ModalScreen::Explosives => self.confirm_explosives_menu(),
                 ModalScreen::Salvage => self.confirm_salvage_menu(),
                 ModalScreen::TownDevelopment => self.confirm_town_development(),
+                ModalScreen::ExpeditionBoard => self.accept_expedition_offer(),
                 ModalScreen::Options => self.confirm_options(),
                 ModalScreen::SaveSlots => self.save_slot(self.selected_menu_item),
                 ModalScreen::LoadSlots => self.load_slot(self.selected_menu_item),
@@ -1084,8 +1123,13 @@ impl GameState {
                 self.sound_cues.push(SoundCue::Milestone);
             }
             2 => self.confirm_finance(),
-            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+            3 if self.deep_claim_status == DeepClaimStatus::Unlocked => {
                 self.modal = Some(ModalScreen::TownDevelopment);
+                self.selected_menu_item = 0;
+            }
+            _ if self.deep_claim_status == DeepClaimStatus::Unlocked => {
+                self.refresh_expedition_offers();
+                self.modal = Some(ModalScreen::ExpeditionBoard);
                 self.selected_menu_item = 0;
             }
             _ => self.confirm_finance(),
@@ -1108,6 +1152,93 @@ impl GameState {
             self.town_development.level(building)
         );
         self.sound_cues.push(SoundCue::Upgrade);
+    }
+
+    fn refresh_expedition_offers(&mut self) {
+        if self.deep_claim_status != DeepClaimStatus::Unlocked {
+            self.expedition_offers.clear();
+            return;
+        }
+        if !self.expedition_offers.is_empty() {
+            return;
+        }
+        let day = self.town_event_day;
+        self.expedition_offers = vec![
+            Expedition {
+                kind: ExpeditionObjectiveKind::ReachDepth,
+                target: TileKind::Stone,
+                required: (self.deepest_tile_reached.max(80) as u32 + 15).min(140),
+                reward: 320 + day * 12,
+                expires_day: day + 4,
+            },
+            Expedition {
+                kind: ExpeditionObjectiveKind::DeliverCargo,
+                target: TileKind::Ore(MineralKind::Platinum),
+                required: 2,
+                reward: 420 + day * 14,
+                expires_day: day + 3,
+            },
+            Expedition {
+                kind: ExpeditionObjectiveKind::ScanHazards,
+                target: TileKind::Gas,
+                required: 4,
+                reward: 360 + day * 10,
+                expires_day: day + 3,
+            },
+        ];
+    }
+
+    fn accept_expedition_offer(&mut self) {
+        if self.expedition_offers.is_empty() {
+            self.refresh_expedition_offers();
+        }
+        if self.active_expeditions.len() >= 3 {
+            "Expedition board limit reached: complete one before accepting more."
+                .clone_into(&mut self.message);
+            return;
+        }
+        let index = self
+            .selected_menu_item
+            .min(self.expedition_offers.len().saturating_sub(1));
+        let Some(expedition) = self.expedition_offers.get(index).copied() else {
+            "No expedition offer is available.".clone_into(&mut self.message);
+            return;
+        };
+        self.active_expeditions.push(expedition);
+        self.expedition_offers.remove(index);
+        self.message = format!("Accepted expedition: {}.", expedition.title());
+        self.sound_cues.push(SoundCue::Ui);
+    }
+
+    fn try_complete_expeditions(&mut self) {
+        let mut reward = 0;
+        let mut completed = 0;
+        let mut completed_expeditions = Vec::new();
+        let snapshot = self.clone();
+        self.active_expeditions.retain(|expedition| {
+            if expedition.expires_day < snapshot.town_event_day {
+                return false;
+            }
+            if expedition_satisfied(*expedition, &snapshot) {
+                reward += expedition.reward;
+                completed += 1;
+                completed_expeditions.push(*expedition);
+                false
+            } else {
+                true
+            }
+        });
+        for expedition in completed_expeditions {
+            consume_expedition_delivery(expedition, &mut self.player);
+        }
+        if reward > 0 {
+            self.player.credits = self.player.credits.saturating_add(reward);
+            self.total_earnings = self.total_earnings.saturating_add(reward);
+            self.town_development.reputation =
+                self.town_development.reputation.saturating_add(completed);
+            self.message = format!("Completed {completed} expedition(s) for {reward} credits.");
+            self.sound_cues.push(SoundCue::Milestone);
+        }
     }
 
     fn confirm_bank_menu(&mut self) {
@@ -1377,6 +1508,7 @@ impl GameState {
     fn confirm_depot(&mut self) {
         match self.selected_menu_item {
             0 => {
+                self.try_complete_expeditions();
                 self.try_complete_side_contract();
                 self.confirm_complete_contract();
             }
@@ -2537,6 +2669,51 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
             },
         )
     })
+}
+
+fn consume_expedition_delivery(expedition: Expedition, player: &mut Player) {
+    if expedition.kind != ExpeditionObjectiveKind::DeliverCargo {
+        return;
+    }
+    match expedition.target {
+        TileKind::Ore(mineral) => {
+            if let Some(count) = player.cargo.get_mut(&mineral) {
+                *count = count.saturating_sub(expedition.required);
+            }
+            player.cargo.retain(|_, count| *count > 0);
+        }
+        TileKind::Artifact(artifact) => {
+            if let Some(count) = player.artifacts.get_mut(&artifact) {
+                *count = count.saturating_sub(expedition.required);
+            }
+            player.artifacts.retain(|_, count| *count > 0);
+        }
+        _ => {}
+    }
+}
+
+fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
+    match expedition.kind {
+        ExpeditionObjectiveKind::ReachDepth => {
+            game.deepest_tile_reached as u32 >= expedition.required
+        }
+        ExpeditionObjectiveKind::DeliverCargo => match expedition.target {
+            TileKind::Ore(mineral) => {
+                game.player.cargo.get(&mineral).copied().unwrap_or(0) >= expedition.required
+            }
+            TileKind::Artifact(artifact) => {
+                game.player.artifacts.get(&artifact).copied().unwrap_or(0) >= expedition.required
+            }
+            _ => false,
+        },
+        ExpeditionObjectiveKind::ScanHazards => {
+            game.scan_markers
+                .iter()
+                .filter(|marker| marker.kind == expedition.target)
+                .count()
+                >= expedition.required as usize
+        }
+    }
 }
 
 fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {

@@ -584,6 +584,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::Map => draw_large_map(draw, game),
         ModalScreen::Help => draw_help(draw),
         ModalScreen::TownDevelopment => draw_town_development(draw, game),
+        ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -762,6 +763,7 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     ];
     if game.deep_claim_status == DeepClaimStatus::Unlocked {
         options.push("Deep Claim town development".to_owned());
+        options.push("Expedition board".to_owned());
     }
     for (index, option) in options.iter().enumerate() {
         draw.draw_text(
@@ -783,6 +785,59 @@ fn draw_headquarters(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+}
+
+fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Expedition Board", 330, 150, 30, Color::GOLD);
+    draw.draw_text(
+        "Enter/E accepts an offer | Complete expeditions at Depot contract desk",
+        330,
+        184,
+        18,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text("Offers", 330, 225, 22, Color::SKYBLUE);
+    if game.expedition_offers.is_empty() {
+        draw.draw_text(
+            "No offers posted. Reopen board to refresh.",
+            350,
+            265,
+            20,
+            Color::GRAY,
+        );
+    }
+    for (index, expedition) in game.expedition_offers.iter().enumerate() {
+        let color = if index == game.selected_menu_item {
+            Color::YELLOW
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(
+            &format!(
+                "{} | reward {} cr | expires day {}",
+                expedition.title(),
+                expedition.reward,
+                expedition.expires_day
+            ),
+            350,
+            265 + i32::try_from(index).unwrap_or(i32::MAX) * 34,
+            20,
+            color,
+        );
+    }
+    draw.draw_text("Active", 330, 390, 22, Color::GREEN);
+    if game.active_expeditions.is_empty() {
+        draw.draw_text("No active expeditions.", 350, 430, 20, Color::GRAY);
+    }
+    for (index, expedition) in game.active_expeditions.iter().enumerate() {
+        draw.draw_text(
+            &format!("{} | {} cr", expedition.title(), expedition.reward),
+            350,
+            430 + i32::try_from(index).unwrap_or(i32::MAX) * 28,
+            19,
+            Color::RAYWHITE,
+        );
+    }
 }
 
 fn draw_town_development(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
