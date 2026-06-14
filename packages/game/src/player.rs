@@ -50,6 +50,8 @@ pub struct Player {
     pub survey_drone_kits: u32,
     #[serde(default)]
     pub cargo_lift_kits: u32,
+    #[serde(default)]
+    pub tunnel_support_kits: u32,
 }
 
 #[allow(
@@ -88,6 +90,7 @@ impl Player {
             signal_relay_kits: 0,
             survey_drone_kits: 0,
             cargo_lift_kits: 0,
+            tunnel_support_kits: 0,
         }
     }
 

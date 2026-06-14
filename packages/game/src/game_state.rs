@@ -157,6 +157,7 @@ pub enum InfrastructureKind {
     SignalRelay,
     SurveyDrone,
     CargoLift,
+    TunnelSupport,
 }
 
 impl InfrastructureKind {
@@ -166,6 +167,7 @@ impl InfrastructureKind {
             Self::SignalRelay => "Signal Relay",
             Self::SurveyDrone => "Survey Drone",
             Self::CargoLift => "Cargo Lift",
+            Self::TunnelSupport => "Tunnel Support",
         }
     }
 }
@@ -220,16 +222,18 @@ pub enum RecipeKind {
     SignalRelayKit,
     SurveyDroneKit,
     CargoLiftKit,
+    TunnelSupportKit,
 }
 
 impl RecipeKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ReinforcedBulkhead,
         Self::AuxiliaryTank,
         Self::ExpandedSorter,
         Self::SignalRelayKit,
         Self::SurveyDroneKit,
         Self::CargoLiftKit,
+        Self::TunnelSupportKit,
     ];
 
     #[must_use]
@@ -241,6 +245,7 @@ impl RecipeKind {
             Self::SignalRelayKit => "Signal Relay Kit",
             Self::SurveyDroneKit => "Survey Drone Kit",
             Self::CargoLiftKit => "Cargo Lift Kit",
+            Self::TunnelSupportKit => "Tunnel Support Kit",
         }
     }
 
@@ -253,6 +258,7 @@ impl RecipeKind {
             Self::SignalRelayKit => "crafted infrastructure item",
             Self::SurveyDroneKit => "reveals nearby map over time",
             Self::CargoLiftKit => "sends cargo upward from a station",
+            Self::TunnelSupportKit => "protects nearby tunnel from collapses",
         }
     }
 
@@ -277,6 +283,7 @@ impl RecipeKind {
                 (StrategicResourceKind::AncientAlloy, 2),
                 (StrategicResourceKind::CoreShard, 1),
             ],
+            Self::TunnelSupportKit => &[(StrategicResourceKind::AncientAlloy, 1)],
         }
     }
 }
@@ -1493,6 +1500,9 @@ impl GameState {
             RecipeKind::CargoLiftKit => {
                 self.player.cargo_lift_kits = self.player.cargo_lift_kits.saturating_add(1);
             }
+            RecipeKind::TunnelSupportKit => {
+                self.player.tunnel_support_kits = self.player.tunnel_support_kits.saturating_add(1);
+            }
         }
         self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
         self.sound_cues.push(SoundCue::Upgrade);
@@ -2105,6 +2115,12 @@ impl GameState {
                 "No cargo lift kits. Craft one at HQ first.",
             );
         }
+        if input.place_support {
+            self.place_infrastructure_kit(
+                InfrastructureKind::TunnelSupport,
+                "No tunnel support kits. Craft one at HQ first.",
+            );
+        }
     }
 
     fn place_infrastructure_kit(&mut self, kind: InfrastructureKind, empty_message: &str) {
@@ -2112,6 +2128,7 @@ impl GameState {
             InfrastructureKind::SignalRelay => self.player.signal_relay_kits,
             InfrastructureKind::SurveyDrone => self.player.survey_drone_kits,
             InfrastructureKind::CargoLift => self.player.cargo_lift_kits,
+            InfrastructureKind::TunnelSupport => self.player.tunnel_support_kits,
         };
         if kits == 0 {
             empty_message.clone_into(&mut self.message);
@@ -2140,6 +2157,9 @@ impl GameState {
             InfrastructureKind::CargoLift => {
                 self.player.cargo_lift_kits = self.player.cargo_lift_kits.saturating_sub(1);
             }
+            InfrastructureKind::TunnelSupport => {
+                self.player.tunnel_support_kits = self.player.tunnel_support_kits.saturating_sub(1);
+            }
         }
         self.infrastructure.push(PlacedInfrastructure {
             kind,
@@ -2155,6 +2175,9 @@ impl GameState {
             }
             InfrastructureKind::CargoLift => {
                 "Placed Cargo Lift. Press E on it to send cargo upward.".to_owned()
+            }
+            InfrastructureKind::TunnelSupport => {
+                "Placed Tunnel Support. Nearby collapse warnings will be suppressed.".to_owned()
             }
         };
         self.sound_cues.push(SoundCue::Upgrade);
@@ -2836,7 +2859,10 @@ impl GameState {
         let py = (self.player.y / TILE_SIZE).floor() as i32 + 5;
         for dx in -2..=2 {
             let position = TilePosition { x: px + dx, y: py };
-            if position.y > 7 && !self.terrain.is_solid_at(position) {
+            if position.y > 7
+                && !self.terrain.is_solid_at(position)
+                && !self.is_tunnel_supported(position)
+            {
                 self.collapse_warnings.push(position);
             }
         }
@@ -2850,7 +2876,10 @@ impl GameState {
         let py = (self.player.y / TILE_SIZE).floor() as i32 + 5;
         for dx in -2..=2 {
             let position = TilePosition { x: px + dx, y: py };
-            if position.y <= 7 || self.terrain.is_solid_at(position) {
+            if position.y <= 7
+                || self.terrain.is_solid_at(position)
+                || self.is_tunnel_supported(position)
+            {
                 continue;
             }
             if self.terrain.set_kind(position, TileKind::Stone) {
@@ -3045,6 +3074,15 @@ impl GameState {
             .iter()
             .filter(|item| item.kind == InfrastructureKind::SignalRelay)
             .count()
+    }
+
+    #[must_use]
+    pub fn is_tunnel_supported(&self, position: TilePosition) -> bool {
+        self.infrastructure.iter().any(|item| {
+            item.kind == InfrastructureKind::TunnelSupport
+                && (item.position.x - position.x).abs() <= 3
+                && (item.position.y - position.y).abs() <= 3
+        })
     }
 
     fn recover_lost_cargo_if_near(&mut self) {

@@ -117,6 +117,18 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             Color::GREEN,
         );
     }
+    if game.player.tunnel_support_kits > 0 {
+        draw.draw_text(
+            &format!(
+                "Tunnel supports: {} kit(s) (U to place)",
+                game.player.tunnel_support_kits
+            ),
+            720,
+            140,
+            16,
+            Color::GREEN,
+        );
+    }
 
     if game.escape_sequence_seconds > 0.0 {
         draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
@@ -461,6 +473,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
             crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
             crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
+            crate::game_state::InfrastructureKind::TunnelSupport => Color::ORANGE,
         };
         draw_map_marker(draw, &projection, item.position.x, item.position.y, color);
     }
@@ -905,12 +918,13 @@ fn draw_crafting(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     draw.draw_text(
         &format!(
-            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {}",
+            "Crafted: bulkheads {} | sorters {} | relay kits {} | drone kits {} | lift kits {} | support kits {}",
             game.player.crafted_bulkheads,
             game.player.crafted_sorters,
             game.player.signal_relay_kits,
             game.player.survey_drone_kits,
-            game.player.cargo_lift_kits
+            game.player.cargo_lift_kits,
+            game.player.tunnel_support_kits
         ),
         350,
         450,
@@ -1390,6 +1404,7 @@ fn draw_large_map(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             crate::game_state::InfrastructureKind::SignalRelay => ("R", Color::SKYBLUE),
             crate::game_state::InfrastructureKind::SurveyDrone => ("D", Color::GREEN),
             crate::game_state::InfrastructureKind::CargoLift => ("L", Color::GOLD),
+            crate::game_state::InfrastructureKind::TunnelSupport => ("S", Color::ORANGE),
         };
         draw.draw_circle_lines(px, py, 6.0, color);
         draw.draw_text(label, px + 7, py - 6, 10, color);
