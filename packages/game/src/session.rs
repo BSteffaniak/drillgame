@@ -268,16 +268,61 @@ impl ClientView {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CorrectionPlan {
+    None,
+    Smooth,
+    Snap,
+}
+
 /// Local prediction/reconciliation bookkeeping for one client.
 #[derive(Clone, Debug, Default)]
 pub struct ClientPredictionState {
     unacknowledged_commands: Vec<SequencedPlayerCommand>,
+    remote_player_snapshots: BTreeMap<PlayerId, Vec<PlayerSnapshot>>,
 }
 
 impl ClientPredictionState {
     #[must_use]
     pub fn unacknowledged_commands(&self) -> &[SequencedPlayerCommand] {
         &self.unacknowledged_commands
+    }
+
+    #[must_use]
+    pub fn replay_commands(&self) -> &[SequencedPlayerCommand] {
+        &self.unacknowledged_commands
+    }
+
+    #[must_use]
+    pub fn correction_plan(error_x: f32, error_y: f32) -> CorrectionPlan {
+        let error_squared = error_x.mul_add(error_x, error_y * error_y);
+        if error_squared <= 1.0 {
+            CorrectionPlan::None
+        } else if error_squared <= 256.0 {
+            CorrectionPlan::Smooth
+        } else {
+            CorrectionPlan::Snap
+        }
+    }
+
+    #[must_use]
+    pub fn remote_snapshot_count(&self, player_id: PlayerId) -> usize {
+        self.remote_player_snapshots
+            .get(&player_id)
+            .map_or(0, Vec::len)
+    }
+
+    pub fn push_remote_snapshot(&mut self, snapshot: PlayerSnapshot) {
+        const MAX_REMOTE_SNAPSHOTS: usize = 8;
+
+        let snapshots = self
+            .remote_player_snapshots
+            .entry(snapshot.player_id)
+            .or_default();
+        snapshots.push(snapshot);
+        if snapshots.len() > MAX_REMOTE_SNAPSHOTS {
+            snapshots.remove(0);
+        }
     }
 
     fn remember_commands(&mut self, commands: &[SequencedPlayerCommand]) {
@@ -824,6 +869,46 @@ mod tests {
                 .unacknowledged_commands()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn prediction_state_exposes_replay_commands_and_correction_plan() {
+        let mut session = GameSession::new();
+        session.sequence_local_commands(vec![PlayerCommand::Interact]);
+
+        assert_eq!(
+            session.local_client().prediction().replay_commands().len(),
+            1
+        );
+        assert_eq!(
+            super::CorrectionPlan::None,
+            super::ClientPredictionState::correction_plan(0.5, 0.5)
+        );
+        assert_eq!(
+            super::CorrectionPlan::Smooth,
+            super::ClientPredictionState::correction_plan(8.0, 0.0)
+        );
+        assert_eq!(
+            super::CorrectionPlan::Snap,
+            super::ClientPredictionState::correction_plan(32.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn prediction_state_buffers_remote_snapshots_for_interpolation() {
+        let mut prediction = super::ClientPredictionState::default();
+        prediction.push_remote_snapshot(super::PlayerSnapshot {
+            player_id: LOCAL_PLAYER_ID,
+            x: 1.0,
+            y: 2.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            fuel: 3.0,
+            hull: 4.0,
+            credits: 6,
+        });
+
+        assert_eq!(prediction.remote_snapshot_count(LOCAL_PLAYER_ID), 1);
     }
 
     #[test]

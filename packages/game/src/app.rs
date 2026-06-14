@@ -66,11 +66,22 @@ pub fn run() {
         let _client_view_count = session.client_count();
         let _client_views = session.render_views();
 
+        let _prediction_replay_len = session.local_client().prediction().replay_commands().len();
         let _prediction_buffer_len = session
             .local_client()
             .prediction()
             .unacknowledged_commands()
             .len();
+
+        let _prediction_correction_plan =
+            crate::session::ClientPredictionState::correction_plan(0.0, 0.0);
+        let mut prediction_probe = session.local_client().prediction().clone();
+        prediction_probe.push_remote_snapshot(crate::session::PlayerSnapshot::from_player(
+            crate::multiplayer::LOCAL_PLAYER_ID,
+            &session.game().player,
+        ));
+        let _remote_snapshot_count =
+            prediction_probe.remote_snapshot_count(crate::multiplayer::LOCAL_PLAYER_ID);
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
