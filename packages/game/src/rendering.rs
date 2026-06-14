@@ -6,7 +6,7 @@
     reason = "rendering APIs use integer pixels while camera math uses floats"
 )]
 
-use raylib::prelude::*;
+use raylib::{ffi, prelude::*};
 
 mod interior;
 mod screen;
@@ -90,10 +90,16 @@ impl GameRenderer {
         views: &[&ClientView],
     ) {
         let _layout = Self::split_screen_layout(views.len());
-        let Some(view) = views.first() else {
-            return;
-        };
-        self.render_client_view(draw, game, view);
+        for view in views {
+            let viewport = view.viewport;
+            unsafe {
+                ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
+            }
+            self.render_client_view(draw, game, view);
+            unsafe {
+                ffi::EndScissorMode();
+            }
+        }
     }
 
     pub fn render_client_view(
