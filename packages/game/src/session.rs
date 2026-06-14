@@ -17,6 +17,60 @@ use crate::{
     terrain::TilePosition,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompatibilityMode {
+    SinglePlayerLegacy,
+    MultiplayerReady,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StateDomain {
+    AuthoritativeWorld,
+    LocalClientPresentation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StateBoundary {
+    pub name: &'static str,
+    pub domain: StateDomain,
+}
+
+impl StateBoundary {
+    #[must_use]
+    pub const fn authoritative_world(name: &'static str) -> Self {
+        Self {
+            name,
+            domain: StateDomain::AuthoritativeWorld,
+        }
+    }
+
+    #[must_use]
+    pub const fn local_client_presentation(name: &'static str) -> Self {
+        Self {
+            name,
+            domain: StateDomain::LocalClientPresentation,
+        }
+    }
+}
+
+#[must_use]
+pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
+    [
+        StateBoundary::authoritative_world("terrain"),
+        StateBoundary::authoritative_world("players"),
+        StateBoundary::authoritative_world("hazards"),
+        StateBoundary::authoritative_world("bombs"),
+        StateBoundary::authoritative_world("infrastructure"),
+        StateBoundary::authoritative_world("economy"),
+        StateBoundary::authoritative_world("contracts"),
+        StateBoundary::authoritative_world("progression"),
+        StateBoundary::local_client_presentation("camera"),
+        StateBoundary::local_client_presentation("menus_and_modals"),
+        StateBoundary::local_client_presentation("hud_messages"),
+        StateBoundary::local_client_presentation("prediction_buffers"),
+    ]
+}
+
 /// Compact player data for render/network/save-adjacent synchronization experiments.
 ///
 /// This is not a save format. It is an explicit snapshot boundary that can later be split into
@@ -460,6 +514,21 @@ pub struct GameSession {
 
 impl GameSession {
     #[must_use]
+    pub const fn compatibility_mode() -> CompatibilityMode {
+        CompatibilityMode::SinglePlayerLegacy
+    }
+
+    #[must_use]
+    pub const fn target_compatibility_mode() -> CompatibilityMode {
+        CompatibilityMode::MultiplayerReady
+    }
+
+    #[must_use]
+    pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
+        planned_state_boundaries()
+    }
+
+    #[must_use]
     pub fn new() -> Self {
         let game = GameState::new();
         let world = WorldState::from_legacy_game(&game);
@@ -836,6 +905,27 @@ mod tests {
         assert_eq!(session.local_view().run_mode, session.game().run_mode);
         assert_eq!(session.local_view().viewport.width, 1280);
         assert_eq!(session.local_view().viewport.height, 720);
+    }
+
+    #[test]
+    fn planned_state_boundaries_identify_world_and_client_domains() {
+        let boundaries = GameSession::planned_state_boundaries();
+
+        assert!(boundaries.iter().any(|boundary| {
+            boundary.name == "terrain" && boundary.domain == super::StateDomain::AuthoritativeWorld
+        }));
+        assert!(boundaries.iter().any(|boundary| {
+            boundary.name == "camera"
+                && boundary.domain == super::StateDomain::LocalClientPresentation
+        }));
+        assert_eq!(
+            GameSession::compatibility_mode(),
+            super::CompatibilityMode::SinglePlayerLegacy
+        );
+        assert_eq!(
+            GameSession::target_compatibility_mode(),
+            super::CompatibilityMode::MultiplayerReady
+        );
     }
 
     #[test]

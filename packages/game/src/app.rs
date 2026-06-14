@@ -97,6 +97,9 @@ fn observe_multiplayer_scaffolding(
     let terrain_revisions = session.terrain_revisions();
     let _origin_chunk_revision = terrain_revisions.revision(TerrainChunkPosition { x: 0, y: 0 });
     let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
+    let _compatibility_mode = GameSession::compatibility_mode();
+    let _target_compatibility_mode = GameSession::target_compatibility_mode();
+    let _planned_state_boundaries = GameSession::planned_state_boundaries();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
