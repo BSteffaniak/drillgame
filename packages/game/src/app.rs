@@ -59,7 +59,8 @@ pub fn run() {
         let _simulation_accumulator = session.simulation_accumulator();
 
         session.update_legacy(input, delta_seconds);
-        let _world_events = session.drain_events();
+        let world_delta = session.drain_world_delta();
+        let _world_delta_is_empty = world_delta.is_empty();
         if input.fullscreen {
             raylib.toggle_fullscreen();
         }

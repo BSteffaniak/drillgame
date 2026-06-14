@@ -61,6 +61,28 @@ impl WorldSnapshot {
     }
 }
 
+/// Compatibility world delta emitted after a session update.
+///
+/// This is intentionally event-based for now. Later phases can replace or augment it with compact
+/// terrain chunk revisions, entity component changes, and acknowledgement metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldDelta {
+    pub tick: SimulationTick,
+    pub events: Vec<WorldEvent>,
+}
+
+impl WorldDelta {
+    #[must_use]
+    pub const fn new(tick: SimulationTick, events: Vec<WorldEvent>) -> Self {
+        Self { tick, events }
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
 /// Lightweight simulation events emitted by the session compatibility layer.
 ///
 /// These are intentionally separate from save data and renderer snapshots. As systems migrate out
@@ -251,6 +273,10 @@ impl GameSession {
 
     pub fn drain_events(&mut self) -> Vec<WorldEvent> {
         mem::take(&mut self.pending_events)
+    }
+
+    pub fn drain_world_delta(&mut self) -> WorldDelta {
+        WorldDelta::new(self.current_tick, self.drain_events())
     }
 
     fn push_event(&mut self, event: WorldEvent) {
@@ -532,5 +558,21 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, super::WorldEvent::TickAdvanced { .. }))
         );
+    }
+
+    #[test]
+    fn world_delta_drains_pending_events() {
+        let mut session = GameSession::new();
+        session.sequence_local_commands(vec![PlayerCommand::Interact]);
+        session.update_legacy(
+            crate::input::PlayerInput::default(),
+            crate::multiplayer::FIXED_DELTA_SECONDS,
+        );
+
+        let delta = session.drain_world_delta();
+
+        assert_eq!(delta.tick, session.current_tick());
+        assert!(!delta.is_empty());
+        assert!(session.drain_world_delta().is_empty());
     }
 }
