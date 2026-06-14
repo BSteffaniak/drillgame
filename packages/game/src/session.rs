@@ -425,6 +425,27 @@ impl TerrainRevisionTracker {
     pub fn revision(&self, position: TerrainChunkPosition) -> u64 {
         self.chunk_revisions.get(&position).copied().unwrap_or(0)
     }
+
+    #[must_use]
+    pub fn recovery_delta(
+        &self,
+        tick: SimulationTick,
+        position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> CompactWorldDelta {
+        let authoritative_revision = self.revision(position);
+        if authoritative_revision == known_revision {
+            CompactWorldDelta::Noop { tick }
+        } else {
+            CompactWorldDelta::TerrainChunks {
+                tick,
+                revisions: vec![TerrainChunkRevision {
+                    position,
+                    revision: authoritative_revision,
+                }],
+            }
+        }
+    }
 }
 
 /// Lightweight simulation events emitted by the session compatibility layer.
@@ -2178,6 +2199,30 @@ mod tests {
         assert_eq!(
             tracker.revision(super::TerrainChunkPosition { x: 1, y: 0 }),
             1
+        );
+    }
+
+    #[test]
+    fn terrain_revision_tracker_builds_chunk_recovery_deltas() {
+        let mut tracker = super::TerrainRevisionTracker::default();
+        let position = super::TerrainChunkPosition { x: 0, y: 0 };
+        tracker.mark_tiles_changed([crate::terrain::TilePosition { x: 0, y: 0 }]);
+
+        assert_eq!(
+            tracker.recovery_delta(SimulationTick::new(12), position, 1),
+            super::CompactWorldDelta::Noop {
+                tick: SimulationTick::new(12),
+            }
+        );
+        assert_eq!(
+            tracker.recovery_delta(SimulationTick::new(12), position, 0),
+            super::CompactWorldDelta::TerrainChunks {
+                tick: SimulationTick::new(12),
+                revisions: vec![super::TerrainChunkRevision {
+                    position,
+                    revision: 1,
+                }],
+            }
         );
     }
 

@@ -121,6 +121,11 @@ fn observe_multiplayer_scaffolding(
     let _simulation_accumulator = session.simulation_accumulator();
     let terrain_revisions = session.terrain_revisions();
     let _origin_chunk_revision = terrain_revisions.revision(TerrainChunkPosition { x: 0, y: 0 });
+    let _recovery_delta = terrain_revisions.recovery_delta(
+        session.current_tick(),
+        TerrainChunkPosition { x: 0, y: 0 },
+        0,
+    );
     let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
     let _compatibility_mode = GameSession::compatibility_mode();
     let _target_compatibility_mode = GameSession::target_compatibility_mode();
