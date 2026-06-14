@@ -2612,7 +2612,11 @@ impl GameState {
     fn confirm_complete_contract(&mut self) {
         if let Some(completion) = self.contracts.try_complete(&mut self.player) {
             self.sound_cues.push(SoundCue::Sell);
-            self.total_earnings += completion.reward;
+            let escrow_bonus = completion.reward * u32::from(self.town_development.bank_level) / 20;
+            if escrow_bonus > 0 {
+                self.player.credits = self.player.credits.saturating_add(escrow_bonus);
+            }
+            self.total_earnings += completion.reward.saturating_add(escrow_bonus);
             if completion.finished_story {
                 self.won_game = true;
                 self.deep_claim_status = DeepClaimStatus::Unlocked;
@@ -2622,13 +2626,13 @@ impl GameState {
                         Some(best.min(self.play_seconds))
                     });
                 self.message = format!(
-                    "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits.",
+                    "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits + {escrow_bonus} escrow.",
                     completion.completed_title, completion.reward
                 );
             } else {
                 let story = ContractLog::story_for_completed(self.contracts.completed);
                 self.message = format!(
-                    "{} complete! Bonus paid: {} credits. {story}",
+                    "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
                     completion.completed_title, completion.reward
                 );
             }
