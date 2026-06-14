@@ -24,7 +24,8 @@ struct MinimapProjection {
     width: i32,
     height: i32,
     terrain_width: i32,
-    terrain_height: i32,
+    origin_y: i32,
+    visible_height: i32,
 }
 
 pub(super) fn draw_heat_warning(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -449,6 +450,10 @@ fn draw_detail_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "minimap draws terrain, markers, labels, and player context together"
+)]
 pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let x = SCREEN_WIDTH - 168;
     let y = SCREEN_HEIGHT - 166;
@@ -465,15 +470,30 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 
     let terrain_width = game.terrain.width().max(1);
     let terrain_height = game.terrain.height().max(1);
+    let player_tile_y = (game.player.y / TILE_SIZE) as i32;
+    let visible_height = terrain_height.min(80);
+    let origin_y = if terrain_height > visible_height {
+        (player_tile_y - visible_height / 2).clamp(0, terrain_height - visible_height)
+    } else {
+        0
+    };
     let projection = MinimapProjection {
         x,
         y,
         width,
         height,
         terrain_width,
-        terrain_height,
+        origin_y,
+        visible_height,
     };
-    for ty in 0..terrain_height {
+    draw.draw_text(
+        &format!("{}-{}m", origin_y, origin_y + visible_height),
+        x + 70,
+        y - 20,
+        12,
+        Color::LIGHTGRAY,
+    );
+    for ty in origin_y..origin_y + visible_height {
         for tx in 0..terrain_width {
             let position = TilePosition { x: tx, y: ty };
             if !game.is_explored(position) {
@@ -483,7 +503,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
                 continue;
             };
             let px = x + tx * width / terrain_width;
-            let py = y + ty * height / terrain_height;
+            let py = y + (ty - origin_y) * height / visible_height;
             let color = match tile.kind {
                 TileKind::Air => Color::new(35, 35, 45, 180),
                 TileKind::Foundation => Color::new(135, 125, 105, 220),
@@ -534,7 +554,7 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         );
     }
     let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
-    let player_y = y + ((game.player.y / TILE_SIZE) as i32) * height / terrain_height;
+    let player_y = y + (((game.player.y / TILE_SIZE) as i32) - origin_y) * height / visible_height;
     if game.scanner_pulse_seconds > 0.0 {
         draw.draw_circle_lines(
             player_x,
@@ -566,8 +586,12 @@ fn draw_map_marker(
     tile_y: i32,
     color: Color,
 ) {
+    if tile_y < projection.origin_y || tile_y >= projection.origin_y + projection.visible_height {
+        return;
+    }
     let x = projection.x + tile_x * projection.width / projection.terrain_width;
-    let y = projection.y + tile_y * projection.height / projection.terrain_height;
+    let y = projection.y
+        + (tile_y - projection.origin_y) * projection.height / projection.visible_height;
     draw.draw_rectangle(x - 1, y - 1, 3, 3, color);
 }
 
@@ -578,14 +602,16 @@ pub(super) fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState
     draw.draw_rectangle(x, top, 10, height, Color::new(0, 0, 0, 120));
     draw.draw_rectangle_lines(x, top, 10, height, Color::new(255, 255, 255, 120));
 
-    for marker in (0..=80).step_by(20) {
-        let y = top + (marker * height / 80);
+    let max_depth = game.terrain.height().max(80);
+    let step = if max_depth > 180 { 50 } else { 20 };
+    for marker in (0..=max_depth).step_by(step as usize) {
+        let y = top + (marker * height / max_depth);
         draw.draw_line(x - 8, y, x + 18, y, Color::LIGHTGRAY);
         draw.draw_text(&format!("{marker}m"), x - 58, y - 8, 14, Color::LIGHTGRAY);
     }
 
     let depth = (game.player.y / TILE_SIZE - 5.0).max(0.0);
-    let marker_y = top + ((depth / 80.0).clamp(0.0, 1.0) * height as f32) as i32;
+    let marker_y = top + ((depth / max_depth as f32).clamp(0.0, 1.0) * height as f32) as i32;
     draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
 }
 
