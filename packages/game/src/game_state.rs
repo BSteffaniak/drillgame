@@ -1090,6 +1090,7 @@ impl GameState {
     }
 
     pub fn migrate_after_load(&mut self) {
+        self.terrain.ensure_depth(WORLD_HEIGHT);
         let expected_tiles = (self.terrain.width() * self.terrain.height()) as usize;
         if self.explored_tiles.len() != expected_tiles {
             self.explored_tiles = vec![false; expected_tiles];

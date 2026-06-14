@@ -12,7 +12,10 @@ use crate::{
     },
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
-    terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TileKind, TilePosition},
+    terrain::{
+        ArtifactKind, DeepStratum, MineralKind, StrategicResourceKind, TileKind, TilePosition,
+        deep_stratum_at_depth,
+    },
 };
 
 struct MinimapProjection {
@@ -1078,6 +1081,10 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw_research_log_sidebar(draw, game);
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "research log sidebar presents several compact codex sections"
+)]
 fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("NPC Stories", 620, 250, 20, Color::GOLD);
     let stories = [
@@ -1129,6 +1136,46 @@ fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
             12,
             Color::LIGHTGRAY,
         );
+    }
+    draw.draw_text("Strata", 850, 470, 20, Color::PURPLE);
+    let strata = [
+        DeepStratum::CrystalFaults,
+        DeepStratum::FossilOceans,
+        DeepStratum::PressureCathedrals,
+        DeepStratum::RadioactiveHollow,
+        DeepStratum::AncientMachineLayer,
+        DeepStratum::VoidGeodeFields,
+        DeepStratum::MantleStormZone,
+    ];
+    for (index, stratum) in strata.iter().enumerate() {
+        let discovered =
+            game.collection_log.strata.iter().any(|depth| {
+                deep_stratum_at_depth(*depth * 20).is_some_and(|known| known == *stratum)
+            });
+        draw.draw_text(
+            if discovered { stratum.name() } else { "???" },
+            850,
+            500 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            15,
+            if discovered {
+                Color::RAYWHITE
+            } else {
+                Color::GRAY
+            },
+        );
+        if discovered {
+            draw.draw_text(
+                &format!(
+                    "{} / {}",
+                    stratum.primary_resource().name(),
+                    stratum.scanner_twist()
+                ),
+                970,
+                500 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+                12,
+                Color::LIGHTGRAY,
+            );
+        }
     }
     draw.draw_text("Materials", 620, 545, 20, Color::SKYBLUE);
     let materials = [

@@ -82,6 +82,83 @@ impl StrategicResourceKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum DeepStratum {
+    CrystalFaults,
+    FossilOceans,
+    PressureCathedrals,
+    RadioactiveHollow,
+    AncientMachineLayer,
+    VoidGeodeFields,
+    MantleStormZone,
+}
+
+impl DeepStratum {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::CrystalFaults => "Crystal Faults",
+            Self::FossilOceans => "Fossil Oceans",
+            Self::PressureCathedrals => "Pressure Cathedrals",
+            Self::RadioactiveHollow => "Radioactive Hollow",
+            Self::AncientMachineLayer => "Ancient Machine Layer",
+            Self::VoidGeodeFields => "Void Geode Fields",
+            Self::MantleStormZone => "Mantle Storm Zone",
+        }
+    }
+
+    #[must_use]
+    pub const fn primary_resource(self) -> StrategicResourceKind {
+        match self {
+            Self::CrystalFaults => StrategicResourceKind::CrystalLens,
+            Self::FossilOceans => StrategicResourceKind::RadiantFossil,
+            Self::PressureCathedrals => StrategicResourceKind::PressurePearl,
+            Self::RadioactiveHollow => StrategicResourceKind::CoreShard,
+            Self::AncientMachineLayer => StrategicResourceKind::MachineRelic,
+            Self::VoidGeodeFields => StrategicResourceKind::VoidGlass,
+            Self::MantleStormZone => StrategicResourceKind::AncientAlloy,
+        }
+    }
+
+    #[must_use]
+    pub const fn primary_hazard(self) -> TileKind {
+        match self {
+            Self::CrystalFaults | Self::AncientMachineLayer => TileKind::ExplosivePocket,
+            Self::FossilOceans => TileKind::Gas,
+            Self::PressureCathedrals | Self::VoidGeodeFields => TileKind::PressurePocket,
+            Self::RadioactiveHollow => TileKind::MagmaVent,
+            Self::MantleStormZone => TileKind::Lava,
+        }
+    }
+
+    #[must_use]
+    pub const fn scanner_twist(self) -> &'static str {
+        match self {
+            Self::CrystalFaults => "crystal echoes duplicate ore pings",
+            Self::FossilOceans => "fossil pockets hide artifacts inside soft seams",
+            Self::PressureCathedrals => "pressure pockets mask nearby valuables",
+            Self::RadioactiveHollow => "radiation ghosts mimic rare ore",
+            Self::AncientMachineLayer => "machine relics reveal straight-line patterns",
+            Self::VoidGeodeFields => "void glass bends distance estimates",
+            Self::MantleStormZone => "storm heat scrambles hazard warnings",
+        }
+    }
+}
+
+#[must_use]
+pub const fn deep_stratum_at_depth(depth: i32) -> Option<DeepStratum> {
+    match depth {
+        90..=109 => Some(DeepStratum::CrystalFaults),
+        110..=129 => Some(DeepStratum::FossilOceans),
+        130..=149 => Some(DeepStratum::PressureCathedrals),
+        150..=169 => Some(DeepStratum::RadioactiveHollow),
+        170..=189 => Some(DeepStratum::AncientMachineLayer),
+        190..=209 => Some(DeepStratum::VoidGeodeFields),
+        210.. => Some(DeepStratum::MantleStormZone),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum ArtifactKind {
     Fossil,
     OldCircuit,
@@ -211,6 +288,24 @@ impl Terrain {
     #[must_use]
     pub const fn seed(&self) -> u64 {
         self.seed
+    }
+
+    pub fn ensure_depth(&mut self, minimum_height: i32) {
+        if minimum_height <= self.height {
+            return;
+        }
+        self.tiles
+            .reserve(((minimum_height - self.height) * self.width) as usize);
+        for y in self.height..minimum_height {
+            for x in 0..self.width {
+                let kind = generated_tile_kind(x, y, self.seed);
+                self.tiles.push(Tile {
+                    kind,
+                    durability: tile_durability(kind),
+                });
+            }
+        }
+        self.height = minimum_height;
     }
 
     #[must_use]
@@ -374,6 +469,12 @@ fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
         return TileKind::Gas;
     }
 
+    if let Some(stratum) = deep_stratum_at_depth(y)
+        && seeded_hash(x, y, seed ^ 0xD33F).is_multiple_of(29)
+    {
+        return stratum.primary_hazard();
+    }
+
     if artifact_spot(x, y, seed) {
         return TileKind::Artifact(artifact_at_depth(x, y));
     }
@@ -385,7 +486,7 @@ fn generated_tile_kind(x: i32, y: i32, seed: u64) -> TileKind {
     let base = match y {
         5..=13 => TileKind::Dirt,
         14..=27 => TileKind::Clay,
-        28..=64 => TileKind::Stone,
+        28..=64 | 90..=129 => TileKind::Stone,
         _ => TileKind::HardRock,
     };
 
@@ -461,6 +562,18 @@ const fn artifact_at_depth(x: i32, y: i32) -> ArtifactKind {
 const fn ore_or_base_tile(x: i32, y: i32, base: TileKind, seed: u64) -> TileKind {
     if !patterned_ore(x, y, seed) {
         return base;
+    }
+
+    if let Some(stratum) = deep_stratum_at_depth(y) {
+        return TileKind::Ore(match stratum {
+            DeepStratum::CrystalFaults | DeepStratum::VoidGeodeFields => MineralKind::Diamond,
+            DeepStratum::FossilOceans => MineralKind::Platinum,
+            DeepStratum::PressureCathedrals | DeepStratum::AncientMachineLayer => {
+                MineralKind::Mythril
+            }
+            DeepStratum::RadioactiveHollow => MineralKind::Uranium,
+            DeepStratum::MantleStormZone => MineralKind::Ruby,
+        });
     }
 
     match y {
