@@ -891,6 +891,43 @@ pub enum CorrectionPlan {
     Snap,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PredictedMovement {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+}
+
+impl PredictedMovement {
+    #[must_use]
+    pub const fn from_snapshot(snapshot: &PlayerSnapshot) -> Self {
+        Self {
+            player_id: snapshot.player_id,
+            x: snapshot.x,
+            y: snapshot.y,
+            velocity_x: snapshot.velocity_x,
+            velocity_y: snapshot.velocity_y,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReconciledMovement {
+    pub predicted: PredictedMovement,
+    pub correction_plan: CorrectionPlan,
+    pub correction_offset: Option<CorrectionOffset>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RemotePlayerPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub extrapolated: bool,
+}
+
 /// Local prediction/reconciliation bookkeeping for one client.
 #[derive(Clone, Debug, Default)]
 pub struct ClientPredictionState {
@@ -942,6 +979,71 @@ impl ClientPredictionState {
     #[must_use]
     pub fn should_extrapolate(stall_seconds: f32) -> bool {
         stall_seconds <= EXTRAPOLATION_LIMIT_SECONDS
+    }
+
+    #[must_use]
+    pub const fn predict_local_movement(
+        snapshot: &PlayerSnapshot,
+        delta_seconds: f32,
+    ) -> PredictedMovement {
+        PredictedMovement {
+            player_id: snapshot.player_id,
+            x: snapshot.velocity_x.mul_add(delta_seconds, snapshot.x),
+            y: snapshot.velocity_y.mul_add(delta_seconds, snapshot.y),
+            velocity_x: snapshot.velocity_x,
+            velocity_y: snapshot.velocity_y,
+        }
+    }
+
+    #[must_use]
+    pub fn reconcile_movement(
+        predicted: PredictedMovement,
+        authoritative: &PlayerSnapshot,
+    ) -> ReconciledMovement {
+        let error_x = authoritative.x - predicted.x;
+        let error_y = authoritative.y - predicted.y;
+        let correction_plan = Self::correction_plan(error_x, error_y);
+        let correction_offset = if correction_plan == CorrectionPlan::None {
+            None
+        } else {
+            Some(CorrectionOffset::new(error_x, error_y))
+        };
+
+        ReconciledMovement {
+            predicted,
+            correction_plan,
+            correction_offset,
+        }
+    }
+
+    #[must_use]
+    pub fn remote_player_presentation(
+        previous: &PlayerSnapshot,
+        next: Option<&PlayerSnapshot>,
+        alpha: f32,
+        stall_seconds: f32,
+    ) -> RemotePlayerPresentation {
+        next.map_or_else(
+            || {
+                let extrapolate = Self::should_extrapolate(stall_seconds);
+                let seconds = if extrapolate { stall_seconds } else { 0.0 };
+                RemotePlayerPresentation {
+                    player_id: previous.player_id,
+                    x: previous.velocity_x.mul_add(seconds, previous.x),
+                    y: previous.velocity_y.mul_add(seconds, previous.y),
+                    extrapolated: extrapolate,
+                }
+            },
+            |next| {
+                let blend = alpha.clamp(0.0, 1.0);
+                RemotePlayerPresentation {
+                    player_id: previous.player_id,
+                    x: (next.x - previous.x).mul_add(blend, previous.x),
+                    y: (next.y - previous.y).mul_add(blend, previous.y),
+                    extrapolated: false,
+                }
+            },
+        )
     }
 
     #[must_use]
@@ -2049,6 +2151,47 @@ mod tests {
                 .predicted_input_lag_seconds()
                 > 0.0
         );
+    }
+
+    #[test]
+    fn prediction_state_projects_local_reconciliation_and_remote_presentation() {
+        let previous = super::PlayerSnapshot {
+            player_id: LOCAL_PLAYER_ID,
+            x: 10.0,
+            y: 20.0,
+            velocity_x: 4.0,
+            velocity_y: -2.0,
+            fuel: 3.0,
+            hull: 4.0,
+            credits: 6,
+        };
+        let next = super::PlayerSnapshot {
+            x: 20.0,
+            y: 30.0,
+            ..previous
+        };
+
+        let predicted = super::ClientPredictionState::predict_local_movement(&previous, 0.5);
+        assert!((predicted.x - 12.0).abs() < f32::EPSILON);
+        assert!((predicted.y - 19.0).abs() < f32::EPSILON);
+
+        let reconciled = super::ClientPredictionState::reconcile_movement(predicted, &next);
+        assert_eq!(reconciled.correction_plan, super::CorrectionPlan::Smooth);
+        assert!(reconciled.correction_offset.is_some());
+
+        let interpolated = super::ClientPredictionState::remote_player_presentation(
+            &previous,
+            Some(&next),
+            0.5,
+            0.0,
+        );
+        assert!((interpolated.x - 15.0).abs() < f32::EPSILON);
+        assert!(!interpolated.extrapolated);
+
+        let extrapolated =
+            super::ClientPredictionState::remote_player_presentation(&previous, None, 0.0, 0.1);
+        assert!(extrapolated.extrapolated);
+        assert!((extrapolated.x - 10.4).abs() < f32::EPSILON);
     }
 
     #[test]

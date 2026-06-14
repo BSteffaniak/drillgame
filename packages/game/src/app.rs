@@ -81,6 +81,10 @@ pub fn run() {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "temporary compatibility observer intentionally references multiplayer scaffolding until systems are fully integrated"
+)]
 fn observe_multiplayer_scaffolding(
     session: &mut GameSession,
     player_commands: Vec<PlayerCommand>,
@@ -163,6 +167,15 @@ fn observe_multiplayer_scaffolding(
     let _interpolation_delay = ClientPredictionState::interpolation_delay_seconds(delta_seconds);
     let _can_extrapolate = ClientPredictionState::should_extrapolate(0.0);
     let _predicted_input_lag = prediction.predicted_input_lag_seconds();
+    let snapshot =
+        PlayerSnapshot::from_player(crate::multiplayer::LOCAL_PLAYER_ID, &session.game().player);
+    let predicted_movement =
+        ClientPredictionState::predict_local_movement(&snapshot, delta_seconds);
+    let _predicted_from_snapshot = crate::session::PredictedMovement::from_snapshot(&snapshot);
+    let _reconciled_movement =
+        ClientPredictionState::reconcile_movement(predicted_movement, &snapshot);
+    let _remote_player_presentation =
+        ClientPredictionState::remote_player_presentation(&snapshot, None, 0.0, 0.0);
     let mut prediction_probe = prediction.clone();
     prediction_probe.note_prediction_failure(PredictionFailure::TerrainAlreadyChanged);
     prediction_probe.note_prediction_failure(PredictionFailure::HazardOrRescueChangedState);
@@ -175,10 +188,7 @@ fn observe_multiplayer_scaffolding(
     prediction_probe.set_correction_offset(crate::session::CorrectionOffset::new(0.0, 0.0));
     let _correction_offset = prediction_probe.correction_offset();
     prediction_probe.clear_correction_offset();
-    prediction_probe.push_remote_snapshot(PlayerSnapshot::from_player(
-        crate::multiplayer::LOCAL_PLAYER_ID,
-        &session.game().player,
-    ));
+    prediction_probe.push_remote_snapshot(snapshot);
     let _remote_snapshot_count =
         prediction_probe.remote_snapshot_count(crate::multiplayer::LOCAL_PLAYER_ID);
 }
