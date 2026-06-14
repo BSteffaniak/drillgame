@@ -2352,8 +2352,17 @@ impl GameState {
             "Already insured for the next rescue.".clone_into(&mut self.message);
             return;
         }
-        let next_tier = self.player.insurance_tier.saturating_add(1).min(3);
-        let cost = 70 + u32::from(next_tier) * 55;
+        let max_tier = 1_u8.saturating_add(self.town_development.bank_level).min(4);
+        let next_tier = self.player.insurance_tier.saturating_add(1).min(max_tier);
+        if self.player.insurance_tier >= max_tier {
+            self.message = format!(
+                "Bank level {} only supports tier {max_tier} insurance.",
+                self.town_development.bank_level
+            );
+            return;
+        }
+        let bank_discount = u32::from(self.town_development.bank_level).saturating_mul(15);
+        let cost = (70 + u32::from(next_tier) * 55).saturating_sub(bank_discount);
         if self.player.credits < cost {
             self.message = format!("Tier {next_tier} insurance costs {cost} credits.");
             return;
@@ -4356,7 +4365,10 @@ impl GameState {
         } else {
             drop_half_cargo(&mut self.player)
         };
-        if self.player.y >= 70.0 * TILE_SIZE && relay_count == 0 {
+        if self.player.y >= 70.0 * TILE_SIZE
+            && relay_count == 0
+            && (!self.player.insured || self.player.insurance_tier < 4)
+        {
             lost_items = lost_items.saturating_add(drop_quarter_cargo(&mut self.player));
         }
         self.player.insured = false;
