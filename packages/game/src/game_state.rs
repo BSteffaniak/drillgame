@@ -82,6 +82,123 @@ pub struct DrillState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum RigSlot {
+    DrillHead,
+    Engine,
+    HullPlating,
+    Radiator,
+    CargoModule,
+    ScannerModule,
+    UtilityModule,
+    EmergencySystem,
+}
+
+impl RigSlot {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::DrillHead => "Drill Head",
+            Self::Engine => "Engine",
+            Self::HullPlating => "Hull Plating",
+            Self::Radiator => "Radiator",
+            Self::CargoModule => "Cargo Module",
+            Self::ScannerModule => "Scanner Module",
+            Self::UtilityModule => "Utility Module",
+            Self::EmergencySystem => "Emergency System",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum RigPartKind {
+    TitanDrill,
+    NeedleDrill,
+    ResonanceDrill,
+    LightweightEngine,
+    HaulerEngine,
+    BurstEngine,
+    ThermalHull,
+    ImpactHull,
+    PressureHull,
+    ProspectorScanner,
+    HazardScanner,
+    RelicScanner,
+    CargoBalloon,
+    ArmoredCargoBay,
+    SortedCargoRack,
+}
+
+impl RigPartKind {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::TitanDrill => "Titan Drill",
+            Self::NeedleDrill => "Needle Drill",
+            Self::ResonanceDrill => "Resonance Drill",
+            Self::LightweightEngine => "Lightweight Engine",
+            Self::HaulerEngine => "Hauler Engine",
+            Self::BurstEngine => "Burst Engine",
+            Self::ThermalHull => "Thermal Hull",
+            Self::ImpactHull => "Impact Hull",
+            Self::PressureHull => "Pressure Hull",
+            Self::ProspectorScanner => "Prospector Scanner",
+            Self::HazardScanner => "Hazard Scanner",
+            Self::RelicScanner => "Relic Scanner",
+            Self::CargoBalloon => "Cargo Balloon",
+            Self::ArmoredCargoBay => "Armored Cargo Bay",
+            Self::SortedCargoRack => "Sorted Cargo Rack",
+        }
+    }
+
+    #[must_use]
+    pub const fn slot(self) -> RigSlot {
+        match self {
+            Self::TitanDrill | Self::NeedleDrill | Self::ResonanceDrill => RigSlot::DrillHead,
+            Self::LightweightEngine | Self::HaulerEngine | Self::BurstEngine => RigSlot::Engine,
+            Self::ThermalHull | Self::ImpactHull | Self::PressureHull => RigSlot::HullPlating,
+            Self::ProspectorScanner | Self::HazardScanner | Self::RelicScanner => {
+                RigSlot::ScannerModule
+            }
+            Self::CargoBalloon | Self::ArmoredCargoBay | Self::SortedCargoRack => {
+                RigSlot::CargoModule
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn rarity(self) -> &'static str {
+        match self {
+            Self::ResonanceDrill | Self::PressureHull | Self::RelicScanner => "legendary",
+            Self::TitanDrill | Self::BurstEngine | Self::ArmoredCargoBay => "rare",
+            _ => "standard",
+        }
+    }
+
+    #[must_use]
+    pub const fn tradeoff(self) -> &'static str {
+        match self {
+            Self::TitanDrill => "slow, high power, high fuel burn",
+            Self::NeedleDrill => "fast through soft material, poor hard-rock performance",
+            Self::ResonanceDrill => {
+                "strong against crystal/ancient material, unstable near hazards"
+            }
+            Self::LightweightEngine => "agile, low cargo tolerance",
+            Self::HaulerEngine => "slow, handles heavy cargo well",
+            Self::BurstEngine => "strong thrust, inefficient fuel use",
+            Self::ThermalHull => "heat resistant, weak crash protection",
+            Self::ImpactHull => "crash resistant, poor heat resistance",
+            Self::PressureHull => "deep-zone specialist",
+            Self::ProspectorScanner => "finds ore veins, misses hazards",
+            Self::HazardScanner => "finds danger, limited ore detection",
+            Self::RelicScanner => "finds artifacts and anomalies",
+            Self::CargoBalloon => "huge capacity, bad handling",
+            Self::ArmoredCargoBay => "protects cargo, lower capacity",
+            Self::SortedCargoRack => "bonuses for diverse loads",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum LegendaryBlueprint {
     StarPlating,
     VoidTank,
@@ -636,6 +753,10 @@ pub struct GameState {
     #[serde(default)]
     pub legendary_blueprints: std::collections::BTreeSet<LegendaryBlueprint>,
     #[serde(default)]
+    pub rig_part_inventory: std::collections::BTreeSet<RigPartKind>,
+    #[serde(default)]
+    pub equipped_rig_parts: std::collections::BTreeMap<RigSlot, RigPartKind>,
+    #[serde(default)]
     pub challenge_badges: std::collections::BTreeSet<ChallengeBadge>,
     #[serde(default)]
     pub cosmetic_skins: std::collections::BTreeSet<CosmeticRigSkin>,
@@ -778,6 +899,10 @@ impl GameState {
     }
 
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "new game state initializes all saved systems"
+    )]
     pub fn new() -> Self {
         Self {
             terrain: Terrain::new_seeded(WORLD_WIDTH, WORLD_HEIGHT, WORLD_SEED),
@@ -814,6 +939,24 @@ impl GameState {
             last_run_summary: String::new(),
             fastest_star_core_seconds: None,
             legendary_blueprints: std::collections::BTreeSet::new(),
+            rig_part_inventory: std::collections::BTreeSet::from([
+                RigPartKind::TitanDrill,
+                RigPartKind::NeedleDrill,
+                RigPartKind::ResonanceDrill,
+                RigPartKind::LightweightEngine,
+                RigPartKind::HaulerEngine,
+                RigPartKind::BurstEngine,
+                RigPartKind::ThermalHull,
+                RigPartKind::ImpactHull,
+                RigPartKind::PressureHull,
+                RigPartKind::ProspectorScanner,
+                RigPartKind::HazardScanner,
+                RigPartKind::RelicScanner,
+                RigPartKind::CargoBalloon,
+                RigPartKind::ArmoredCargoBay,
+                RigPartKind::SortedCargoRack,
+            ]),
+            equipped_rig_parts: std::collections::BTreeMap::new(),
             challenge_badges: std::collections::BTreeSet::new(),
             cosmetic_skins: std::collections::BTreeSet::new(),
             rescue_count: 0,
@@ -3465,14 +3608,26 @@ impl GameState {
         }
         match blueprint {
             LegendaryBlueprint::StarPlating => {
+                self.rig_part_inventory.insert(RigPartKind::PressureHull);
+                self.equipped_rig_parts
+                    .insert(RigSlot::HullPlating, RigPartKind::PressureHull);
                 self.player.crafted_bulkheads = self.player.crafted_bulkheads.saturating_add(1);
                 self.player.hull = self.player.max_hull();
             }
             LegendaryBlueprint::VoidTank => {
+                self.rig_part_inventory.insert(RigPartKind::HaulerEngine);
+                self.equipped_rig_parts
+                    .insert(RigSlot::Engine, RigPartKind::HaulerEngine);
                 self.player.fuel_capacity += 20.0;
                 self.player.fuel = self.player.fuel_capacity;
             }
             LegendaryBlueprint::RelicSorter => {
+                self.rig_part_inventory.insert(RigPartKind::RelicScanner);
+                self.rig_part_inventory.insert(RigPartKind::CargoBalloon);
+                self.equipped_rig_parts
+                    .insert(RigSlot::ScannerModule, RigPartKind::RelicScanner);
+                self.equipped_rig_parts
+                    .insert(RigSlot::CargoModule, RigPartKind::CargoBalloon);
                 self.player.cargo_capacity = self.player.cargo_capacity.saturating_add(4);
             }
         }

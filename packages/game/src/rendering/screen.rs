@@ -1108,6 +1108,28 @@ fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
             Color::RAYWHITE,
         );
     }
+    draw.draw_text("Rig Parts", 850, 250, 20, Color::GREEN);
+    for (index, (slot, part)) in game.equipped_rig_parts.iter().take(8).enumerate() {
+        draw.draw_text(
+            &format!(
+                "{}: {} [{}]",
+                slot.title(),
+                part.title(),
+                part.slot().title()
+            ),
+            850,
+            280 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            15,
+            Color::RAYWHITE,
+        );
+        draw.draw_text(
+            &format!("{} | {}", part.rarity(), part.tradeoff()),
+            850,
+            296 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            12,
+            Color::LIGHTGRAY,
+        );
+    }
     draw.draw_text("Materials", 620, 545, 20, Color::SKYBLUE);
     let materials = [
         StrategicResourceKind::AncientAlloy,
