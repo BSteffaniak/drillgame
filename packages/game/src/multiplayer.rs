@@ -86,6 +86,27 @@ pub const SIMULATION_HZ: u32 = 60;
 /// Fixed-tick simulation delta in seconds.
 pub const FIXED_DELTA_SECONDS: f32 = 1.0 / 60.0;
 
+/// Local/client-only actions that should not be treated as authoritative world commands.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ClientAction {
+    Confirm,
+    Cancel,
+    Pause,
+    MenuUp,
+    MenuDown,
+    MenuLeft,
+    MenuRight,
+    ToggleDetails,
+    Save,
+    Load,
+    ToggleMap,
+    ToggleHelp,
+    VolumeUp,
+    VolumeDown,
+    ToggleFullscreen,
+    ExitRequested,
+}
+
 /// Authoritative gameplay commands submitted by a player.
 ///
 /// This intentionally represents gameplay intent rather than keyboard/gamepad state so the same

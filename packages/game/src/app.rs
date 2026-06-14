@@ -2,6 +2,7 @@ use crate::{
     audio::AudioBus,
     game_state::GameState,
     input::read_input,
+    input_mapping::map_local_input,
     multiplayer::FIXED_DELTA_SECONDS,
     rendering::GameRenderer,
     save::{SettingsFile, load_settings, save_settings},
@@ -46,6 +47,7 @@ pub fn run() {
         );
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
+        let _mapped_input = map_local_input(input);
 
         game.update(input, delta_seconds);
         if input.fullscreen {
