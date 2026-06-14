@@ -356,6 +356,7 @@ pub enum WorldEventKind {
     Earthquake,
     MeteorShower,
     RivalClaims,
+    AncientMachine,
 }
 
 impl WorldEventKind {
@@ -374,6 +375,7 @@ impl WorldEventKind {
             Self::Earthquake => "Earthquake",
             Self::MeteorShower => "Meteor shower",
             Self::RivalClaims => "Rival claims",
+            Self::AncientMachine => "Ancient machine",
         }
     }
 }
@@ -3207,7 +3209,7 @@ impl GameState {
         if !self.town_event_day.is_multiple_of(3) {
             return;
         }
-        let kind = match (self.market_salt + self.town_event_day) % 12 {
+        let kind = match (self.market_salt + self.town_event_day) % 13 {
             0 => WorldEventKind::MarketCrash,
             1 => WorldEventKind::MarketBoom,
             2 => WorldEventKind::RareBuyer,
@@ -3219,7 +3221,8 @@ impl GameState {
             8 => WorldEventKind::GasBloom,
             9 => WorldEventKind::Earthquake,
             10 => WorldEventKind::MeteorShower,
-            _ => WorldEventKind::RivalClaims,
+            11 => WorldEventKind::RivalClaims,
+            _ => WorldEventKind::AncientMachine,
         };
         if self.has_world_event(kind) {
             return;
@@ -3243,6 +3246,7 @@ impl GameState {
             WorldEventKind::Earthquake => {
                 self.spawn_cave_in();
                 self.apply_seismic_pump_strain();
+                self.migrate_ore_veins(severity);
                 self.shake_camera(0.6, 12.0 + severity as f32 * 4.0);
             }
             WorldEventKind::GasBloom => {
@@ -3261,6 +3265,7 @@ impl GameState {
                 self.expedition_offers.clear();
                 self.refresh_expedition_offers();
             }
+            WorldEventKind::AncientMachine => self.awaken_ancient_machine(severity),
             WorldEventKind::MarketCrash
             | WorldEventKind::MarketBoom
             | WorldEventKind::RareBuyer
@@ -3270,6 +3275,44 @@ impl GameState {
             | WorldEventKind::CollapseSurge
             | WorldEventKind::DeepPressureStorm => {}
         }
+    }
+
+    fn migrate_ore_veins(&mut self, severity: u32) {
+        let center_x = (self.player.x / TILE_SIZE).floor() as i32;
+        let base_y = (self.deepest_tile_reached + 8).clamp(12, self.terrain.height() - 2);
+        let minerals = [MineralKind::Gold, MineralKind::Ruby, MineralKind::Platinum];
+        let mut changed = 0_u32;
+        for index in 0..(3 + severity) {
+            let position = TilePosition {
+                x: (center_x + i32::try_from(index).unwrap_or(0) * 3 - 5)
+                    .clamp(1, self.terrain.width() - 2),
+                y: (base_y + i32::try_from(index % 3).unwrap_or(0) - 1)
+                    .clamp(8, self.terrain.height() - 2),
+            };
+            if !self.terrain.is_solid_at(position) {
+                continue;
+            }
+            let mineral = minerals[usize::try_from(index).unwrap_or(0) % minerals.len()];
+            if self.terrain.set_kind(position, TileKind::Ore(mineral)) {
+                self.mark_tile_visual_changed(position);
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.message = format!("Earthquake exposed {changed} shifted ore vein(s).");
+        }
+    }
+
+    fn awaken_ancient_machine(&mut self, severity: u32) {
+        self.player
+            .add_material(StrategicResourceKind::CoreShard, severity.max(1));
+        self.scanner_cooldown_seconds = self.scanner_cooldown_seconds.max(6.0);
+        self.sound_cues.push(SoundCue::Milestone);
+        self.shake_camera(0.35, 8.0 + severity as f32 * 2.0);
+        self.message = format!(
+            "Ancient machine awakened: recovered {} Core Shard(s), scanner interference rising.",
+            severity.max(1)
+        );
     }
 
     fn advance_town_event(&mut self) {
