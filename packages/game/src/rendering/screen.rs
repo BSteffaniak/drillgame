@@ -1022,7 +1022,7 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         Color::LIGHTGRAY,
     );
     let mineral_total = 10;
-    let artifact_total = 4;
+    let artifact_total = 11;
     draw.draw_text(
         &format!(
             "Minerals: {}/{} | Artifacts: {}/{} | Hazards: {} | Strata: {} | Stories: {}",
@@ -1067,6 +1067,13 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         ArtifactKind::OldCircuit,
         ArtifactKind::BuriedIdol,
         ArtifactKind::StarCore,
+        ArtifactKind::CrystalPrism,
+        ArtifactKind::RadiantShell,
+        ArtifactKind::PressureGlyph,
+        ArtifactKind::ReactorBloom,
+        ArtifactKind::MachineSigil,
+        ArtifactKind::VoidPearl,
+        ArtifactKind::MantleHeart,
     ];
     for (index, artifact) in artifacts.iter().enumerate() {
         let known = game.collection_log.artifacts.contains(artifact);

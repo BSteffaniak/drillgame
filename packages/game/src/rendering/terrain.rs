@@ -474,6 +474,13 @@ pub(super) const fn artifact_color(artifact: ArtifactKind) -> Color {
         ArtifactKind::OldCircuit => Color::VIOLET,
         ArtifactKind::BuriedIdol => Color::PINK,
         ArtifactKind::StarCore => Color::new(120, 220, 255, 255),
+        ArtifactKind::CrystalPrism => Color::SKYBLUE,
+        ArtifactKind::RadiantShell => Color::GOLD,
+        ArtifactKind::PressureGlyph => Color::BLUE,
+        ArtifactKind::ReactorBloom => Color::LIME,
+        ArtifactKind::MachineSigil => Color::ORANGE,
+        ArtifactKind::VoidPearl => Color::PURPLE,
+        ArtifactKind::MantleHeart => Color::RED,
     }
 }
 

@@ -177,6 +177,13 @@ pub enum ArtifactKind {
     OldCircuit,
     BuriedIdol,
     StarCore,
+    CrystalPrism,
+    RadiantShell,
+    PressureGlyph,
+    ReactorBloom,
+    MachineSigil,
+    VoidPearl,
+    MantleHeart,
 }
 
 impl ArtifactKind {
@@ -187,6 +194,13 @@ impl ArtifactKind {
             Self::OldCircuit => "Old Circuit",
             Self::BuriedIdol => "Buried Idol",
             Self::StarCore => "Star Core",
+            Self::CrystalPrism => "Crystal Prism",
+            Self::RadiantShell => "Radiant Shell",
+            Self::PressureGlyph => "Pressure Glyph",
+            Self::ReactorBloom => "Reactor Bloom",
+            Self::MachineSigil => "Machine Sigil",
+            Self::VoidPearl => "Void Pearl",
+            Self::MantleHeart => "Mantle Heart",
         }
     }
 
@@ -197,6 +211,13 @@ impl ArtifactKind {
             Self::OldCircuit => 240,
             Self::BuriedIdol => 420,
             Self::StarCore => 760,
+            Self::CrystalPrism => 900,
+            Self::RadiantShell => 980,
+            Self::PressureGlyph => 1_080,
+            Self::ReactorBloom => 1_180,
+            Self::MachineSigil => 1_260,
+            Self::VoidPearl => 1_420,
+            Self::MantleHeart => 1_650,
         }
     }
 }
@@ -558,6 +579,17 @@ const fn artifact_spot(x: i32, y: i32, seed: u64) -> bool {
 }
 
 const fn artifact_at_depth(x: i32, y: i32) -> ArtifactKind {
+    if let Some(stratum) = deep_stratum_at_depth(y) {
+        return match stratum {
+            DeepStratum::CrystalFaults => ArtifactKind::CrystalPrism,
+            DeepStratum::FossilOceans => ArtifactKind::RadiantShell,
+            DeepStratum::PressureCathedrals => ArtifactKind::PressureGlyph,
+            DeepStratum::RadioactiveHollow => ArtifactKind::ReactorBloom,
+            DeepStratum::AncientMachineLayer => ArtifactKind::MachineSigil,
+            DeepStratum::VoidGeodeFields => ArtifactKind::VoidPearl,
+            DeepStratum::MantleStormZone => ArtifactKind::MantleHeart,
+        };
+    }
     match y {
         0..=30 => ArtifactKind::Fossil,
         31..=50 => ArtifactKind::OldCircuit,
@@ -655,6 +687,15 @@ const fn tile_hardness(kind: TileKind) -> u8 {
             | MineralKind::Mythril,
         )
         | TileKind::Artifact(ArtifactKind::BuriedIdol | ArtifactKind::StarCore) => 4,
+        TileKind::Artifact(
+            ArtifactKind::CrystalPrism
+            | ArtifactKind::RadiantShell
+            | ArtifactKind::PressureGlyph
+            | ArtifactKind::ReactorBloom
+            | ArtifactKind::MachineSigil
+            | ArtifactKind::VoidPearl
+            | ArtifactKind::MantleHeart,
+        ) => 5,
     }
 }
 
