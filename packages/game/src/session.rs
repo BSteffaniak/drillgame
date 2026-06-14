@@ -88,6 +88,7 @@ impl WorldDelta {
 }
 
 const TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+const KEYFRAME_INTERVAL_TICKS: u64 = SIMULATION_HZ as u64 * 5;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TerrainChunkPosition {
@@ -165,6 +166,9 @@ pub enum WorldEvent {
     },
     TerrainChunksChanged {
         revisions: Vec<TerrainChunkRevision>,
+    },
+    SnapshotKeyframeReady {
+        tick: SimulationTick,
     },
     MessageChanged {
         message: String,
@@ -343,6 +347,20 @@ impl GameSession {
         self.current_tick = self.current_tick.next();
     }
 
+    #[must_use]
+    pub const fn keyframe_interval_ticks() -> u64 {
+        KEYFRAME_INTERVAL_TICKS
+    }
+
+    fn maybe_emit_keyframe_event(&mut self) {
+        let tick = self.current_tick.get();
+        if tick > 0 && tick.is_multiple_of(KEYFRAME_INTERVAL_TICKS) {
+            self.push_event(WorldEvent::SnapshotKeyframeReady {
+                tick: self.current_tick,
+            });
+        }
+    }
+
     pub fn drain_events(&mut self) -> Vec<WorldEvent> {
         mem::take(&mut self.pending_events)
     }
@@ -479,6 +497,7 @@ impl GameSession {
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
             });
+            self.maybe_emit_keyframe_event();
         }
         self.sync_client_settings_to_legacy_game();
         let previous_message = self.game.message.clone();
@@ -668,6 +687,22 @@ mod tests {
         assert_eq!(
             tracker.revision(super::TerrainChunkPosition { x: 1, y: 0 }),
             1
+        );
+    }
+
+    #[test]
+    fn keyframe_event_is_emitted_on_interval() {
+        let mut session = GameSession::new();
+        let delta_seconds = 5.0;
+
+        session.update_legacy(crate::input::PlayerInput::default(), delta_seconds);
+        let delta = session.drain_world_delta();
+
+        assert!(
+            delta
+                .events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::SnapshotKeyframeReady { .. }))
         );
     }
 }

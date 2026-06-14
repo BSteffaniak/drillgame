@@ -60,6 +60,7 @@ pub fn run() {
         let terrain_revisions = session.terrain_revisions();
         let _origin_chunk_revision =
             terrain_revisions.revision(crate::session::TerrainChunkPosition { x: 0, y: 0 });
+        let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
