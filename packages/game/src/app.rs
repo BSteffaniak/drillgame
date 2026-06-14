@@ -57,6 +57,9 @@ pub fn run() {
         let _sequenced_commands = session.sequence_local_commands(mapped_input.player_commands);
         let _pending_command_count = session.pending_command_count(current_tick);
         let _simulation_accumulator = session.simulation_accumulator();
+        let terrain_revisions = session.terrain_revisions();
+        let _origin_chunk_revision =
+            terrain_revisions.revision(crate::session::TerrainChunkPosition { x: 0, y: 0 });
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();

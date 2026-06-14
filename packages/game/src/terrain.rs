@@ -266,7 +266,7 @@ pub struct Tile {
     pub durability: u8,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub struct TilePosition {
     pub x: i32,
     pub y: i32,

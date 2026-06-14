@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, mem, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+    time::Duration,
+};
 
 use crate::{
     game_state::GameState,
@@ -83,6 +87,64 @@ impl WorldDelta {
     }
 }
 
+const TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TerrainChunkPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl TerrainChunkPosition {
+    #[must_use]
+    pub const fn from_tile(position: TilePosition) -> Self {
+        Self {
+            x: position.x.div_euclid(TERRAIN_CHUNK_SIZE_TILES),
+            y: position.y.div_euclid(TERRAIN_CHUNK_SIZE_TILES),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerrainChunkRevision {
+    pub position: TerrainChunkPosition,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TerrainRevisionTracker {
+    chunk_revisions: BTreeMap<TerrainChunkPosition, u64>,
+}
+
+impl TerrainRevisionTracker {
+    pub fn mark_tiles_changed<I>(&mut self, positions: I) -> Vec<TerrainChunkRevision>
+    where
+        I: IntoIterator<Item = TilePosition>,
+    {
+        let changed_chunks = positions
+            .into_iter()
+            .map(TerrainChunkPosition::from_tile)
+            .collect::<BTreeSet<_>>();
+
+        changed_chunks
+            .into_iter()
+            .map(|position| {
+                let revision = self.chunk_revisions.entry(position).or_insert(0);
+                *revision = revision.saturating_add(1);
+                TerrainChunkRevision {
+                    position,
+                    revision: *revision,
+                }
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn revision(&self, position: TerrainChunkPosition) -> u64 {
+        self.chunk_revisions.get(&position).copied().unwrap_or(0)
+    }
+}
+
 /// Lightweight simulation events emitted by the session compatibility layer.
 ///
 /// These are intentionally separate from save data and renderer snapshots. As systems migrate out
@@ -100,6 +162,9 @@ pub enum WorldEvent {
     TerrainRefreshRequested,
     TerrainTilesChanged {
         positions: Vec<TilePosition>,
+    },
+    TerrainChunksChanged {
+        revisions: Vec<TerrainChunkRevision>,
     },
     MessageChanged {
         message: String,
@@ -204,6 +269,7 @@ pub struct GameSession {
     local_client: ClientState,
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
+    terrain_revisions: TerrainRevisionTracker,
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
     pending_events: Vec<WorldEvent>,
 }
@@ -219,6 +285,7 @@ impl GameSession {
             local_client: ClientState::default(),
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
+            terrain_revisions: TerrainRevisionTracker::default(),
             pending_commands: BTreeMap::new(),
             pending_events: Vec::new(),
         }
@@ -256,6 +323,11 @@ impl GameSession {
     #[must_use]
     pub const fn simulation_accumulator(&self) -> Duration {
         self.simulation_accumulator
+    }
+
+    #[must_use]
+    pub const fn terrain_revisions(&self) -> &TerrainRevisionTracker {
+        &self.terrain_revisions
     }
 
     pub fn accumulate_frame_delta(&mut self, delta_seconds: f32) -> u32 {
@@ -443,9 +515,12 @@ impl GameSession {
             self.push_event(WorldEvent::TerrainRefreshRequested);
         }
         if !self.game.visual_changes.changed_tiles.is_empty() {
-            self.push_event(WorldEvent::TerrainTilesChanged {
-                positions: self.game.visual_changes.changed_tiles.clone(),
-            });
+            let positions = self.game.visual_changes.changed_tiles.clone();
+            let revisions = self.terrain_revisions.mark_tiles_changed(positions.clone());
+            self.push_event(WorldEvent::TerrainTilesChanged { positions });
+            if !revisions.is_empty() {
+                self.push_event(WorldEvent::TerrainChunksChanged { revisions });
+            }
         }
     }
 }
@@ -574,5 +649,25 @@ mod tests {
         assert_eq!(delta.tick, session.current_tick());
         assert!(!delta.is_empty());
         assert!(session.drain_world_delta().is_empty());
+    }
+
+    #[test]
+    fn terrain_revision_tracker_coalesces_changed_tiles_by_chunk() {
+        let mut tracker = super::TerrainRevisionTracker::default();
+        let revisions = tracker.mark_tiles_changed([
+            crate::terrain::TilePosition { x: 0, y: 0 },
+            crate::terrain::TilePosition { x: 3, y: 4 },
+            crate::terrain::TilePosition { x: 17, y: 0 },
+        ]);
+
+        assert_eq!(revisions.len(), 2);
+        assert_eq!(
+            tracker.revision(super::TerrainChunkPosition { x: 0, y: 0 }),
+            1
+        );
+        assert_eq!(
+            tracker.revision(super::TerrainChunkPosition { x: 1, y: 0 }),
+            1
+        );
     }
 }
