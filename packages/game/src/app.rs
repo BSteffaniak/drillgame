@@ -1,7 +1,10 @@
 use crate::{
     audio::AudioBus,
     input::read_input,
-    input_mapping::map_local_input,
+    input_mapping::{
+        ai_commands, gamepad_commands, local_keyboard_commands, map_local_input, online_commands,
+        replay_commands, split_screen_commands,
+    },
     multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand, SimulationTick},
     rendering::GameRenderer,
     save::{load_settings, save_settings},
@@ -121,7 +124,22 @@ fn observe_multiplayer_scaffolding(
     let _target_compatibility_mode = GameSession::target_compatibility_mode();
     let _planned_state_boundaries = GameSession::planned_state_boundaries();
     let _planned_transient_effect_boundaries = GameSession::planned_transient_effect_boundaries();
-    let _planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
+    let planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
+    let future_command_producers = [
+        local_keyboard_commands(crate::input::PlayerInput::default()),
+        gamepad_commands(Vec::new()),
+        split_screen_commands(Vec::new()),
+        online_commands(Vec::new()),
+        replay_commands(Vec::new()),
+        ai_commands(Vec::new()),
+    ];
+    let all_future_producers_authoritative = future_command_producers
+        .iter()
+        .all(crate::input_mapping::CommandProducer::uses_authoritative_path);
+    let _ = (
+        planned_player_scoped_systems,
+        all_future_producers_authoritative,
+    );
     let _fixed_tick_audit_items = GameSession::fixed_tick_audit_items();
     let _snapshot_purposes = GameSession::snapshot_purposes();
     let _client_presentation_fields = GameSession::client_presentation_fields();

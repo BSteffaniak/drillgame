@@ -1,12 +1,60 @@
 use crate::{
     input::PlayerInput,
-    multiplayer::{ClientAction, PlayerCommand},
+    multiplayer::{ClientAction, CommandSource, PlayerCommand},
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MappedInput {
     pub client_actions: Vec<ClientAction>,
     pub player_commands: Vec<PlayerCommand>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandProducer {
+    pub source: CommandSource,
+    pub commands: Vec<PlayerCommand>,
+}
+
+impl CommandProducer {
+    #[must_use]
+    pub const fn new(source: CommandSource, commands: Vec<PlayerCommand>) -> Self {
+        Self { source, commands }
+    }
+
+    #[must_use]
+    pub const fn uses_authoritative_path(&self) -> bool {
+        self.source.uses_authoritative_command_path()
+    }
+}
+
+#[must_use]
+pub const fn replay_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
+    CommandProducer::new(CommandSource::Replay, commands)
+}
+
+#[must_use]
+pub const fn ai_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
+    CommandProducer::new(CommandSource::Ai, commands)
+}
+
+#[must_use]
+pub const fn gamepad_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
+    CommandProducer::new(CommandSource::Gamepad, commands)
+}
+
+#[must_use]
+pub const fn split_screen_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
+    CommandProducer::new(CommandSource::SplitScreenClient, commands)
+}
+
+#[must_use]
+pub const fn online_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
+    CommandProducer::new(CommandSource::OnlineClient, commands)
+}
+
+#[must_use]
+pub fn local_keyboard_commands(input: PlayerInput) -> CommandProducer {
+    CommandProducer::new(CommandSource::Keyboard, map_player_commands(input))
 }
 
 #[must_use]
@@ -91,9 +139,15 @@ const fn infrastructure_slots(input: PlayerInput) -> [(bool, u8); 6] {
 
 #[cfg(test)]
 mod tests {
-    use crate::{input::PlayerInput, multiplayer::ClientAction};
+    use crate::{
+        input::PlayerInput,
+        multiplayer::{ClientAction, CommandSource},
+    };
 
-    use super::{PlayerCommand, map_local_input};
+    use super::{
+        PlayerCommand, ai_commands, gamepad_commands, local_keyboard_commands, map_local_input,
+        online_commands, replay_commands, split_screen_commands,
+    };
 
     #[test]
     fn maps_movement_every_frame() {
@@ -134,5 +188,30 @@ mod tests {
                 .contains(&ClientAction::ToggleFullscreen)
         );
         assert!(mapped.player_commands.contains(&PlayerCommand::PlaceBomb));
+    }
+
+    #[test]
+    fn command_producers_cover_future_input_sources() {
+        let commands = vec![PlayerCommand::Confirm];
+        let producers = [
+            local_keyboard_commands(PlayerInput::default()),
+            gamepad_commands(commands.clone()),
+            split_screen_commands(commands.clone()),
+            online_commands(commands.clone()),
+            replay_commands(commands.clone()),
+            ai_commands(commands),
+        ];
+
+        assert!(
+            producers
+                .iter()
+                .all(super::CommandProducer::uses_authoritative_path)
+        );
+        assert_eq!(producers[0].source, CommandSource::Keyboard);
+        assert_eq!(producers[1].source, CommandSource::Gamepad);
+        assert_eq!(producers[2].source, CommandSource::SplitScreenClient);
+        assert_eq!(producers[3].source, CommandSource::OnlineClient);
+        assert_eq!(producers[4].source, CommandSource::Replay);
+        assert_eq!(producers[5].source, CommandSource::Ai);
     }
 }
