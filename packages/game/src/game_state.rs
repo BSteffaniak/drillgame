@@ -2842,6 +2842,14 @@ impl GameState {
         }
     }
 
+    #[must_use]
+    pub fn signal_relay_count(&self) -> usize {
+        self.infrastructure
+            .iter()
+            .filter(|item| item.kind == InfrastructureKind::SignalRelay)
+            .count()
+    }
+
     fn recover_lost_cargo_if_near(&mut self) {
         let (Some(x), Some(y)) = (self.lost_cargo_x, self.lost_cargo_y) else {
             return;
@@ -2878,23 +2886,29 @@ impl GameState {
         }
 
         let base_fee = rescue_fee(self.player.y);
+        let relay_count = self.signal_relay_count() as u32;
+        let relay_discount_percent = relay_count.saturating_mul(10).min(50);
+        let relayed_fee = base_fee.saturating_mul(100 - relay_discount_percent) / 100;
         let fee_divisor = if self.player.insured {
             u32::from(self.player.insurance_tier).saturating_add(1)
         } else {
             1
         };
-        let fee = (base_fee / fee_divisor).min(self.player.credits);
+        let fee = (relayed_fee / fee_divisor).min(self.player.credits);
         self.player.credits -= fee;
         self.rescue_count += 1;
         let before_minerals = self.player.cargo.clone();
         let before_artifacts = self.player.artifacts.clone();
-        let lost_items = if self.player.insured && self.player.insurance_tier >= 2 {
+        let mut lost_items = if self.player.insured && self.player.insurance_tier >= 2 {
             0
         } else if self.player.insured {
             drop_quarter_cargo(&mut self.player)
         } else {
             drop_half_cargo(&mut self.player)
         };
+        if self.player.y >= 70.0 * TILE_SIZE && relay_count == 0 {
+            lost_items = lost_items.saturating_add(drop_quarter_cargo(&mut self.player));
+        }
         self.player.insured = false;
         self.last_rescue_x = Some(self.player.x);
         self.last_rescue_y = Some(self.player.y);
@@ -2905,9 +2919,10 @@ impl GameState {
             self.lost_minerals = cargo_difference(&before_minerals, &self.player.cargo);
             self.lost_artifacts = cargo_difference(&before_artifacts, &self.player.artifacts);
         }
-        self.last_rescue_summary = format!("Fee: {fee} credits. Cargo lost: {lost_items}.");
+        self.last_rescue_summary =
+            format!("Fee: {fee} credits. Cargo lost: {lost_items}. Relays online: {relay_count}.");
         self.depot_receipts.push(format!(
-            "RESCUE INVOICE\nDepth: {}m\nFee: {fee} cr\nCargo lost: {lost_items}",
+            "RESCUE INVOICE\nDepth: {}m\nFee: {fee} cr\nRelay discount: {relay_discount_percent}%\nCargo lost: {lost_items}",
             (self.player.y / TILE_SIZE).floor() as i32
         ));
         if self.depot_receipts.len() > 5 {

@@ -83,8 +83,9 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if game.player.signal_relay_kits > 0 {
         draw.draw_text(
             &format!(
-                "Signal relays: {} (R to place)",
-                game.player.signal_relay_kits
+                "Signal relays: {} kit(s), {} online (R to place)",
+                game.player.signal_relay_kits,
+                game.signal_relay_count()
             ),
             720,
             74,
