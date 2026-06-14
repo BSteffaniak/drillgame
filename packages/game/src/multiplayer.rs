@@ -296,6 +296,44 @@ impl CommandSequenceTracker {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientAuthoritativeDomain {
+    Terrain,
+    Cargo,
+    Credits,
+    Upgrades,
+    Damage,
+    Contracts,
+    Progression,
+}
+
+#[must_use]
+pub const fn client_authority_allowed(_domain: ClientAuthoritativeDomain) -> bool {
+    false
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PacketRecoveryAction {
+    None,
+    RequestChunk,
+    AwaitKeyframe,
+}
+
+#[must_use]
+pub const fn packet_recovery_action(
+    known_revision: u64,
+    authoritative_revision: u64,
+    keyframe_due: bool,
+) -> PacketRecoveryAction {
+    if known_revision == authoritative_revision {
+        PacketRecoveryAction::None
+    } else if keyframe_due {
+        PacketRecoveryAction::AwaitKeyframe
+    } else {
+        PacketRecoveryAction::RequestChunk
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandSource {
     Keyboard,
     Gamepad,
@@ -511,9 +549,10 @@ mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandSequenceTracker, CommandSource, InputSequence,
         PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
-        SessionToken, SimulationTick, command_conflicts, host_save_decision,
-        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
-        initial_resource_ownership_policy, initial_transport_policy, per_client_ui_policy,
+        SessionToken, SimulationTick, client_authority_allowed, command_conflicts,
+        host_save_decision, initial_collision_policy, initial_discovery_sharing_policy,
+        initial_message_routing_policy, initial_resource_ownership_policy,
+        initial_transport_policy, packet_recovery_action, per_client_ui_policy,
         session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
     };
 
@@ -743,6 +782,41 @@ mod tests {
             sources
                 .into_iter()
                 .all(CommandSource::uses_authoritative_command_path)
+        );
+    }
+
+    #[test]
+    fn packet_recovery_uses_chunks_or_keyframes_for_revision_mismatch() {
+        assert_eq!(
+            packet_recovery_action(7, 7, false),
+            super::PacketRecoveryAction::None
+        );
+        assert_eq!(
+            packet_recovery_action(6, 7, false),
+            super::PacketRecoveryAction::RequestChunk
+        );
+        assert_eq!(
+            packet_recovery_action(6, 7, true),
+            super::PacketRecoveryAction::AwaitKeyframe
+        );
+    }
+
+    #[test]
+    fn clients_are_never_authoritative_for_world_progression_domains() {
+        let domains = [
+            super::ClientAuthoritativeDomain::Terrain,
+            super::ClientAuthoritativeDomain::Cargo,
+            super::ClientAuthoritativeDomain::Credits,
+            super::ClientAuthoritativeDomain::Upgrades,
+            super::ClientAuthoritativeDomain::Damage,
+            super::ClientAuthoritativeDomain::Contracts,
+            super::ClientAuthoritativeDomain::Progression,
+        ];
+
+        assert!(
+            domains
+                .into_iter()
+                .all(|domain| !client_authority_allowed(domain))
         );
     }
 }
