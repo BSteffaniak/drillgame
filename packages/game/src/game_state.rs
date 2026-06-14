@@ -28,7 +28,7 @@ use crate::{
 
 pub const TILE_SIZE: f32 = 32.0;
 const WORLD_WIDTH: i32 = 240;
-const WORLD_HEIGHT: i32 = 90;
+const WORLD_HEIGHT: i32 = 220;
 const GRAVITY: f32 = 780.0;
 const HORIZONTAL_ACCELERATION: f32 = 900.0;
 const THRUST_ACCELERATION: f32 = 1_250.0;
@@ -1700,6 +1700,9 @@ impl GameState {
             return false;
         };
         if self.player.cargo.is_empty() {
+            if self.fast_travel_between_cargo_lifts(lift_index) {
+                return true;
+            }
             "Cargo lift ready, but mineral cargo is empty.".clone_into(&mut self.message);
             return true;
         }
@@ -1732,6 +1735,31 @@ impl GameState {
             capacity - remaining
         );
         self.sound_cues.push(SoundCue::Sell);
+        true
+    }
+
+    fn fast_travel_between_cargo_lifts(&mut self, current_lift_index: usize) -> bool {
+        if self.town_development.reputation < 6 {
+            return false;
+        }
+        let Some(current) = self.infrastructure.get(current_lift_index) else {
+            return false;
+        };
+        let destination = self
+            .infrastructure
+            .iter()
+            .enumerate()
+            .filter(|(index, item)| {
+                *index != current_lift_index && item.kind == InfrastructureKind::CargoLift
+            })
+            .min_by_key(|(_, item)| item.position.y.abs_diff(current.position.y));
+        let Some((_, lift)) = destination else {
+            return false;
+        };
+        self.player.x = lift.position.x as f32 * TILE_SIZE + TILE_SIZE / 2.0;
+        self.player.y = lift.position.y as f32 * TILE_SIZE + TILE_SIZE / 2.0;
+        "Cargo lift network moved rig to the nearest linked station.".clone_into(&mut self.message);
+        self.sound_cues.push(SoundCue::Milestone);
         true
     }
 
