@@ -273,6 +273,24 @@ impl WorldSnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CompactWorldDelta {
+    Noop {
+        tick: SimulationTick,
+    },
+    TerrainChunks {
+        tick: SimulationTick,
+        revisions: Vec<TerrainChunkRevision>,
+    },
+    Players {
+        tick: SimulationTick,
+        players: Vec<PlayerId>,
+    },
+    KeyframeRequired {
+        tick: SimulationTick,
+    },
+}
+
 /// Compatibility world delta emitted after a session update.
 ///
 /// This is intentionally event-based for now. Later phases can replace or augment it with compact
@@ -292,6 +310,56 @@ impl WorldDelta {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.events.is_empty()
+    }
+
+    #[must_use]
+    pub fn compact_network_delta(&self) -> CompactWorldDelta {
+        let mut terrain_revisions = Vec::new();
+        let mut players = BTreeSet::new();
+        let mut keyframe_required = false;
+
+        for event in &self.events {
+            match event {
+                WorldEvent::TerrainChunksChanged { revisions } => {
+                    terrain_revisions.extend(revisions.iter().cloned());
+                }
+                WorldEvent::TerrainRefreshRequested | WorldEvent::SnapshotKeyframeReady { .. } => {
+                    keyframe_required = true;
+                }
+                WorldEvent::PlayerChanged { player_id }
+                | WorldEvent::CargoChanged { player_id }
+                | WorldEvent::PlayerDamaged { player_id }
+                | WorldEvent::PurchaseCompleted { player_id }
+                | WorldEvent::RescueTriggered { player_id }
+                | WorldEvent::BombPlaced { player_id } => {
+                    players.insert(*player_id);
+                }
+                WorldEvent::TickAdvanced { .. }
+                | WorldEvent::CommandsProcessed { .. }
+                | WorldEvent::TerrainTilesChanged { .. }
+                | WorldEvent::MessageChanged { .. }
+                | WorldEvent::HazardChanged
+                | WorldEvent::ImportantEffectTriggered
+                | WorldEvent::ClientExitRequested { .. }
+                | WorldEvent::ClientSettingsChanged { .. } => {}
+            }
+        }
+
+        if keyframe_required {
+            CompactWorldDelta::KeyframeRequired { tick: self.tick }
+        } else if !terrain_revisions.is_empty() {
+            CompactWorldDelta::TerrainChunks {
+                tick: self.tick,
+                revisions: terrain_revisions,
+            }
+        } else if !players.is_empty() {
+            CompactWorldDelta::Players {
+                tick: self.tick,
+                players: players.into_iter().collect(),
+            }
+        } else {
+            CompactWorldDelta::Noop { tick: self.tick }
+        }
     }
 }
 
@@ -1777,6 +1845,35 @@ mod tests {
             events
                 .iter()
                 .any(|event| matches!(event, super::WorldEvent::BombPlaced { .. }))
+        );
+    }
+
+    #[test]
+    fn world_delta_compacts_events_for_network_sync() {
+        let delta = super::WorldDelta::new(
+            SimulationTick::new(8),
+            vec![super::WorldEvent::PlayerChanged {
+                player_id: LOCAL_PLAYER_ID,
+            }],
+        );
+
+        assert_eq!(
+            delta.compact_network_delta(),
+            super::CompactWorldDelta::Players {
+                tick: SimulationTick::new(8),
+                players: vec![LOCAL_PLAYER_ID],
+            }
+        );
+
+        let keyframe_delta = super::WorldDelta::new(
+            SimulationTick::new(10),
+            vec![super::WorldEvent::TerrainRefreshRequested],
+        );
+        assert_eq!(
+            keyframe_delta.compact_network_delta(),
+            super::CompactWorldDelta::KeyframeRequired {
+                tick: SimulationTick::new(10),
+            }
         );
     }
 

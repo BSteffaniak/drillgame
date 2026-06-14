@@ -112,6 +112,8 @@ fn observe_multiplayer_scaffolding(
         world_probe.player_inventory_summary(crate::multiplayer::LOCAL_PLAYER_ID);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
+    let _compact_delta =
+        crate::session::WorldDelta::new(session.current_tick(), Vec::new()).compact_network_delta();
     let _sequenced_commands = session.sequence_local_commands(player_commands);
     let _pending_command_count = session.pending_command_count(current_tick);
     let _processed_command_count =
