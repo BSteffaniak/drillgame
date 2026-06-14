@@ -56,6 +56,24 @@ impl MineralKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum StrategicResourceKind {
+    AncientAlloy,
+    CoreShard,
+    CrystalLens,
+}
+
+impl StrategicResourceKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AncientAlloy => "Ancient Alloy",
+            Self::CoreShard => "Core Shard",
+            Self::CrystalLens => "Crystal Lens",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum ArtifactKind {
     Fossil,
     OldCircuit,

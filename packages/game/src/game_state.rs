@@ -20,7 +20,10 @@ use crate::{
     player::Player,
     save::{load_game, load_game_slot, save_exists, save_game, save_game_slot, save_slot_count},
     surface::surface_building_at_tile,
-    terrain::{ArtifactKind, MineResult, MineralKind, Terrain, TileKind, TilePosition},
+    terrain::{
+        ArtifactKind, MineResult, MineralKind, StrategicResourceKind, Terrain, TileKind,
+        TilePosition,
+    },
 };
 
 pub const TILE_SIZE: f32 = 32.0;
@@ -1185,11 +1188,38 @@ impl GameState {
     fn confirm_town_development(&mut self) {
         let building = TownBuilding::ALL[self.selected_menu_item.min(TownBuilding::ALL.len() - 1)];
         let cost = self.town_development.upgrade_cost(building);
+        let material_gate = self.town_development.level(building) >= 1;
+        if material_gate
+            && self
+                .player
+                .materials
+                .get(&StrategicResourceKind::AncientAlloy)
+                .copied()
+                .unwrap_or(0)
+                == 0
+        {
+            self.message = format!(
+                "{} level {} upgrade also needs 1 Ancient Alloy from Deep Claim ore.",
+                building.name(),
+                self.town_development.level(building) + 1
+            );
+            return;
+        }
         if self.player.credits < cost {
             self.message = format!("{} upgrade costs {cost} credits.", building.name());
             return;
         }
         self.player.credits -= cost;
+        if material_gate {
+            if let Some(count) = self
+                .player
+                .materials
+                .get_mut(&StrategicResourceKind::AncientAlloy)
+            {
+                *count = count.saturating_sub(1);
+            }
+            self.player.materials.retain(|_, count| *count > 0);
+        }
         *self.town_development.level_mut(building) += 1;
         self.town_development.reputation = self.town_development.reputation.saturating_add(1);
         self.message = format!(
@@ -2009,6 +2039,13 @@ impl GameState {
         if let TileKind::Ore(mineral) = mined {
             if self.player.add_cargo(mineral) {
                 self.message = format!("Loaded {} ore worth {}.", mineral.name(), mineral.value());
+                if self.deep_claim_status == DeepClaimStatus::Unlocked
+                    && target.y >= 70
+                    && let Some(material) = deep_claim_material_for(mineral, target)
+                {
+                    self.player.add_material(material, 1);
+                    let _ = write!(self.message, " Found {}.", material.name());
+                }
             } else {
                 "Cargo full. Return to depot to sell.".clone_into(&mut self.message);
             }
@@ -2718,6 +2755,25 @@ fn mine_target(player: &Player, input: PlayerInput) -> Option<(TilePosition, Dri
             },
         )
     })
+}
+
+const fn deep_claim_material_for(
+    mineral: MineralKind,
+    position: TilePosition,
+) -> Option<StrategicResourceKind> {
+    let roll = (position.x.unsigned_abs() + position.y as u32 + mineral.value()).wrapping_rem(6);
+    match (mineral, roll) {
+        (MineralKind::Mythril | MineralKind::Uranium, 0 | 1) => {
+            Some(StrategicResourceKind::CoreShard)
+        }
+        (MineralKind::Diamond | MineralKind::Platinum, 0) => {
+            Some(StrategicResourceKind::CrystalLens)
+        }
+        (MineralKind::Ruby | MineralKind::Emerald | MineralKind::Gold, 0) => {
+            Some(StrategicResourceKind::AncientAlloy)
+        }
+        _ => None,
+    }
 }
 
 fn consume_expedition_delivery(expedition: Expedition, player: &mut Player) {

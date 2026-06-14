@@ -10,7 +10,7 @@ use crate::{
     game_state::{GameState, ModalScreen, PauseOption, RunMode, SideContractKind, TILE_SIZE},
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
-    terrain::{ArtifactKind, MineralKind, TileKind, TilePosition},
+    terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TileKind, TilePosition},
 };
 
 struct MinimapProjection {
@@ -863,6 +863,22 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             Color::RAYWHITE,
         );
     }
+    draw.draw_text("Materials", 620, 430, 20, Color::SKYBLUE);
+    let materials = [
+        StrategicResourceKind::AncientAlloy,
+        StrategicResourceKind::CoreShard,
+        StrategicResourceKind::CrystalLens,
+    ];
+    for (index, material) in materials.iter().enumerate() {
+        let count = game.player.materials.get(material).copied().unwrap_or(0);
+        draw.draw_text(
+            &format!("{}: {count}", material.name()),
+            620,
+            465 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
+            18,
+            Color::RAYWHITE,
+        );
+    }
 }
 
 fn draw_expedition_board(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -933,6 +949,19 @@ fn draw_town_development(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         215,
         20,
         Color::SKYBLUE,
+    );
+    let alloy = game
+        .player
+        .materials
+        .get(&StrategicResourceKind::AncientAlloy)
+        .copied()
+        .unwrap_or(0);
+    draw.draw_text(
+        &format!("Ancient Alloy: {alloy} (needed after level 1 upgrades)"),
+        330,
+        238,
+        18,
+        Color::LIGHTGRAY,
     );
     for (index, building) in TownBuilding::ALL.iter().enumerate() {
         let level = game.town_development.level(*building);
