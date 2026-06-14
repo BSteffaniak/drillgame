@@ -3079,7 +3079,8 @@ impl GameState {
             return;
         }
 
-        let damage = (self.player.velocity_y - SAFE_LANDING_SPEED) * CRASH_DAMAGE_SCALE;
+        let raw_damage = (self.player.velocity_y - SAFE_LANDING_SPEED) * CRASH_DAMAGE_SCALE;
+        let damage = self.mechanic_crash_damage(raw_damage);
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
         self.shake_camera(0.28, 7.0);
@@ -3087,8 +3088,14 @@ impl GameState {
         self.message = format!("Hard landing! Hull took {damage:.0} damage.");
     }
 
+    fn mechanic_crash_damage(&self, damage: f32) -> f32 {
+        let mitigation = (f32::from(self.town_development.mechanic_level) * 0.08).min(0.32);
+        damage * (1.0 - mitigation)
+    }
+
     fn apply_bump_damage(&mut self, speed: f32) {
-        let damage = (speed - SAFE_LANDING_SPEED * 0.75) * CRASH_DAMAGE_SCALE * 0.5;
+        let raw_damage = (speed - SAFE_LANDING_SPEED * 0.75) * CRASH_DAMAGE_SCALE * 0.5;
+        let damage = self.mechanic_crash_damage(raw_damage);
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
         self.shake_camera(0.2, 5.0);
