@@ -600,6 +600,16 @@ pub enum ExpeditionObjectiveKind {
     DeliverCargo,
     ScanHazards,
     BuildPumpStations,
+    RecoverProbe,
+    MineVein,
+    ScanAnomaly,
+    RescueMiner,
+    DeliverExplosives,
+    StabilizeCollapse,
+    RetrieveArtifact,
+    ReachSignal,
+    NoDamageReturn,
+    FastReturn,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -623,6 +633,24 @@ impl Expedition {
             ExpeditionObjectiveKind::BuildPumpStations => {
                 format!("Install {} pump station(s)", self.required)
             }
+            ExpeditionObjectiveKind::RecoverProbe => "Recover a lost probe".to_owned(),
+            ExpeditionObjectiveKind::MineVein => {
+                format!("Mine {} vein x{}", self.target.name(), self.required)
+            }
+            ExpeditionObjectiveKind::ScanAnomaly => format!("Scan {} anomaly", self.target.name()),
+            ExpeditionObjectiveKind::RescueMiner => "Rescue trapped miner signal".to_owned(),
+            ExpeditionObjectiveKind::DeliverExplosives => {
+                format!("Deliver {} charges underground", self.required)
+            }
+            ExpeditionObjectiveKind::StabilizeCollapse => "Stabilize collapse zone".to_owned(),
+            ExpeditionObjectiveKind::RetrieveArtifact => {
+                format!("Retrieve ancient {}", self.target.name())
+            }
+            ExpeditionObjectiveKind::ReachSignal => {
+                "Reach temporary signal before expiry".to_owned()
+            }
+            ExpeditionObjectiveKind::NoDamageReturn => "Return with no hull damage".to_owned(),
+            ExpeditionObjectiveKind::FastReturn => "Return before deadline".to_owned(),
         }
     }
     #[must_use]
@@ -631,9 +659,15 @@ impl Expedition {
             ExpeditionObjectiveKind::ReachDepth if self.required >= 120 => "extreme",
             ExpeditionObjectiveKind::ReachDepth if self.required >= 90 => "high",
             ExpeditionObjectiveKind::DeliverCargo if self.required >= 3 => "medium",
-            ExpeditionObjectiveKind::ScanHazards | ExpeditionObjectiveKind::BuildPumpStations => {
-                "medium"
-            }
+            ExpeditionObjectiveKind::ScanHazards
+            | ExpeditionObjectiveKind::BuildPumpStations
+            | ExpeditionObjectiveKind::RecoverProbe
+            | ExpeditionObjectiveKind::DeliverExplosives
+            | ExpeditionObjectiveKind::StabilizeCollapse
+            | ExpeditionObjectiveKind::RescueMiner => "medium",
+            ExpeditionObjectiveKind::ReachSignal
+            | ExpeditionObjectiveKind::NoDamageReturn
+            | ExpeditionObjectiveKind::FastReturn => "high",
             _ => "low",
         }
     }
@@ -1325,6 +1359,30 @@ impl GameState {
                     .filter(|item| item.kind == InfrastructureKind::PumpStation)
                     .count()
                     .min(expedition.required as usize) as u32
+            }
+            ExpeditionObjectiveKind::RecoverProbe
+            | ExpeditionObjectiveKind::ScanAnomaly
+            | ExpeditionObjectiveKind::RescueMiner
+            | ExpeditionObjectiveKind::StabilizeCollapse
+            | ExpeditionObjectiveKind::ReachSignal => u32::from(
+                self.deepest_tile_reached
+                    >= i32::try_from(60 + expedition.required * 10).unwrap_or(i32::MAX),
+            ),
+            ExpeditionObjectiveKind::MineVein => self.player.cargo_used().min(expedition.required),
+            ExpeditionObjectiveKind::DeliverExplosives => {
+                self.player.bombs.min(expedition.required)
+            }
+            ExpeditionObjectiveKind::RetrieveArtifact => self
+                .player
+                .artifacts
+                .values()
+                .sum::<u32>()
+                .min(expedition.required),
+            ExpeditionObjectiveKind::NoDamageReturn => {
+                u32::from(self.player.hull >= self.player.max_hull())
+            }
+            ExpeditionObjectiveKind::FastReturn => {
+                u32::from(self.town_event_day <= expedition.expires_day)
             }
         }
     }
@@ -2111,6 +2169,25 @@ impl GameState {
                 expires_day: day + 5,
             },
         ];
+        let rotating_kind = match day % 10 {
+            0 => ExpeditionObjectiveKind::RecoverProbe,
+            1 => ExpeditionObjectiveKind::MineVein,
+            2 => ExpeditionObjectiveKind::ScanAnomaly,
+            3 => ExpeditionObjectiveKind::RescueMiner,
+            4 => ExpeditionObjectiveKind::DeliverExplosives,
+            5 => ExpeditionObjectiveKind::StabilizeCollapse,
+            6 => ExpeditionObjectiveKind::RetrieveArtifact,
+            7 => ExpeditionObjectiveKind::ReachSignal,
+            8 => ExpeditionObjectiveKind::NoDamageReturn,
+            _ => ExpeditionObjectiveKind::FastReturn,
+        };
+        self.expedition_offers.push(Expedition {
+            kind: rotating_kind,
+            target: TileKind::Artifact(ArtifactKind::BuriedIdol),
+            required: 1 + day % 3,
+            reward: 520 + day * 16,
+            expires_day: day + 2,
+        });
         if self.town_development.reputation >= 8 && self.best_return_depth >= 80 {
             self.expedition_offers.push(Expedition {
                 kind: ExpeditionObjectiveKind::ReachDepth,
@@ -2181,6 +2258,25 @@ impl GameState {
             }
         });
         for expedition in completed_expeditions {
+            match expedition.kind {
+                ExpeditionObjectiveKind::RetrieveArtifact => {
+                    self.legendary_blueprints
+                        .insert(LegendaryBlueprint::StarPlating);
+                    self.rig_part_inventory.insert(RigPartKind::ResonanceDrill);
+                }
+                ExpeditionObjectiveKind::ScanAnomaly | ExpeditionObjectiveKind::ScanHazards => {
+                    self.player
+                        .add_material(StrategicResourceKind::CrystalLens, expedition.required);
+                }
+                ExpeditionObjectiveKind::RecoverProbe | ExpeditionObjectiveKind::ReachSignal => {
+                    self.rig_part_inventory.insert(RigPartKind::HazardScanner);
+                }
+                ExpeditionObjectiveKind::MineVein => {
+                    self.player
+                        .add_material(StrategicResourceKind::AncientAlloy, 1);
+                }
+                _ => {}
+            }
             consume_expedition_delivery(expedition, &mut self.player);
         }
         if reward > 0 {
@@ -4421,6 +4517,18 @@ fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
                 .filter(|item| item.kind == InfrastructureKind::PumpStation)
                 .count()
                 >= expedition.required as usize
+        }
+        ExpeditionObjectiveKind::RecoverProbe
+        | ExpeditionObjectiveKind::MineVein
+        | ExpeditionObjectiveKind::ScanAnomaly
+        | ExpeditionObjectiveKind::RescueMiner
+        | ExpeditionObjectiveKind::DeliverExplosives
+        | ExpeditionObjectiveKind::StabilizeCollapse
+        | ExpeditionObjectiveKind::RetrieveArtifact
+        | ExpeditionObjectiveKind::ReachSignal
+        | ExpeditionObjectiveKind::NoDamageReturn
+        | ExpeditionObjectiveKind::FastReturn => {
+            game.expedition_progress(expedition) >= expedition.required
         }
     }
 }
