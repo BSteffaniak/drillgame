@@ -433,6 +433,36 @@ impl AuthoritativeWorldSummary {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlayerInventorySummary {
+    pub cargo_used: u32,
+    pub cargo_capacity: u32,
+    pub material_count: u32,
+    pub artifact_count: u32,
+    pub credits: u32,
+    pub upgrade_level_total: u32,
+}
+
+impl PlayerInventorySummary {
+    #[must_use]
+    pub fn from_player(player: &Player) -> Self {
+        Self {
+            cargo_used: player.cargo_used(),
+            cargo_capacity: player.cargo_capacity,
+            material_count: player.materials.values().sum(),
+            artifact_count: player.artifacts.values().sum(),
+            credits: player.credits,
+            upgrade_level_total: u32::from(player.fuel_tank_level)
+                + u32::from(player.cargo_bay_level)
+                + u32::from(player.drill_strength)
+                + u32::from(player.engine_level)
+                + u32::from(player.hull_level)
+                + u32::from(player.radiator_level)
+                + u32::from(player.scanner_level),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerScopedCommandOutcome {
     Applied,
     IgnoredUnavailable,
@@ -515,6 +545,12 @@ impl WorldState {
         self.players.get_mut(&player_id)
     }
 
+    #[must_use]
+    pub fn player_inventory_summary(&self, player_id: PlayerId) -> Option<PlayerInventorySummary> {
+        self.player(player_id)
+            .map(PlayerInventorySummary::from_player)
+    }
+
     pub fn apply_player_command(
         &mut self,
         player_id: PlayerId,
@@ -561,8 +597,19 @@ impl WorldState {
                     PlayerScopedCommandOutcome::Applied
                 }
             }
-            PlayerCommand::BuyUpgrade { .. }
-            | PlayerCommand::Interact
+            PlayerCommand::BuyUpgrade { index } => {
+                match index {
+                    0 => player.drill_strength = player.drill_strength.saturating_add(1),
+                    1 => player.engine_level = player.engine_level.saturating_add(1),
+                    2 => player.hull_level = player.hull_level.saturating_add(1),
+                    3 => player.cargo_bay_level = player.cargo_bay_level.saturating_add(1),
+                    4 => player.fuel_tank_level = player.fuel_tank_level.saturating_add(1),
+                    5 => player.scanner_level = player.scanner_level.saturating_add(1),
+                    _ => return PlayerScopedCommandOutcome::IgnoredUnavailable,
+                }
+                PlayerScopedCommandOutcome::Applied
+            }
+            PlayerCommand::Interact
             | PlayerCommand::Cancel
             | PlayerCommand::Confirm
             | PlayerCommand::PlaceInfrastructure { .. }
@@ -1605,6 +1652,25 @@ mod tests {
         );
         world.set_active_drill(LOCAL_PLAYER_ID, None);
         assert!(world.active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn compatibility_world_summarizes_inventory_and_applies_upgrade_intent() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let before = world
+            .player_inventory_summary(LOCAL_PLAYER_ID)
+            .expect("player summary");
+
+        assert_eq!(before.cargo_used, 0);
+        assert_eq!(before.credits, 0);
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::BuyUpgrade { index: 0 }),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        let after = world
+            .player_inventory_summary(LOCAL_PLAYER_ID)
+            .expect("player summary");
+        assert!(after.upgrade_level_total > before.upgrade_level_total);
     }
 
     #[test]
