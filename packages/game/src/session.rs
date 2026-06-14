@@ -546,6 +546,26 @@ impl ClientView {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalTentativeFeedback {
+    MovementIntent,
+    DrillContact,
+    DrillProgressVisual,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CorrectionOffset {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl CorrectionOffset {
+    #[must_use]
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PredictionFailure {
     TerrainAlreadyChanged,
     HazardOrRescueChangedState,
@@ -564,6 +584,8 @@ pub struct ClientPredictionState {
     unacknowledged_commands: Vec<SequencedPlayerCommand>,
     remote_player_snapshots: BTreeMap<PlayerId, Vec<PlayerSnapshot>>,
     prediction_failures: Vec<PredictionFailure>,
+    pending_feedback: Vec<LocalTentativeFeedback>,
+    correction_offset: Option<CorrectionOffset>,
 }
 
 impl ClientPredictionState {
@@ -632,6 +654,32 @@ impl ClientPredictionState {
 
     pub fn clear_prediction_failures(&mut self) {
         self.prediction_failures.clear();
+    }
+
+    #[must_use]
+    pub fn pending_feedback(&self) -> &[LocalTentativeFeedback] {
+        &self.pending_feedback
+    }
+
+    pub fn push_feedback(&mut self, feedback: LocalTentativeFeedback) {
+        self.pending_feedback.push(feedback);
+    }
+
+    pub fn clear_feedback(&mut self) {
+        self.pending_feedback.clear();
+    }
+
+    #[must_use]
+    pub const fn correction_offset(&self) -> Option<CorrectionOffset> {
+        self.correction_offset
+    }
+
+    pub const fn set_correction_offset(&mut self, offset: CorrectionOffset) {
+        self.correction_offset = Some(offset);
+    }
+
+    pub const fn clear_correction_offset(&mut self) {
+        self.correction_offset = None;
     }
 
     pub fn push_remote_snapshot(&mut self, snapshot: PlayerSnapshot) {
@@ -1464,6 +1512,23 @@ mod tests {
         assert_eq!(prediction.prediction_failures().len(), 2);
         prediction.clear_prediction_failures();
         assert!(prediction.prediction_failures().is_empty());
+    }
+
+    #[test]
+    fn prediction_state_tracks_local_feedback_and_correction_offsets() {
+        let mut prediction = super::ClientPredictionState::default();
+
+        prediction.push_feedback(super::LocalTentativeFeedback::MovementIntent);
+        prediction.push_feedback(super::LocalTentativeFeedback::DrillContact);
+        prediction.set_correction_offset(super::CorrectionOffset::new(2.0, -1.0));
+
+        assert_eq!(prediction.pending_feedback().len(), 2);
+        let offset = prediction.correction_offset().expect("offset set");
+        assert!((offset.x - 2.0).abs() < f32::EPSILON);
+        prediction.clear_feedback();
+        prediction.clear_correction_offset();
+        assert!(prediction.pending_feedback().is_empty());
+        assert!(prediction.correction_offset().is_none());
     }
 
     #[test]
