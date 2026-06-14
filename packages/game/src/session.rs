@@ -1348,6 +1348,41 @@ impl GameSession {
         self.pending_commands.remove(&tick).unwrap_or_default()
     }
 
+    pub fn process_authoritative_commands_for_tick(&mut self, tick: SimulationTick) -> usize {
+        let tick_commands = self.drain_commands_for_tick(tick);
+        let command_count = tick_commands.len();
+        self.push_event(WorldEvent::CommandsProcessed {
+            tick,
+            command_count,
+        });
+
+        let controlled_player_id = self.local_client().controlled_player_id;
+        let mut latest_local_sequence = None;
+        let mut changed_players = BTreeSet::new();
+        for command in &tick_commands {
+            if self
+                .world
+                .apply_player_command(command.player_id, &command.command)
+                == PlayerScopedCommandOutcome::Applied
+            {
+                changed_players.insert(command.player_id);
+            }
+            if command.player_id == controlled_player_id {
+                latest_local_sequence = latest_local_sequence.max(Some(command.sequence));
+            }
+        }
+
+        for player_id in changed_players {
+            self.push_event(WorldEvent::PlayerChanged { player_id });
+        }
+
+        if let Some(sequence) = latest_local_sequence {
+            self.acknowledge_client_commands_through(self.local_client_id, sequence);
+        }
+
+        command_count
+    }
+
     pub fn acknowledge_client_commands_through(
         &mut self,
         client_id: ClientId,
@@ -1363,21 +1398,7 @@ impl GameSession {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
-            let tick_commands = self.drain_commands_for_tick(tick);
-            self.push_event(WorldEvent::CommandsProcessed {
-                tick,
-                command_count: tick_commands.len(),
-            });
-            if !tick_commands.is_empty() {
-                let latest_sequence = tick_commands
-                    .iter()
-                    .filter(|command| command.player_id == self.local_client().controlled_player_id)
-                    .map(|command| command.sequence)
-                    .max();
-                if let Some(sequence) = latest_sequence {
-                    self.acknowledge_client_commands_through(self.local_client_id, sequence);
-                }
-            }
+            self.process_authoritative_commands_for_tick(tick);
             self.advance_tick();
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
@@ -1929,6 +1950,36 @@ mod tests {
 
         assert_eq!(commands.len(), 1);
         assert_eq!(session.pending_command_count(tick), 0);
+    }
+
+    #[test]
+    fn authoritative_command_processing_applies_buffered_player_commands() {
+        let mut session = GameSession::new();
+        let tick = session.current_tick();
+
+        session.sequence_local_commands(vec![PlayerCommand::Movement {
+            horizontal: 0.5,
+            thrust: false,
+            drill_down: false,
+        }]);
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+        let velocity_x = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists")
+            .velocity_x;
+        assert!((velocity_x - 0.5).abs() < f32::EPSILON);
+        assert_eq!(
+            session.local_client().prediction().replay_commands().len(),
+            0
+        );
+        assert!(session.drain_events().iter().any(|event| matches!(
+            event,
+            super::WorldEvent::PlayerChanged {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
     }
 
     #[test]

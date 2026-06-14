@@ -2,7 +2,7 @@ use crate::{
     audio::AudioBus,
     input::read_input,
     input_mapping::map_local_input,
-    multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand},
+    multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand, SimulationTick},
     rendering::GameRenderer,
     save::{load_settings, save_settings},
     session::{
@@ -111,6 +111,8 @@ fn observe_multiplayer_scaffolding(
     let _world_snapshot = session.world_snapshot();
     let _sequenced_commands = session.sequence_local_commands(player_commands);
     let _pending_command_count = session.pending_command_count(current_tick);
+    let _processed_command_count =
+        session.process_authoritative_commands_for_tick(SimulationTick::new(u64::MAX));
     let _simulation_accumulator = session.simulation_accumulator();
     let terrain_revisions = session.terrain_revisions();
     let _origin_chunk_revision = terrain_revisions.revision(TerrainChunkPosition { x: 0, y: 0 });
