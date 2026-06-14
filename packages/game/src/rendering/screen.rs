@@ -996,13 +996,14 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let artifact_total = 4;
     draw.draw_text(
         &format!(
-            "Minerals: {}/{} | Artifacts: {}/{} | Hazards: {} | Strata: {}",
+            "Minerals: {}/{} | Artifacts: {}/{} | Hazards: {} | Strata: {} | Stories: {}",
             game.collection_log.minerals.len(),
             mineral_total,
             game.collection_log.artifacts.len(),
             artifact_total,
             game.collection_log.hazards.len(),
-            game.collection_log.strata.len()
+            game.collection_log.strata.len(),
+            game.collection_log.story_records.len()
         ),
         330,
         220,
@@ -1048,17 +1049,40 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             if known { Color::RAYWHITE } else { Color::GRAY },
         );
     }
-    draw.draw_text("Hazards", 620, 265, 20, Color::ORANGE);
+    draw_research_log_sidebar(draw, game);
+}
+
+fn draw_research_log_sidebar(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("NPC Stories", 620, 250, 20, Color::GOLD);
+    let stories = [
+        crate::game_state::NpcStoryRecord::ValeIntro,
+        crate::game_state::NpcStoryRecord::IonaSilverWarning,
+        crate::game_state::NpcStoryRecord::KadeRelicSignal,
+        crate::game_state::NpcStoryRecord::ValeThermalWarning,
+        crate::game_state::NpcStoryRecord::KadeStarCoreSignal,
+        crate::game_state::NpcStoryRecord::ValeStarCoreSecured,
+    ];
+    for (index, story) in stories.iter().enumerate() {
+        let known = game.collection_log.story_records.contains(story);
+        draw.draw_text(
+            if known { story.title() } else { "???" },
+            620,
+            280 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            16,
+            if known { Color::RAYWHITE } else { Color::GRAY },
+        );
+    }
+    draw.draw_text("Hazards", 620, 410, 20, Color::ORANGE);
     for (index, hazard) in game.collection_log.hazards.iter().enumerate() {
         draw.draw_text(
             hazard.name(),
             620,
-            300 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
-            18,
+            438 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            16,
             Color::RAYWHITE,
         );
     }
-    draw.draw_text("Materials", 620, 430, 20, Color::SKYBLUE);
+    draw.draw_text("Materials", 620, 545, 20, Color::SKYBLUE);
     let materials = [
         StrategicResourceKind::AncientAlloy,
         StrategicResourceKind::CoreShard,
@@ -1069,8 +1093,8 @@ fn draw_research_log(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(
             &format!("{}: {count}", material.name()),
             620,
-            465 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
-            18,
+            570 + i32::try_from(index).unwrap_or(i32::MAX) * 20,
+            16,
             Color::RAYWHITE,
         );
     }

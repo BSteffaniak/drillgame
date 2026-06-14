@@ -310,6 +310,30 @@ impl RecipeKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum NpcStoryRecord {
+    ValeIntro,
+    IonaSilverWarning,
+    KadeRelicSignal,
+    ValeThermalWarning,
+    KadeStarCoreSignal,
+    ValeStarCoreSecured,
+}
+
+impl NpcStoryRecord {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::ValeIntro => "Vale: Profitable Shaft",
+            Self::IonaSilverWarning => "Iona: Silver Strata",
+            Self::KadeRelicSignal => "Kade: Relic Signals",
+            Self::ValeThermalWarning => "Vale: Thermal Readings",
+            Self::KadeStarCoreSignal => "Kade: Star Core Harmonics",
+            Self::ValeStarCoreSecured => "Vale: Star Core Secured",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum CollectionRewardKind {
     Minerals,
     Artifacts,
@@ -328,6 +352,8 @@ pub struct CollectionLog {
     pub strata: std::collections::BTreeSet<i32>,
     #[serde(default)]
     pub rewards_claimed: std::collections::BTreeSet<CollectionRewardKind>,
+    #[serde(default)]
+    pub story_records: std::collections::BTreeSet<NpcStoryRecord>,
 }
 
 impl CollectionLog {
@@ -903,6 +929,7 @@ impl GameState {
         }
 
         self.current_zone = surface_zone_at(self.player.x, self.player.y);
+        self.update_npc_story_records();
         if self.handle_modal(input) {
             self.update_camera(delta_seconds);
             return;
@@ -2278,6 +2305,24 @@ impl GameState {
             "Gas bloom: corrosive vapor is spreading through open tunnels."
                 .clone_into(&mut self.message);
         }
+    }
+
+    fn update_npc_story_records(&mut self) {
+        if self.current_zone != Some(SurfaceZone::Headquarters) {
+            return;
+        }
+        let record = if self.won_game {
+            NpcStoryRecord::ValeStarCoreSecured
+        } else {
+            match self.deepest_tile_reached {
+                0..=19 => NpcStoryRecord::ValeIntro,
+                20..=39 => NpcStoryRecord::IonaSilverWarning,
+                40..=59 => NpcStoryRecord::KadeRelicSignal,
+                60..=79 => NpcStoryRecord::ValeThermalWarning,
+                _ => NpcStoryRecord::KadeStarCoreSignal,
+            }
+        };
+        self.collection_log.story_records.insert(record);
     }
 
     fn update_collection_rewards(&mut self) {
