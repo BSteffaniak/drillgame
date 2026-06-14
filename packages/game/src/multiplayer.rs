@@ -235,6 +235,17 @@ pub const fn default_local_client_runtime() -> ClientRuntimeConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TransportIntegrationStatus {
+    Deferred,
+    Selected,
+}
+
+#[must_use]
+pub const fn transport_integration_status() -> TransportIntegrationStatus {
+    TransportIntegrationStatus::Deferred
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NetworkRuntimePlan {
     pub host: HostRuntimeConfig,
@@ -249,6 +260,48 @@ impl Default for NetworkRuntimePlan {
             local_client: default_local_client_runtime(),
             transport_selected: false,
         }
+    }
+}
+
+impl NetworkRuntimePlan {
+    #[must_use]
+    pub fn reliable_exchange_messages(
+        &self,
+        snapshot_tick: SimulationTick,
+    ) -> [ProtocolMessage; 3] {
+        let player_id = self.local_client.player_id.unwrap_or(LOCAL_PLAYER_ID);
+        [
+            ProtocolMessage::JoinRequest {
+                client_id: self.local_client.client_id,
+                session_token: None,
+            },
+            ProtocolMessage::JoinAccepted {
+                client_id: self.local_client.client_id,
+                player_id,
+                snapshot_tick,
+            },
+            ProtocolMessage::TerrainChunkRequest {
+                chunk_x: 0,
+                chunk_y: 0,
+                known_revision: 0,
+            },
+        ]
+    }
+
+    #[must_use]
+    pub fn reconnect_messages(&self, session_token: SessionToken) -> [ProtocolMessage; 2] {
+        let player_id = self.local_client.player_id.unwrap_or(LOCAL_PLAYER_ID);
+        [
+            ProtocolMessage::ReconnectRequest {
+                client_id: self.local_client.client_id,
+                session_token,
+            },
+            ProtocolMessage::JoinAccepted {
+                client_id: self.local_client.client_id,
+                player_id,
+                snapshot_tick: SimulationTick::default(),
+            },
+        ]
     }
 }
 
@@ -645,6 +698,7 @@ mod tests {
         initial_message_routing_policy, initial_resource_ownership_policy,
         initial_transport_policy, packet_recovery_action, per_client_ui_policy,
         session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        transport_integration_status,
     };
 
     #[test]
@@ -690,9 +744,47 @@ mod tests {
         assert!(plan.host.allow_join_in_progress);
         assert!(plan.host.allow_reconnect);
         assert!(!plan.transport_selected);
+        assert_eq!(
+            transport_integration_status(),
+            super::TransportIntegrationStatus::Deferred
+        );
         assert_eq!(plan.local_client, local_client);
         assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
         assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
+    }
+
+    #[test]
+    fn runtime_plan_builds_join_reconnect_and_chunk_exchange_messages() {
+        let plan = NetworkRuntimePlan::default();
+        let join_messages = plan.reliable_exchange_messages(SimulationTick::new(44));
+
+        assert!(
+            join_messages
+                .iter()
+                .all(|message| { message.reliability_class() == ReliabilityClass::Reliable })
+        );
+        assert!(matches!(
+            join_messages[0],
+            ProtocolMessage::JoinRequest { .. }
+        ));
+        assert!(matches!(
+            join_messages[1],
+            ProtocolMessage::JoinAccepted { .. }
+        ));
+        assert!(matches!(
+            join_messages[2],
+            ProtocolMessage::TerrainChunkRequest { .. }
+        ));
+
+        let reconnect_messages = plan.reconnect_messages(SessionToken::new(77));
+        assert!(matches!(
+            reconnect_messages[0],
+            ProtocolMessage::ReconnectRequest { .. }
+        ));
+        assert!(matches!(
+            reconnect_messages[1],
+            ProtocolMessage::JoinAccepted { .. }
+        ));
     }
 
     #[test]
