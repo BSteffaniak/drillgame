@@ -1163,6 +1163,7 @@ impl GameState {
         self.reveal_scanner_area();
         self.update_collection_rewards();
         self.update_survey_drones();
+        self.update_persistent_ore_prediction();
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
         if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
             && !self.game_over
@@ -1280,6 +1281,42 @@ impl GameState {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fn update_persistent_ore_prediction(&mut self) {
+        if self.town_development.scanner_lab_level < 2 || !self.update_ticks.is_multiple_of(90) {
+            return;
+        }
+        let center_x = (self.player.x / TILE_SIZE).floor() as i32;
+        let center_y = (self.player.y / TILE_SIZE).floor() as i32;
+        let depth_bias = 8 + i32::from(self.town_development.scanner_lab_level) * 4;
+        let radius = 4 + i32::from(self.town_development.scanner_lab_level);
+        for y in center_y..=center_y + depth_bias {
+            for x in center_x - radius..=center_x + radius {
+                let position = TilePosition { x, y };
+                let Some(tile) = self.terrain.tile(position) else {
+                    continue;
+                };
+                if !matches!(tile.kind, TileKind::Ore(_) | TileKind::Artifact(_)) {
+                    continue;
+                }
+                if self
+                    .scan_markers
+                    .iter()
+                    .any(|marker| marker.position == position)
+                {
+                    continue;
+                }
+                self.scan_markers.push(ScanMarker {
+                    position,
+                    kind: tile.kind,
+                });
+                if self.scan_markers.len() > 80 {
+                    self.scan_markers.remove(0);
+                }
+                return;
             }
         }
     }
@@ -1847,7 +1884,7 @@ impl GameState {
         }
         if input.menu_down {
             let max_item = match modal {
-                ModalScreen::Depot => 3,
+                ModalScreen::Depot => 4,
                 ModalScreen::Fuel
                 | ModalScreen::Repair
                 | ModalScreen::Options
@@ -2605,6 +2642,7 @@ impl GameState {
             }
             1 => self.confirm_sell_cargo(),
             2 => self.auto_sort_low_grade_cargo(),
+            3 => self.sell_scan_data(),
             _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
     }
@@ -2714,6 +2752,28 @@ impl GameState {
                 format!("Sold cargo for {adjusted} credits at current mineral markets.")
             };
         }
+    }
+
+    fn sell_scan_data(&mut self) {
+        if self.town_development.scanner_lab_level == 0 {
+            "Scanner Lab must be funded before scan data has a buyer."
+                .clone_into(&mut self.message);
+            return;
+        }
+        let marker_count = u32::try_from(self.scan_markers.len()).unwrap_or(u32::MAX);
+        if marker_count == 0 {
+            "No scan markers to sell. Pulse the scanner or deploy survey drones first."
+                .clone_into(&mut self.message);
+            return;
+        }
+        let payout =
+            marker_count.saturating_mul(6 + u32::from(self.town_development.scanner_lab_level) * 4);
+        self.scan_markers.clear();
+        self.player.credits = self.player.credits.saturating_add(payout);
+        self.total_earnings = self.total_earnings.saturating_add(payout);
+        self.sound_cues.push(SoundCue::Sell);
+        self.message =
+            format!("Scanner Lab bought {marker_count} mapped contact(s) for {payout} credits.");
     }
 
     fn auto_sort_low_grade_cargo(&mut self) {

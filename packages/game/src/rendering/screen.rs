@@ -563,6 +563,13 @@ pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             Color::SKYBLUE,
         );
     }
+    draw.draw_text(
+        "Gold ore/relic  Red hazard",
+        x,
+        y + height + 4,
+        10,
+        Color::LIGHTGRAY,
+    );
     draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
 }
 
@@ -1377,6 +1384,7 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Complete active contract",
         "Sell loose cargo",
         "Auto-sort low-grade cargo",
+        "Sell scan data",
         "Receipt history",
     ];
     for (index, option) in options.iter().enumerate() {
