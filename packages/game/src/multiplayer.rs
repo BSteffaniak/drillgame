@@ -185,6 +185,73 @@ pub enum ReliabilityClass {
     UnreliableSequenced,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum HostRuntimeMode {
+    InProcessLocal,
+    DedicatedServer,
+    CloudSession,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HostRuntimeConfig {
+    pub mode: HostRuntimeMode,
+    pub max_clients: u8,
+    pub allow_join_in_progress: bool,
+    pub allow_reconnect: bool,
+}
+
+impl Default for HostRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            mode: HostRuntimeMode::InProcessLocal,
+            max_clients: 4,
+            allow_join_in_progress: true,
+            allow_reconnect: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ClientRuntimeMode {
+    LocalInput,
+    RemoteNetwork,
+    Replay,
+    Ai,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientRuntimeConfig {
+    pub mode: ClientRuntimeMode,
+    pub client_id: ClientId,
+    pub player_id: Option<PlayerId>,
+}
+
+#[must_use]
+pub const fn default_local_client_runtime() -> ClientRuntimeConfig {
+    ClientRuntimeConfig {
+        mode: ClientRuntimeMode::LocalInput,
+        client_id: LOCAL_CLIENT_ID,
+        player_id: Some(LOCAL_PLAYER_ID),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkRuntimePlan {
+    pub host: HostRuntimeConfig,
+    pub local_client: ClientRuntimeConfig,
+    pub transport_selected: bool,
+}
+
+impl Default for NetworkRuntimePlan {
+    fn default() -> Self {
+        Self {
+            host: HostRuntimeConfig::default(),
+            local_client: default_local_client_runtime(),
+            transport_selected: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum ProtocolMessage {
     JoinRequest {
@@ -571,13 +638,13 @@ pub const fn session_continuity_decision(
 mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandSequenceTracker, CommandSource, InputSequence,
-        PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
-        SessionToken, SimulationTick, client_authority_allowed, command_conflicts,
-        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
-        initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
-        per_client_ui_policy, session_continuity_decision, session_shutdown_decision,
-        terrain_recovery_decision,
+        NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass,
+        SequencedPlayerCommand, SessionToken, SimulationTick, client_authority_allowed,
+        command_conflicts, default_local_client_runtime, disconnect_reservation_policy,
+        host_save_decision, initial_collision_policy, initial_discovery_sharing_policy,
+        initial_message_routing_policy, initial_resource_ownership_policy,
+        initial_transport_policy, packet_recovery_action, per_client_ui_policy,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
     };
 
     #[test]
@@ -612,6 +679,20 @@ mod tests {
             reconnect_message.reliability_class(),
             ReliabilityClass::Reliable
         );
+    }
+
+    #[test]
+    fn network_runtime_plan_scaffolds_host_and_client_roles_without_transport() {
+        let plan = NetworkRuntimePlan::default();
+        let local_client = default_local_client_runtime();
+
+        assert_eq!(plan.host.max_clients, 4);
+        assert!(plan.host.allow_join_in_progress);
+        assert!(plan.host.allow_reconnect);
+        assert!(!plan.transport_selected);
+        assert_eq!(plan.local_client, local_client);
+        assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
+        assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
     }
 
     #[test]
