@@ -272,6 +272,12 @@ impl ClientView {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PredictionFailure {
+    TerrainAlreadyChanged,
+    HazardOrRescueChangedState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CorrectionPlan {
     None,
     Smooth,
@@ -283,6 +289,7 @@ pub enum CorrectionPlan {
 pub struct ClientPredictionState {
     unacknowledged_commands: Vec<SequencedPlayerCommand>,
     remote_player_snapshots: BTreeMap<PlayerId, Vec<PlayerSnapshot>>,
+    prediction_failures: Vec<PredictionFailure>,
 }
 
 impl ClientPredictionState {
@@ -338,6 +345,19 @@ impl ClientPredictionState {
         seconds_per_command
             .saturating_mul(u32::try_from(command_count).expect("command count is capped"))
             .as_secs_f32()
+    }
+
+    #[must_use]
+    pub fn prediction_failures(&self) -> &[PredictionFailure] {
+        &self.prediction_failures
+    }
+
+    pub fn note_prediction_failure(&mut self, failure: PredictionFailure) {
+        self.prediction_failures.push(failure);
+    }
+
+    pub fn clear_prediction_failures(&mut self) {
+        self.prediction_failures.clear();
     }
 
     pub fn push_remote_snapshot(&mut self, snapshot: PlayerSnapshot) {
@@ -961,6 +981,18 @@ mod tests {
                 .predicted_input_lag_seconds()
                 > 0.0
         );
+    }
+
+    #[test]
+    fn prediction_state_records_and_clears_prediction_failures() {
+        let mut prediction = super::ClientPredictionState::default();
+
+        prediction.note_prediction_failure(super::PredictionFailure::TerrainAlreadyChanged);
+        prediction.note_prediction_failure(super::PredictionFailure::HazardOrRescueChangedState);
+
+        assert_eq!(prediction.prediction_failures().len(), 2);
+        prediction.clear_prediction_failures();
+        assert!(prediction.prediction_failures().is_empty());
     }
 
     #[test]

@@ -2,10 +2,12 @@ use crate::{
     audio::AudioBus,
     input::read_input,
     input_mapping::map_local_input,
-    multiplayer::FIXED_DELTA_SECONDS,
+    multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand},
     rendering::GameRenderer,
     save::{load_settings, save_settings},
-    session::GameSession,
+    session::{
+        ClientPredictionState, GameSession, PlayerSnapshot, PredictionFailure, TerrainChunkPosition,
+    },
 };
 
 const WINDOW_WIDTH: i32 = 1280;
@@ -47,48 +49,7 @@ pub fn run() {
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
         let mapped_input = map_local_input(input);
-        let _local_client_id = session.local_client().client_id;
-        let current_tick = session.current_tick();
-        let _local_player = session
-            .world()
-            .player(session.local_client().controlled_player_id);
-        let _legacy_visual_changes = session.game().visual_changes();
-        let _player_count = session.world().player_count();
-        let _world_snapshot = session.world_snapshot();
-        let _sequenced_commands = session.sequence_local_commands(mapped_input.player_commands);
-        let _pending_command_count = session.pending_command_count(current_tick);
-        let _simulation_accumulator = session.simulation_accumulator();
-        let terrain_revisions = session.terrain_revisions();
-        let _origin_chunk_revision =
-            terrain_revisions.revision(crate::session::TerrainChunkPosition { x: 0, y: 0 });
-        let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
-        let _local_view = session.local_view();
-        let _client_view_count = session.client_count();
-        let _client_views = session.render_views();
-
-        let _prediction_replay_len = session.local_client().prediction().replay_commands().len();
-        let _prediction_buffer_len = session
-            .local_client()
-            .prediction()
-            .unacknowledged_commands()
-            .len();
-
-        let _prediction_correction_plan =
-            crate::session::ClientPredictionState::correction_plan(0.0, 0.0);
-        let _interpolation_delay =
-            crate::session::ClientPredictionState::interpolation_delay_seconds(delta_seconds);
-        let _can_extrapolate = crate::session::ClientPredictionState::should_extrapolate(0.0);
-        let _predicted_input_lag = session
-            .local_client()
-            .prediction()
-            .predicted_input_lag_seconds();
-        let mut prediction_probe = session.local_client().prediction().clone();
-        prediction_probe.push_remote_snapshot(crate::session::PlayerSnapshot::from_player(
-            crate::multiplayer::LOCAL_PLAYER_ID,
-            &session.game().player,
-        ));
-        let _remote_snapshot_count =
-            prediction_probe.remote_snapshot_count(crate::multiplayer::LOCAL_PLAYER_ID);
+        observe_multiplayer_scaffolding(&mut session, mapped_input.player_commands, delta_seconds);
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
@@ -115,4 +76,46 @@ pub fn run() {
         let client_views = session.client_views();
         renderer.render_client_views(&mut draw, session.game(), &client_views);
     }
+}
+
+fn observe_multiplayer_scaffolding(
+    session: &mut GameSession,
+    player_commands: Vec<PlayerCommand>,
+    delta_seconds: f32,
+) {
+    let _local_client_id = session.local_client().client_id;
+    let current_tick = session.current_tick();
+    let _local_player = session
+        .world()
+        .player(session.local_client().controlled_player_id);
+    let _legacy_visual_changes = session.game().visual_changes();
+    let _player_count = session.world().player_count();
+    let _world_snapshot = session.world_snapshot();
+    let _sequenced_commands = session.sequence_local_commands(player_commands);
+    let _pending_command_count = session.pending_command_count(current_tick);
+    let _simulation_accumulator = session.simulation_accumulator();
+    let terrain_revisions = session.terrain_revisions();
+    let _origin_chunk_revision = terrain_revisions.revision(TerrainChunkPosition { x: 0, y: 0 });
+    let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
+    let _local_view = session.local_view();
+    let _client_view_count = session.client_count();
+    let _client_views = session.render_views();
+    let prediction = session.local_client().prediction();
+    let _prediction_replay_len = prediction.replay_commands().len();
+    let _prediction_buffer_len = prediction.unacknowledged_commands().len();
+    let _prediction_failure_count = prediction.prediction_failures().len();
+    let _prediction_correction_plan = ClientPredictionState::correction_plan(0.0, 0.0);
+    let _interpolation_delay = ClientPredictionState::interpolation_delay_seconds(delta_seconds);
+    let _can_extrapolate = ClientPredictionState::should_extrapolate(0.0);
+    let _predicted_input_lag = prediction.predicted_input_lag_seconds();
+    let mut prediction_probe = prediction.clone();
+    prediction_probe.note_prediction_failure(PredictionFailure::TerrainAlreadyChanged);
+    prediction_probe.note_prediction_failure(PredictionFailure::HazardOrRescueChangedState);
+    prediction_probe.clear_prediction_failures();
+    prediction_probe.push_remote_snapshot(PlayerSnapshot::from_player(
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        &session.game().player,
+    ));
+    let _remote_snapshot_count =
+        prediction_probe.remote_snapshot_count(crate::multiplayer::LOCAL_PLAYER_ID);
 }
