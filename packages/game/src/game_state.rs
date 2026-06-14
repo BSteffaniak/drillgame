@@ -566,6 +566,18 @@ pub struct GameState {
     #[serde(default)]
     pub total_earnings: u32,
     #[serde(default)]
+    pub total_resources_refined: u32,
+    #[serde(default)]
+    pub best_return_depth: i32,
+    #[serde(default)]
+    pub most_valuable_cargo_run: u32,
+    #[serde(default)]
+    pub expeditions_completed: u32,
+    #[serde(default)]
+    pub infrastructure_built: u32,
+    #[serde(default)]
+    pub last_run_summary: String,
+    #[serde(default)]
     pub rescue_count: u32,
     #[serde(default)]
     pub artifacts_found: u32,
@@ -732,6 +744,12 @@ impl GameState {
             depot_receipts: Vec::new(),
             deepest_tile_reached: 0,
             total_earnings: 0,
+            total_resources_refined: 0,
+            best_return_depth: 0,
+            most_valuable_cargo_run: 0,
+            expeditions_completed: 0,
+            infrastructure_built: 0,
+            last_run_summary: String::new(),
             rescue_count: 0,
             artifacts_found: 0,
             trip_best_depth: 0,
@@ -1345,6 +1363,7 @@ impl GameState {
             *count -= 5;
             self.player.cargo.retain(|_, count| *count > 0);
             self.player.add_material(material, 1);
+            self.total_resources_refined = self.total_resources_refined.saturating_add(1);
             if let Some(processor) = self.infrastructure.get_mut(processor_index) {
                 processor.durability = processor.durability.saturating_sub(8);
             }
@@ -1898,6 +1917,7 @@ impl GameState {
         if reward > 0 {
             self.player.credits = self.player.credits.saturating_add(reward);
             self.total_earnings = self.total_earnings.saturating_add(reward);
+            self.expeditions_completed = self.expeditions_completed.saturating_add(completed);
             self.town_development.reputation =
                 self.town_development.reputation.saturating_add(completed);
             self.message = format!("Completed {completed} expedition(s) for {reward} credits.");
@@ -2518,6 +2538,7 @@ impl GameState {
             position,
             durability: default_infrastructure_durability(),
         });
+        self.infrastructure_built = self.infrastructure_built.saturating_add(1);
         self.message = match kind {
             InfrastructureKind::SignalRelay => {
                 "Placed Signal Relay. Deep rescue signal improved.".to_owned()
@@ -3368,6 +3389,22 @@ impl GameState {
         self.message = format!("Entering {layer}. Hazards and ore density increased.");
     }
 
+    fn current_cargo_value(&self) -> u32 {
+        let minerals = self
+            .player
+            .cargo
+            .iter()
+            .map(|(mineral, count)| self.mineral_market_value(*mineral).saturating_mul(*count))
+            .sum::<u32>();
+        let artifacts = self
+            .player
+            .artifacts
+            .iter()
+            .map(|(artifact, count)| artifact.value().saturating_mul(*count))
+            .sum::<u32>();
+        minerals.saturating_add(artifacts)
+    }
+
     fn award_return_bonus(&mut self) {
         if self.current_zone.is_none() || self.trip_best_depth < 15 {
             return;
@@ -3377,13 +3414,29 @@ impl GameState {
             self.player.loan_debt = self.player.loan_debt.saturating_add(12);
         }
         let depth = u32::try_from(self.trip_best_depth).unwrap_or(0);
+        let cargo_value = self.current_cargo_value();
+        self.best_return_depth = self.best_return_depth.max(self.trip_best_depth);
+        self.most_valuable_cargo_run = self.most_valuable_cargo_run.max(cargo_value);
         let reward = (depth / 4).saturating_mul(self.return_streak.min(5));
         self.player.credits += reward;
         self.total_earnings += reward;
-        self.message = format!(
-            "Successful return from {}m. Trip streak x{} bonus: {reward} credits.",
-            self.trip_best_depth, self.return_streak
+        let risk_rating = if self.deep_instability >= 75.0 {
+            "Extreme"
+        } else if self.deep_instability >= 40.0 {
+            "High"
+        } else if self.trip_best_depth >= 80 {
+            "Moderate"
+        } else {
+            "Low"
+        };
+        self.last_run_summary = format!(
+            "Run summary: depth {}m | return bonus {reward} | cargo value {cargo_value} | hull damage {:.0}% | discoveries {} | risk {risk_rating} | streak x{}.",
+            self.trip_best_depth,
+            (1.0 - self.player.hull / self.player.max_hull()).max(0.0) * 100.0,
+            self.collection_log.minerals.len() + self.collection_log.artifacts.len(),
+            self.return_streak
         );
+        self.message = self.last_run_summary.clone();
         self.trip_best_depth = 0;
         self.trip_seconds = 0.0;
         self.deep_instability = 0.0;
