@@ -2434,10 +2434,14 @@ impl GameState {
 
     fn confirm_finance(&mut self) {
         if self.player.loan_debt == 0 {
-            self.player.credits += 250;
-            self.player.loan_debt = 300;
-            "HQ finance issued a 250 credit advance. Repay 300 credits before the board gets loud."
-                .clone_into(&mut self.message);
+            let advance = 250 + u32::from(self.town_development.bank_level) * 150;
+            let risk_premium = 50 + u32::from(self.town_development.bank_level) * 25;
+            self.player.credits = self.player.credits.saturating_add(advance);
+            self.player.loan_debt = advance.saturating_add(risk_premium);
+            self.message = format!(
+                "HQ finance issued a {advance} credit advance. Risk-adjusted payoff: {} credits.",
+                self.player.loan_debt
+            );
         } else {
             let payment = self.player.loan_debt.min(self.player.credits);
             self.player.credits -= payment;
@@ -3948,7 +3952,8 @@ impl GameState {
         }
         self.return_streak += 1;
         if self.player.loan_debt > 0 {
-            self.player.loan_debt = self.player.loan_debt.saturating_add(12);
+            let risk_interest = 12 + self.player.loan_debt / 200;
+            self.player.loan_debt = self.player.loan_debt.saturating_add(risk_interest);
         }
         let depth = u32::try_from(self.trip_best_depth).unwrap_or(0);
         let cargo_value = self.current_cargo_value();
