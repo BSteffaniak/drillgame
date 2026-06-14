@@ -91,6 +91,7 @@ pub struct GameSession {
     world: WorldState,
     local_client: ClientState,
     current_tick: SimulationTick,
+    pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
 }
 
 impl GameSession {
@@ -103,6 +104,7 @@ impl GameSession {
             world,
             local_client: ClientState::default(),
             current_tick: SimulationTick::default(),
+            pending_commands: BTreeMap::new(),
         }
     }
 
@@ -183,6 +185,15 @@ impl GameSession {
         &mut self,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
+        let sequenced = self.sequence_commands_for_local_player(commands);
+        self.buffer_commands(sequenced.clone());
+        sequenced
+    }
+
+    fn sequence_commands_for_local_player(
+        &mut self,
+        commands: Vec<PlayerCommand>,
+    ) -> Vec<SequencedPlayerCommand> {
         let player_id = self.local_client.controlled_player_id;
         let target_tick = self.current_tick;
 
@@ -197,7 +208,27 @@ impl GameSession {
             .collect()
     }
 
+    fn buffer_commands(&mut self, commands: Vec<SequencedPlayerCommand>) {
+        for command in commands {
+            self.pending_commands
+                .entry(command.target_tick)
+                .or_default()
+                .push(command);
+        }
+    }
+
+    #[must_use]
+    pub fn pending_command_count(&self, tick: SimulationTick) -> usize {
+        self.pending_commands.get(&tick).map_or(0, Vec::len)
+    }
+
+    pub fn drain_commands_for_tick(&mut self, tick: SimulationTick) -> Vec<SequencedPlayerCommand> {
+        self.pending_commands.remove(&tick).unwrap_or_default()
+    }
+
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
+        let tick_commands = self.drain_commands_for_tick(self.current_tick);
+        drop(tick_commands);
         self.sync_client_settings_to_legacy_game();
         self.game.update(input, delta_seconds);
         self.sync_client_settings_from_legacy_game();
@@ -243,5 +274,18 @@ mod tests {
         assert_eq!(commands[0].player_id, LOCAL_PLAYER_ID);
         assert_eq!(commands[0].sequence.get(), 0);
         assert_eq!(commands[0].target_tick, session.current_tick());
+        assert_eq!(session.pending_command_count(session.current_tick()), 1);
+    }
+
+    #[test]
+    fn buffered_commands_are_drained_by_tick() {
+        let mut session = GameSession::new();
+        let tick = session.current_tick();
+        session.sequence_local_commands(vec![PlayerCommand::Interact]);
+
+        let commands = session.drain_commands_for_tick(tick);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(session.pending_command_count(tick), 0);
     }
 }

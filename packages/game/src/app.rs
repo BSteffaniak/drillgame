@@ -48,12 +48,13 @@ pub fn run() {
         let input = read_input(&raylib, exit_requested);
         let mapped_input = map_local_input(input);
         let _local_client_id = session.local_client().client_id;
-        let _current_tick = session.current_tick();
+        let current_tick = session.current_tick();
         let _local_player = session
             .world()
             .player(session.local_client().controlled_player_id);
         let _player_count = session.world().player_count();
         let _sequenced_commands = session.sequence_local_commands(mapped_input.player_commands);
+        let _pending_command_count = session.pending_command_count(current_tick);
 
         session.update_legacy(input, delta_seconds);
         if input.fullscreen {
