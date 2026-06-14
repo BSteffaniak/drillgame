@@ -5,13 +5,14 @@ use std::{
 };
 
 use crate::{
-    game_state::GameState,
+    game_state::{GameState, RunMode},
     input::PlayerInput,
     multiplayer::{
         ClientId, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId,
         SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
+    rendering::render_camera,
     save::SettingsFile,
     terrain::TilePosition,
 };
@@ -222,6 +223,27 @@ impl WorldState {
     }
 }
 
+/// Per-client presentation state used by renderers and future split-screen views.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClientView {
+    pub client_id: ClientId,
+    pub controlled_player_id: PlayerId,
+    pub camera: crate::game_state::Camera,
+    pub run_mode: RunMode,
+}
+
+impl ClientView {
+    #[must_use]
+    pub fn from_legacy_game(game: &GameState) -> Self {
+        Self {
+            client_id: LOCAL_CLIENT_ID,
+            controlled_player_id: LOCAL_PLAYER_ID,
+            camera: render_camera(game),
+            run_mode: game.run_mode,
+        }
+    }
+}
+
 /// Local client state that is intentionally separate from authoritative gameplay state.
 #[derive(Clone, Debug)]
 pub struct ClientState {
@@ -231,12 +253,14 @@ pub struct ClientState {
     pub fullscreen: bool,
     pub settings_dirty: bool,
     pub exit_requested: bool,
+    pub view: ClientView,
     next_input_sequence: InputSequence,
 }
 
 impl ClientState {
     #[must_use]
-    pub const fn new(client_id: ClientId, controlled_player_id: PlayerId) -> Self {
+    pub fn new(client_id: ClientId, controlled_player_id: PlayerId) -> Self {
+        let legacy_game = GameState::new();
         Self {
             client_id,
             controlled_player_id,
@@ -244,6 +268,7 @@ impl ClientState {
             fullscreen: false,
             settings_dirty: false,
             exit_requested: false,
+            view: ClientView::from_legacy_game(&legacy_game),
             next_input_sequence: InputSequence::new(0),
         }
     }
@@ -317,6 +342,11 @@ impl GameSession {
     #[must_use]
     pub const fn local_client(&self) -> &ClientState {
         &self.local_client
+    }
+
+    #[must_use]
+    pub const fn local_view(&self) -> &ClientView {
+        &self.local_client.view
     }
 
     #[must_use]
@@ -420,6 +450,7 @@ impl GameSession {
         self.local_client.fullscreen = self.game.fullscreen;
         self.local_client.settings_dirty |= self.game.settings_dirty;
         self.local_client.exit_requested |= self.game.request_exit;
+        self.local_client.view = ClientView::from_legacy_game(&self.game);
 
         if settings_changed {
             self.push_event(WorldEvent::ClientSettingsChanged {
@@ -564,6 +595,15 @@ mod tests {
 
         assert_eq!(session.local_client().client_id, LOCAL_CLIENT_ID);
         assert_eq!(session.local_client().controlled_player_id, LOCAL_PLAYER_ID);
+    }
+
+    #[test]
+    fn client_view_tracks_legacy_view_identity() {
+        let session = GameSession::new();
+
+        assert_eq!(session.local_view().client_id, LOCAL_CLIENT_ID);
+        assert_eq!(session.local_view().controlled_player_id, LOCAL_PLAYER_ID);
+        assert_eq!(session.local_view().run_mode, session.game().run_mode);
     }
 
     #[test]

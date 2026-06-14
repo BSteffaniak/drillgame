@@ -84,6 +84,6 @@ pub fn run() {
         renderer.sync(&mut raylib, &thread, session.game_mut());
 
         let mut draw = raylib.begin_drawing(&thread);
-        renderer.render(&mut draw, session.game());
+        renderer.render_client_view(&mut draw, session.game(), session.local_view());
     }
 }

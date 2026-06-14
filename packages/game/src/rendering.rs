@@ -24,7 +24,10 @@ use world::{
     world_camera,
 };
 
-use crate::game_state::{GameState, RunMode};
+use crate::{
+    game_state::{GameState, RunMode},
+    session::ClientView,
+};
 
 const SCREEN_WIDTH: i32 = 1280;
 const SCREEN_HEIGHT: i32 = 720;
@@ -52,11 +55,20 @@ impl GameRenderer {
     }
 
     pub fn render(&self, draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+        self.render_client_view(draw, game, &ClientView::from_legacy_game(game));
+    }
+
+    pub fn render_client_view(
+        &self,
+        draw: &mut RaylibDrawHandle<'_>,
+        game: &GameState,
+        view: &ClientView,
+    ) {
         draw.clear_background(Color::new(105, 190, 235, 255));
 
-        let camera = render_camera(game);
+        let camera = view.camera;
 
-        if game.run_mode == RunMode::Interior {
+        if view.run_mode == RunMode::Interior {
             draw_interior(draw, game);
         } else {
             let mut world_draw = draw.begin_mode2D(world_camera(camera));
@@ -84,18 +96,18 @@ impl GameRenderer {
                 Color::new(255, 70, 30, alpha),
             );
         }
-        if game.run_mode != RunMode::Interior {
+        if view.run_mode != RunMode::Interior {
             draw_heat_warning(draw, game);
         }
         draw_hud(draw, game);
-        if game.run_mode != RunMode::Interior {
+        if view.run_mode != RunMode::Interior {
             draw_depth_ruler(draw, game);
             draw_minimap(draw, game);
         }
 
-        if game.run_mode == RunMode::Title {
+        if view.run_mode == RunMode::Title {
             draw_title(draw, game);
-        } else if game.run_mode == RunMode::Paused {
+        } else if view.run_mode == RunMode::Paused {
             draw_pause(draw, game);
         }
 
