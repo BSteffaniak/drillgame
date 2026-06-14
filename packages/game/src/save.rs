@@ -8,7 +8,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::game_state::GameState;
+use crate::{
+    game_state::GameState,
+    multiplayer::{LOCAL_PLAYER_ID, PlayerId},
+};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
@@ -62,6 +65,33 @@ pub struct SaveSlotMetadata {
 #[derive(Debug, Deserialize, Serialize)]
 struct SaveFile {
     version: u32,
+    world: PersistentWorldSave,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PersistentWorldSave {
+    pub default_player_id: PlayerId,
+    pub game: GameState,
+}
+
+impl PersistentWorldSave {
+    #[must_use]
+    pub fn from_legacy_game(game: &GameState) -> Self {
+        Self {
+            default_player_id: LOCAL_PLAYER_ID,
+            game: game.clone_for_save(),
+        }
+    }
+
+    #[must_use]
+    pub fn into_legacy_game(self) -> GameState {
+        self.game
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LegacySaveFile {
+    version: u32,
     game: GameState,
 }
 
@@ -76,7 +106,7 @@ pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
 fn save_game_to_path(game: &GameState, path: impl AsRef<Path>) -> Result<(), SaveError> {
     let save = SaveFile {
         version: SAVE_VERSION,
-        game: game.clone_for_save(),
+        world: PersistentWorldSave::from_legacy_game(game),
     };
     let json = serde_json::to_string_pretty(&save).map_err(SaveError::Serialize)?;
     write_state_file(path, json)
@@ -99,12 +129,29 @@ pub fn load_latest_game() -> Result<GameState, SaveError> {
 
 fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     let json = fs::read_to_string(path).map_err(SaveError::Io)?;
-    let mut save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
-    if save.version != SAVE_VERSION && save.version != 1 {
-        return Err(SaveError::UnsupportedVersion(save.version));
+    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
+        validate_save_version(save.version)?;
+        let mut game = save.world.into_legacy_game();
+        game.migrate_after_load();
+        return Ok(game);
     }
-    save.game.migrate_after_load();
-    Ok(save.game)
+
+    let legacy_save: LegacySaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
+    validate_save_version(legacy_save.version)?;
+    let mut game = PersistentWorldSave {
+        default_player_id: LOCAL_PLAYER_ID,
+        game: legacy_save.game,
+    }
+    .into_legacy_game();
+    game.migrate_after_load();
+    Ok(game)
+}
+
+const fn validate_save_version(version: u32) -> Result<(), SaveError> {
+    if version != SAVE_VERSION && version != 1 {
+        return Err(SaveError::UnsupportedVersion(version));
+    }
+    Ok(())
 }
 
 const fn save_mode_label(game: &GameState) -> &'static str {
@@ -251,23 +298,45 @@ impl Error for SaveError {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{game_state::GameState, save::SaveFile};
+    use crate::{
+        game_state::GameState,
+        multiplayer::LOCAL_PLAYER_ID,
+        save::{LegacySaveFile, PersistentWorldSave, SaveFile},
+    };
 
     #[test]
     fn game_state_round_trips_through_versioned_json() {
         let game = GameState::new();
         let save = SaveFile {
             version: 2,
-            game: game.clone_for_save(),
+            world: PersistentWorldSave::from_legacy_game(&game),
         };
         let json = serde_json::to_string(&save).expect("serialize game");
         let loaded: SaveFile = serde_json::from_str(&json).expect("deserialize game");
+
+        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.world.default_player_id, LOCAL_PLAYER_ID);
+        assert_eq!(
+            loaded.world.game.player.cargo_capacity,
+            game.player.cargo_capacity
+        );
+        assert_eq!(loaded.world.game.terrain.width(), game.terrain.width());
+    }
+
+    #[test]
+    fn legacy_save_shape_still_deserializes_for_migration() {
+        let game = GameState::new();
+        let legacy = LegacySaveFile {
+            version: 2,
+            game: game.clone_for_save(),
+        };
+        let json = serde_json::to_string(&legacy).expect("serialize legacy game");
+        let loaded: LegacySaveFile = serde_json::from_str(&json).expect("deserialize legacy game");
 
         assert_eq!(loaded.version, 2);
         assert_eq!(
             loaded.game.player.cargo_capacity,
             game.player.cargo_capacity
         );
-        assert_eq!(loaded.game.terrain.width(), game.terrain.width());
     }
 }
