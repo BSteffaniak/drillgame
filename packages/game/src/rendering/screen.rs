@@ -4,10 +4,10 @@ use super::terrain::{artifact_color, mineral_color};
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::{
     economy::{UpgradeKind, upgrade_effect, upgrade_offers, upgrade_tier_name},
-    game_state::{GameState, ModalScreen, PauseOption, RunMode, TILE_SIZE},
+    game_state::{GameState, ModalScreen, PauseOption, RunMode, SideContractKind, TILE_SIZE},
     save::{save_slot_count, save_slot_exists, save_slot_metadata},
     surface::SURFACE_BUILDINGS,
-    terrain::{TileKind, TilePosition},
+    terrain::{MineralKind, TileKind, TilePosition},
 };
 
 struct MinimapProjection {
@@ -829,6 +829,54 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+    draw.draw_text("Active side contracts:", 700, 230, 18, Color::LIGHTGRAY);
+    if game.active_side_contracts.is_empty() {
+        draw.draw_text("None posted", 720, 258, 16, Color::GRAY);
+    }
+    for (index, contract) in game.active_side_contracts.iter().enumerate() {
+        let label = match contract.kind {
+            SideContractKind::Cargo => {
+                format!("Cargo: {} x{}", contract.target.name(), contract.required)
+            }
+            SideContractKind::DepthSurvey => format!("Survey: reach {}m", contract.required),
+            SideContractKind::HazardScan => format!("Scan: {} hazards", contract.required),
+        };
+        draw.draw_text(
+            &label,
+            720,
+            258 + i32::try_from(index).unwrap_or(i32::MAX) * 22,
+            16,
+            Color::RAYWHITE,
+        );
+    }
+
+    draw.draw_text("Market board:", 700, 350, 18, Color::GOLD);
+    let minerals = [
+        MineralKind::Copper,
+        MineralKind::Iron,
+        MineralKind::Silver,
+        MineralKind::Gold,
+        MineralKind::Emerald,
+        MineralKind::Ruby,
+        MineralKind::Diamond,
+        MineralKind::Platinum,
+        MineralKind::Uranium,
+        MineralKind::Mythril,
+    ];
+    for (index, mineral) in minerals.iter().enumerate() {
+        draw.draw_text(
+            &format!(
+                "{}: {} cr",
+                mineral.name(),
+                game.mineral_market_value(*mineral)
+            ),
+            720,
+            378 + i32::try_from(index).unwrap_or(i32::MAX) * 18,
+            14,
+            mineral_color(*mineral),
+        );
+    }
+
     let mut manifest_y = 378;
     for (mineral, count) in &game.player.cargo {
         draw.draw_text(
@@ -1351,6 +1399,48 @@ pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 }
 
 pub(super) fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    if game.won_game {
+        draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 170));
+        draw.draw_rectangle(330, 190, 620, 260, Color::new(18, 24, 42, 245));
+        draw.draw_rectangle_lines(330, 190, 620, 260, Color::GOLD);
+        draw.draw_text("STAR CORE SECURED", 455, 220, 34, Color::GOLD);
+        draw.draw_text(
+            &format!("Deepest depth: {}m", game.deepest_tile_reached),
+            390,
+            280,
+            22,
+            Color::RAYWHITE,
+        );
+        draw.draw_text(
+            &format!("Total earnings: {} cr", game.total_earnings),
+            390,
+            312,
+            22,
+            Color::RAYWHITE,
+        );
+        draw.draw_text(
+            &format!("Rescues called: {}", game.rescue_count),
+            390,
+            344,
+            22,
+            Color::RAYWHITE,
+        );
+        draw.draw_text(
+            &format!("Contracts completed: {}", game.contracts.completed),
+            390,
+            376,
+            22,
+            Color::RAYWHITE,
+        );
+        draw.draw_text(
+            "You can keep mining this save after closing the summary.",
+            390,
+            414,
+            18,
+            Color::LIGHTGRAY,
+        );
+        return;
+    }
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
     draw.draw_rectangle(360, 270, 560, 130, Color::new(35, 20, 20, 240));
     draw.draw_text("EMERGENCY", 535, 294, 34, Color::RED);

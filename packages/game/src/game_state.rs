@@ -656,6 +656,12 @@ impl GameState {
             .unwrap_or(false)
     }
 
+    #[must_use]
+    pub const fn mineral_market_value(&self, mineral: MineralKind) -> u32 {
+        let factor = market_factor(self.market_salt, self.town_event_day);
+        (mineral.value() * factor) / 100
+    }
+
     const fn tile_index(&self, position: TilePosition) -> Option<usize> {
         if position.x < 0
             || position.y < 0
@@ -1054,15 +1060,18 @@ impl GameState {
             "Already insured for the next rescue.".clone_into(&mut self.message);
             return;
         }
-        let cost = 90;
+        let next_tier = self.player.insurance_tier.saturating_add(1).min(3);
+        let cost = 70 + u32::from(next_tier) * 55;
         if self.player.credits < cost {
-            self.message = format!("Insurance costs {cost} credits.");
+            self.message = format!("Tier {next_tier} insurance costs {cost} credits.");
             return;
         }
         self.player.credits -= cost;
         self.player.insured = true;
-        "Ledger sold you rescue insurance. Next rescue keeps cargo and halves the fee."
-            .clone_into(&mut self.message);
+        self.player.insurance_tier = next_tier;
+        self.message = format!(
+            "Ledger sold tier {next_tier} rescue insurance. Higher tiers reduce fees and cargo loss."
+        );
         self.sound_cues.push(SoundCue::Upgrade);
     }
 
@@ -1546,6 +1555,9 @@ impl GameState {
             .is_some_and(|hardness| hardness > self.player.drill_strength)
         {
             self.active_drill = None;
+            self.sound_cues.push(SoundCue::Damage);
+            self.shake_camera(0.16, 4.0);
+            self.spawn_sparks();
             "That layer is too hard. Upgrade your drill.".clone_into(&mut self.message);
             return;
         }
@@ -2200,16 +2212,18 @@ impl GameState {
         }
 
         let base_fee = rescue_fee(self.player.y);
-        let fee = if self.player.insured {
-            base_fee / 2
+        let fee_divisor = if self.player.insured {
+            u32::from(self.player.insurance_tier).saturating_add(1)
         } else {
-            base_fee
-        }
-        .min(self.player.credits);
+            1
+        };
+        let fee = (base_fee / fee_divisor).min(self.player.credits);
         self.player.credits -= fee;
         self.rescue_count += 1;
-        let lost_items = if self.player.insured {
+        let lost_items = if self.player.insured && self.player.insurance_tier >= 2 {
             0
+        } else if self.player.insured {
+            drop_quarter_cargo(&mut self.player)
         } else {
             drop_half_cargo(&mut self.player)
         };
@@ -2280,6 +2294,24 @@ fn drop_half_cargo(player: &mut Player) -> u32 {
 
     for count in player.artifacts.values_mut() {
         let dropped = (*count).div_ceil(2);
+        *count -= dropped;
+        lost += dropped;
+    }
+    player.artifacts.retain(|_, count| *count > 0);
+    lost
+}
+
+fn drop_quarter_cargo(player: &mut Player) -> u32 {
+    let mut lost = 0;
+    for count in player.cargo.values_mut() {
+        let dropped = (*count).div_ceil(4);
+        *count -= dropped;
+        lost += dropped;
+    }
+    player.cargo.retain(|_, count| *count > 0);
+
+    for count in player.artifacts.values_mut() {
+        let dropped = (*count).div_ceil(4);
         *count -= dropped;
         lost += dropped;
     }
