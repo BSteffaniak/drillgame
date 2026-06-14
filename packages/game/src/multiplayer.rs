@@ -412,6 +412,21 @@ pub const fn initial_transport_policy() -> TransportPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisconnectReservationPolicy {
+    ReserveForReconnect,
+    ReleaseImmediately,
+}
+
+#[must_use]
+pub const fn disconnect_reservation_policy(underground: bool) -> DisconnectReservationPolicy {
+    if underground {
+        DisconnectReservationPolicy::ReserveForReconnect
+    } else {
+        DisconnectReservationPolicy::ReleaseImmediately
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PerClientUiPolicy {
     SharedLegacyUi,
     IndependentClientUi,
@@ -466,6 +481,7 @@ pub const fn session_shutdown_decision(
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CommandConflict {
     SameTickMining,
+    NearbyTickMining,
     SimultaneousEconomyAction,
 }
 
@@ -500,6 +516,13 @@ pub fn command_conflicts(commands: &[SequencedPlayerCommand]) -> BTreeSet<Comman
     let mut conflicts = BTreeSet::new();
     if mining_by_tick.values().any(|count| *count > 1) {
         conflicts.insert(CommandConflict::SameTickMining);
+    }
+    let mining_ticks = mining_by_tick.keys().copied().collect::<Vec<_>>();
+    if mining_ticks
+        .windows(2)
+        .any(|window| window[1].get().saturating_sub(window[0].get()) <= 1)
+    {
+        conflicts.insert(CommandConflict::NearbyTickMining);
     }
     if economy_by_tick.values().any(|count| *count > 1) {
         conflicts.insert(CommandConflict::SimultaneousEconomyAction);
@@ -550,10 +573,11 @@ mod tests {
         ClientId, CommandAcceptance, CommandSequenceTracker, CommandSource, InputSequence,
         PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
         SessionToken, SimulationTick, client_authority_allowed, command_conflicts,
-        host_save_decision, initial_collision_policy, initial_discovery_sharing_policy,
-        initial_message_routing_policy, initial_resource_ownership_policy,
-        initial_transport_policy, packet_recovery_action, per_client_ui_policy,
-        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
+        initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
+        per_client_ui_policy, session_continuity_decision, session_shutdown_decision,
+        terrain_recovery_decision,
     };
 
     #[test]
@@ -654,6 +678,16 @@ mod tests {
                 },
             },
             SequencedPlayerCommand {
+                player_id: PlayerId::new(3),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(3),
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            },
+            SequencedPlayerCommand {
                 player_id: PlayerId::new(1),
                 sequence: InputSequence::new(2),
                 target_tick: SimulationTick::new(3),
@@ -670,6 +704,7 @@ mod tests {
         let conflicts = command_conflicts(&commands);
 
         assert!(conflicts.contains(&super::CommandConflict::SameTickMining));
+        assert!(conflicts.contains(&super::CommandConflict::NearbyTickMining));
         assert!(conflicts.contains(&super::CommandConflict::SimultaneousEconomyAction));
     }
 
@@ -696,6 +731,18 @@ mod tests {
         assert_eq!(
             session_continuity_decision(Some(token), Some(SessionToken::new(999))),
             super::SessionContinuityDecision::AssignNewPlayer
+        );
+    }
+
+    #[test]
+    fn underground_disconnects_are_reserved_for_reconnect() {
+        assert_eq!(
+            disconnect_reservation_policy(true),
+            super::DisconnectReservationPolicy::ReserveForReconnect
+        );
+        assert_eq!(
+            disconnect_reservation_policy(false),
+            super::DisconnectReservationPolicy::ReleaseImmediately
         );
     }
 
