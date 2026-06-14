@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    game_state::{DrillState, GameState, RunMode},
+    game_state::{DrillState, GameState, HazardCloud, PlacedBomb, PlacedInfrastructure, RunMode},
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
@@ -582,6 +582,9 @@ pub struct WorldState {
     simulation_tick: SimulationTick,
     authoritative_summary: AuthoritativeWorldSummary,
     players: BTreeMap<PlayerId, Player>,
+    hazards: Vec<HazardCloud>,
+    bombs: Vec<PlacedBomb>,
+    infrastructure: Vec<PlacedInfrastructure>,
     active_drills: BTreeMap<PlayerId, DrillState>,
     scanner_cooldowns: BTreeMap<PlayerId, f32>,
 }
@@ -597,6 +600,9 @@ impl WorldState {
                 1,
             ),
             players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
+            hazards: game.hazard_clouds.clone(),
+            bombs: game.placed_bombs.clone(),
+            infrastructure: game.infrastructure.clone(),
             active_drills: game
                 .active_drill
                 .map(|drill| BTreeMap::from([(LOCAL_PLAYER_ID, drill)]))
@@ -618,6 +624,36 @@ impl WorldState {
     #[must_use]
     pub const fn authoritative_summary(&self) -> &AuthoritativeWorldSummary {
         &self.authoritative_summary
+    }
+
+    #[must_use]
+    pub const fn hazard_count(&self) -> usize {
+        self.hazards.len()
+    }
+
+    #[must_use]
+    pub const fn bomb_count(&self) -> usize {
+        self.bombs.len()
+    }
+
+    #[must_use]
+    pub const fn infrastructure_count(&self) -> usize {
+        self.infrastructure.len()
+    }
+
+    #[must_use]
+    pub fn hazards(&self) -> &[HazardCloud] {
+        &self.hazards
+    }
+
+    #[must_use]
+    pub fn bombs(&self) -> &[PlacedBomb] {
+        &self.bombs
+    }
+
+    #[must_use]
+    pub fn infrastructure(&self) -> &[PlacedInfrastructure] {
+        &self.infrastructure
     }
 
     #[must_use]
@@ -740,6 +776,9 @@ impl WorldState {
     fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
         self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
+        self.hazards.clone_from(&game.hazard_clouds);
+        self.bombs.clone_from(&game.placed_bombs);
+        self.infrastructure.clone_from(&game.infrastructure);
         if let Some(drill) = game.active_drill {
             self.active_drills.insert(LOCAL_PLAYER_ID, drill);
         } else {
@@ -1815,6 +1854,18 @@ mod tests {
         assert_eq!(summary.terrain_width, session.game().terrain.width());
         assert_eq!(summary.terrain_height, session.game().terrain.height());
         assert_eq!(summary.bomb_count, session.game().placed_bombs.len());
+        assert_eq!(
+            session.world().bomb_count(),
+            session.game().placed_bombs.len()
+        );
+        assert_eq!(
+            session.world().hazard_count(),
+            session.game().hazard_clouds.len()
+        );
+        assert_eq!(
+            session.world().infrastructure_count(),
+            session.game().infrastructure.len()
+        );
         assert_eq!(
             summary.infrastructure_count,
             session.game().infrastructure.len()

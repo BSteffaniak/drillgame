@@ -156,6 +156,14 @@ fn observe_multiplayer_scaffolding(
     let _client_presentation_fields = GameSession::client_presentation_fields();
     let _split_screen_viewports = GameSession::split_screen_viewports(session.client_count());
     let _world_event_catalog = GameSession::world_event_catalog();
+    let _authoritative_counts = (
+        session.world().hazard_count(),
+        session.world().bomb_count(),
+        session.world().infrastructure_count(),
+        session.world().hazards().len(),
+        session.world().bombs().len(),
+        session.world().infrastructure().len(),
+    );
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
