@@ -104,6 +104,7 @@ fn observe_multiplayer_scaffolding(
     let _planned_state_boundaries = GameSession::planned_state_boundaries();
     let _planned_transient_effect_boundaries = GameSession::planned_transient_effect_boundaries();
     let _planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
+    let _fixed_tick_audit_items = GameSession::fixed_tick_audit_items();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();

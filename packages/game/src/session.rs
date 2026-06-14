@@ -72,6 +72,56 @@ pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixedTickMigrationStatus {
+    FixedTickReady,
+    StillVariableDelta,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FixedTickAuditItem {
+    pub system: &'static str,
+    pub status: FixedTickMigrationStatus,
+}
+
+#[must_use]
+pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
+    [
+        FixedTickAuditItem {
+            system: "session_tick_counter",
+            status: FixedTickMigrationStatus::FixedTickReady,
+        },
+        FixedTickAuditItem {
+            system: "physics",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "fuel_burn",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "drilling_progress",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "hazards",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "bombs",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "market_event_timers",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+        FixedTickAuditItem {
+            system: "animations",
+            status: FixedTickMigrationStatus::StillVariableDelta,
+        },
+    ]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransientEffectDomain {
     LocalClientPresentation,
     GameplayRelevantWorld,
@@ -613,6 +663,11 @@ impl GameSession {
     }
 
     #[must_use]
+    pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
+        fixed_tick_audit_items()
+    }
+
+    #[must_use]
     pub fn new() -> Self {
         let game = GameState::new();
         let world = WorldState::from_legacy_game(&game);
@@ -1075,6 +1130,20 @@ mod tests {
         assert!(systems.contains(&super::PlayerScopedSystem::Drilling));
         assert!(systems.contains(&super::PlayerScopedSystem::Cargo));
         assert!(systems.contains(&super::PlayerScopedSystem::EconomyService));
+    }
+
+    #[test]
+    fn fixed_tick_audit_tracks_remaining_variable_delta_systems() {
+        let audit_items = GameSession::fixed_tick_audit_items();
+
+        assert!(audit_items.iter().any(|item| {
+            item.system == "physics"
+                && item.status == super::FixedTickMigrationStatus::StillVariableDelta
+        }));
+        assert!(audit_items.iter().any(|item| {
+            item.system == "drilling_progress"
+                && item.status == super::FixedTickMigrationStatus::StillVariableDelta
+        }));
     }
 
     #[test]

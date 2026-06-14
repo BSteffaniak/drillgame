@@ -296,6 +296,30 @@ impl CommandSequenceTracker {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandSource {
+    Keyboard,
+    Gamepad,
+    SplitScreenClient,
+    OnlineClient,
+    Replay,
+    Ai,
+}
+
+impl CommandSource {
+    #[must_use]
+    pub const fn uses_authoritative_command_path(self) -> bool {
+        match self {
+            Self::Keyboard
+            | Self::Gamepad
+            | Self::SplitScreenClient
+            | Self::OnlineClient
+            | Self::Replay
+            | Self::Ai => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageRoutingPolicy {
     SharedWorldLogAndPerClientHud,
     PerClientOnly,
@@ -485,10 +509,10 @@ pub const fn session_continuity_decision(
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
-        PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
-        SimulationTick, command_conflicts, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
+        ClientId, CommandAcceptance, CommandSequenceTracker, CommandSource, InputSequence,
+        PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
+        SessionToken, SimulationTick, command_conflicts, host_save_decision,
+        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, per_client_ui_policy,
         session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
     };
@@ -701,6 +725,24 @@ mod tests {
         assert_eq!(
             initial_transport_policy(),
             super::TransportPolicy::TransportAgnosticProtocolFirst
+        );
+    }
+
+    #[test]
+    fn all_command_sources_use_authoritative_command_path() {
+        let sources = [
+            CommandSource::Keyboard,
+            CommandSource::Gamepad,
+            CommandSource::SplitScreenClient,
+            CommandSource::OnlineClient,
+            CommandSource::Replay,
+            CommandSource::Ai,
+        ];
+
+        assert!(
+            sources
+                .into_iter()
+                .all(CommandSource::uses_authoritative_command_path)
         );
     }
 }
