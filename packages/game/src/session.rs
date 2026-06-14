@@ -5,7 +5,10 @@ use std::{
 };
 
 use crate::{
-    game_state::{DrillState, GameState, HazardCloud, PlacedBomb, PlacedInfrastructure, RunMode},
+    game_state::{
+        DrillState, GameState, HazardCloud, ModalScreen, PlacedBomb, PlacedInfrastructure, RunMode,
+        SoundCue,
+    },
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
@@ -1220,6 +1223,9 @@ pub enum ClientPresentationField {
     Camera,
     RunMode,
     Viewport,
+    Modal,
+    LocalMessage,
+    LocalAudio,
     MasterVolume,
     Fullscreen,
     SettingsDirty,
@@ -1228,11 +1234,14 @@ pub enum ClientPresentationField {
 }
 
 #[must_use]
-pub const fn client_presentation_fields() -> [ClientPresentationField; 8] {
+pub const fn client_presentation_fields() -> [ClientPresentationField; 11] {
     [
         ClientPresentationField::Camera,
         ClientPresentationField::RunMode,
         ClientPresentationField::Viewport,
+        ClientPresentationField::Modal,
+        ClientPresentationField::LocalMessage,
+        ClientPresentationField::LocalAudio,
         ClientPresentationField::MasterVolume,
         ClientPresentationField::Fullscreen,
         ClientPresentationField::SettingsDirty,
@@ -1251,6 +1260,9 @@ pub struct ClientState {
     pub settings_dirty: bool,
     pub exit_requested: bool,
     pub view: ClientView,
+    pub modal: Option<ModalScreen>,
+    pub local_message: String,
+    pub local_audio_cues: Vec<SoundCue>,
     prediction: ClientPredictionState,
     next_input_sequence: InputSequence,
 }
@@ -1267,6 +1279,9 @@ impl ClientState {
             settings_dirty: false,
             exit_requested: false,
             view: ClientView::from_legacy_game(&legacy_game),
+            modal: legacy_game.modal,
+            local_message: legacy_game.message.clone(),
+            local_audio_cues: legacy_game.sound_cues.clone(),
             prediction: ClientPredictionState::default(),
             next_input_sequence: InputSequence::new(0),
         }
@@ -1281,6 +1296,17 @@ impl ClientState {
     #[must_use]
     pub const fn prediction(&self) -> &ClientPredictionState {
         &self.prediction
+    }
+
+    pub fn sync_presentation_from_legacy_game(&mut self, game: &GameState) {
+        self.view = ClientView::from_legacy_game(game);
+        self.master_volume = game.master_volume;
+        self.fullscreen = game.fullscreen;
+        self.settings_dirty = game.settings_dirty;
+        self.exit_requested = game.request_exit;
+        self.modal = game.modal;
+        game.message.clone_into(&mut self.local_message);
+        self.local_audio_cues.clone_from(&game.sound_cues);
     }
 
     fn remember_predicted_commands(&mut self, commands: &[SequencedPlayerCommand]) {
@@ -1353,7 +1379,7 @@ impl GameSession {
     }
 
     #[must_use]
-    pub const fn client_presentation_fields() -> [ClientPresentationField; 8] {
+    pub const fn client_presentation_fields() -> [ClientPresentationField; 11] {
         client_presentation_fields()
     }
 
@@ -1550,10 +1576,10 @@ impl GameSession {
         let game_fullscreen = self.game.fullscreen;
         let game_settings_dirty = self.game.settings_dirty;
         let game_request_exit = self.game.request_exit;
-        let view = ClientView::from_legacy_game(&self.game);
         let settings_changed;
         let exit_requested;
         {
+            let game = self.game.clone();
             let local_client = self.local_client_mut();
             settings_changed = (local_client.master_volume - game_master_volume).abs()
                 > f32::EPSILON
@@ -1561,11 +1587,9 @@ impl GameSession {
                 || game_settings_dirty;
             exit_requested = game_request_exit && !local_client.exit_requested;
 
-            local_client.master_volume = game_master_volume;
-            local_client.fullscreen = game_fullscreen;
+            local_client.sync_presentation_from_legacy_game(&game);
             local_client.settings_dirty |= game_settings_dirty;
             local_client.exit_requested |= game_request_exit;
-            local_client.view = view;
         }
 
         if settings_changed {
@@ -1765,11 +1789,11 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        game_state::{DrillState, GameState},
+        game_state::{DrillState, GameState, ModalScreen, SoundCue},
         multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId, SimulationTick},
     };
 
-    use super::{GameSession, WorldState};
+    use super::{ClientState, GameSession, WorldState};
 
     #[test]
     fn session_starts_with_single_player_compatibility_client() {
@@ -1879,7 +1903,25 @@ mod tests {
         assert!(fields.contains(&super::ClientPresentationField::Camera));
         assert!(fields.contains(&super::ClientPresentationField::RunMode));
         assert!(fields.contains(&super::ClientPresentationField::Prediction));
+        assert!(fields.contains(&super::ClientPresentationField::Modal));
+        assert!(fields.contains(&super::ClientPresentationField::LocalMessage));
+        assert!(fields.contains(&super::ClientPresentationField::LocalAudio));
         assert!(fields.contains(&super::ClientPresentationField::ExitRequested));
+    }
+
+    #[test]
+    fn client_state_owns_local_presentation_mirrors() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::Help);
+        "Client-local toast".clone_into(&mut game.message);
+        game.sound_cues.push(SoundCue::Ui);
+        let mut client = ClientState::new(LOCAL_CLIENT_ID, LOCAL_PLAYER_ID);
+
+        client.sync_presentation_from_legacy_game(&game);
+
+        assert_eq!(client.modal, Some(ModalScreen::Help));
+        assert_eq!(client.local_message, "Client-local toast");
+        assert_eq!(client.local_audio_cues.len(), 1);
     }
 
     #[test]
