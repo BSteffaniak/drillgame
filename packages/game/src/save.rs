@@ -75,6 +75,24 @@ pub enum SaveAuthority {
     HostOwnedSession,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SaveSessionKind {
+    #[default]
+    LocalOnly,
+    HostOwned,
+    DedicatedServer,
+    CloudSession,
+}
+
+impl From<SaveAuthority> for SaveSessionKind {
+    fn from(authority: SaveAuthority) -> Self {
+        match authority {
+            SaveAuthority::LocalSinglePlayer => Self::LocalOnly,
+            SaveAuthority::HostOwnedSession => Self::HostOwned,
+        }
+    }
+}
+
 fn default_player_roster() -> Vec<PlayerId> {
     vec![LOCAL_PLAYER_ID]
 }
@@ -83,6 +101,8 @@ fn default_player_roster() -> Vec<PlayerId> {
 pub struct PersistentWorldSave {
     #[serde(default)]
     pub save_authority: SaveAuthority,
+    #[serde(default)]
+    pub session_kind: SaveSessionKind,
     #[serde(default = "default_player_roster")]
     pub player_roster: Vec<PlayerId>,
     pub default_player_id: PlayerId,
@@ -94,6 +114,7 @@ impl PersistentWorldSave {
     pub fn from_legacy_game(game: &GameState) -> Self {
         Self {
             save_authority: SaveAuthority::LocalSinglePlayer,
+            session_kind: SaveSessionKind::LocalOnly,
             player_roster: default_player_roster(),
             default_player_id: LOCAL_PLAYER_ID,
             game: game.clone_for_save(),
@@ -157,6 +178,7 @@ fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     validate_save_version(legacy_save.version)?;
     let mut game = PersistentWorldSave {
         save_authority: SaveAuthority::LocalSinglePlayer,
+        session_kind: SaveSessionKind::LocalOnly,
         player_roster: default_player_roster(),
         default_player_id: LOCAL_PLAYER_ID,
         game: legacy_save.game,
@@ -320,7 +342,7 @@ mod tests {
     use crate::{
         game_state::GameState,
         multiplayer::LOCAL_PLAYER_ID,
-        save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile},
+        save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
     };
 
     #[test]
@@ -338,6 +360,7 @@ mod tests {
             loaded.world.save_authority,
             SaveAuthority::LocalSinglePlayer
         );
+        assert_eq!(loaded.world.session_kind, SaveSessionKind::LocalOnly);
         assert_eq!(loaded.world.default_player_id, LOCAL_PLAYER_ID);
         assert_eq!(loaded.world.player_roster, vec![LOCAL_PLAYER_ID]);
         assert_eq!(
@@ -361,6 +384,18 @@ mod tests {
         assert_eq!(
             loaded.game.player.cargo_capacity,
             game.player.cargo_capacity
+        );
+    }
+
+    #[test]
+    fn save_authority_maps_to_session_kind() {
+        assert_eq!(
+            SaveSessionKind::from(SaveAuthority::LocalSinglePlayer),
+            SaveSessionKind::LocalOnly
+        );
+        assert_eq!(
+            SaveSessionKind::from(SaveAuthority::HostOwnedSession),
+            SaveSessionKind::HostOwned
         );
     }
 }
