@@ -12,6 +12,7 @@ use crate::{
         TitleOption,
     },
     save::{latest_save_summary, save_slot_count, save_slot_exists, save_slot_metadata},
+    session::ClientView,
     surface::SURFACE_BUILDINGS,
     terrain::{
         ArtifactKind, DeepStratum, MineralKind, StrategicResourceKind, TileKind, TilePosition,
@@ -55,6 +56,37 @@ pub(super) fn draw_heat_warning(draw: &mut RaylibDrawHandle<'_>, game: &GameStat
         );
         draw.draw_text("HEAT", 1110, 48, 22, Color::ORANGE);
     }
+}
+
+pub(super) fn draw_hud_for_view(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    view: &ClientView,
+) {
+    draw_hud(draw, game);
+    draw.draw_text(
+        &format!("P{}", view.controlled_player_id.get()),
+        view.viewport.x + view.viewport.width - 64,
+        view.viewport.y + 48,
+        18,
+        Color::LIGHTGRAY,
+    );
+}
+
+pub(super) fn draw_minimap_for_view(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    _view: &ClientView,
+) {
+    draw_minimap(draw, game);
+}
+
+pub(super) fn draw_depth_ruler_for_view(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    _view: &ClientView,
+) {
+    draw_depth_ruler(draw, game);
 }
 
 pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {

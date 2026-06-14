@@ -15,8 +15,8 @@ mod world;
 
 use interior::draw_interior;
 use screen::{
-    draw_depth_ruler, draw_ending, draw_game_over, draw_heat_warning, draw_hud, draw_minimap,
-    draw_modal, draw_pause, draw_title,
+    draw_depth_ruler_for_view, draw_ending, draw_game_over, draw_heat_warning, draw_hud_for_view,
+    draw_minimap_for_view, draw_modal, draw_pause, draw_title,
 };
 use terrain::TerrainRenderer;
 pub use world::render_camera;
@@ -124,10 +124,10 @@ impl GameRenderer {
         if view.run_mode != RunMode::Interior {
             draw_heat_warning(draw, game);
         }
-        draw_hud(draw, game);
+        draw_hud_for_view(draw, game, view);
         if view.run_mode != RunMode::Interior {
-            draw_depth_ruler(draw, game);
-            draw_minimap(draw, game);
+            draw_depth_ruler_for_view(draw, game, view);
+            draw_minimap_for_view(draw, game, view);
         }
 
         if view.run_mode == RunMode::Title {
