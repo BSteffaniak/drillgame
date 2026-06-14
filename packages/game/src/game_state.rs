@@ -934,7 +934,7 @@ pub struct GameState {
     #[serde(default)]
     pub save_dirty: bool,
     #[serde(skip)]
-    visual_changes: VisualChanges,
+    pub visual_changes: VisualChanges,
 }
 
 impl GameState {

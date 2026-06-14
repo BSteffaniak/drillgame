@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TilePosition};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Player {
     pub x: f32,
     pub y: f32,

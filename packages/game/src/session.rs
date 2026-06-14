@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, mem, time::Duration};
 
 use crate::{
     game_state::GameState,
@@ -9,7 +9,40 @@ use crate::{
     },
     player::Player,
     save::SettingsFile,
+    terrain::TilePosition,
 };
+
+/// Lightweight simulation events emitted by the session compatibility layer.
+///
+/// These are intentionally separate from save data and renderer snapshots. As systems migrate out
+/// of legacy `GameState`, this event stream becomes the bridge for audio, UI, renderer dirty
+/// state, and eventually network deltas.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorldEvent {
+    TickAdvanced {
+        tick: SimulationTick,
+    },
+    CommandsProcessed {
+        tick: SimulationTick,
+        command_count: usize,
+    },
+    TerrainRefreshRequested,
+    TerrainTilesChanged {
+        positions: Vec<TilePosition>,
+    },
+    MessageChanged {
+        message: String,
+    },
+    PlayerChanged {
+        player_id: PlayerId,
+    },
+    ClientExitRequested {
+        client_id: ClientId,
+    },
+    ClientSettingsChanged {
+        client_id: ClientId,
+    },
+}
 
 /// Compatibility world wrapper used to introduce explicit player identity before the legacy
 /// monolithic `GameState` is fully split into authoritative world state and local client state.
@@ -93,6 +126,7 @@ pub struct GameSession {
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
+    pending_events: Vec<WorldEvent>,
 }
 
 impl GameSession {
@@ -107,6 +141,7 @@ impl GameSession {
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
             pending_commands: BTreeMap::new(),
+            pending_events: Vec::new(),
         }
     }
 
@@ -152,6 +187,14 @@ impl GameSession {
         self.current_tick = self.current_tick.next();
     }
 
+    pub fn drain_events(&mut self) -> Vec<WorldEvent> {
+        mem::take(&mut self.pending_events)
+    }
+
+    fn push_event(&mut self, event: WorldEvent) {
+        self.pending_events.push(event);
+    }
+
     pub const fn apply_settings(&mut self, settings: SettingsFile) {
         self.local_client.master_volume = settings.master_volume;
         self.local_client.fullscreen = settings.fullscreen;
@@ -188,11 +231,28 @@ impl GameSession {
         legacy_dirty || client_dirty
     }
 
-    const fn sync_client_settings_from_legacy_game(&mut self) {
+    fn sync_client_settings_from_legacy_game(&mut self) {
+        let settings_changed = (self.local_client.master_volume - self.game.master_volume).abs()
+            > f32::EPSILON
+            || self.local_client.fullscreen != self.game.fullscreen
+            || self.game.settings_dirty;
+        let exit_requested = self.game.request_exit && !self.local_client.exit_requested;
+
         self.local_client.master_volume = self.game.master_volume;
         self.local_client.fullscreen = self.game.fullscreen;
         self.local_client.settings_dirty |= self.game.settings_dirty;
         self.local_client.exit_requested |= self.game.request_exit;
+
+        if settings_changed {
+            self.push_event(WorldEvent::ClientSettingsChanged {
+                client_id: self.local_client.client_id,
+            });
+        }
+        if exit_requested {
+            self.push_event(WorldEvent::ClientExitRequested {
+                client_id: self.local_client.client_id,
+            });
+        }
     }
 
     const fn sync_client_settings_to_legacy_game(&mut self) {
@@ -249,14 +309,56 @@ impl GameSession {
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
-            let tick_commands = self.drain_commands_for_tick(self.current_tick);
-            drop(tick_commands);
+            let tick = self.current_tick;
+            let tick_commands = self.drain_commands_for_tick(tick);
+            self.push_event(WorldEvent::CommandsProcessed {
+                tick,
+                command_count: tick_commands.len(),
+            });
             self.advance_tick();
+            self.push_event(WorldEvent::TickAdvanced {
+                tick: self.current_tick,
+            });
         }
         self.sync_client_settings_to_legacy_game();
+        let previous_message = self.game.message.clone();
+        let previous_player = self.game.player.clone();
+        let previous_request_exit = self.game.request_exit;
         self.game.update(input, delta_seconds);
+        self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
         self.sync_client_settings_from_legacy_game();
         self.world.sync_from_legacy_game(&self.game);
+    }
+
+    fn capture_legacy_events(
+        &mut self,
+        previous_message: &str,
+        previous_player: &Player,
+        previous_request_exit: bool,
+    ) {
+        if previous_message != self.game.message {
+            self.push_event(WorldEvent::MessageChanged {
+                message: self.game.message.clone(),
+            });
+        }
+        if previous_player != &self.game.player {
+            self.push_event(WorldEvent::PlayerChanged {
+                player_id: LOCAL_PLAYER_ID,
+            });
+        }
+        if !previous_request_exit && self.game.request_exit {
+            self.push_event(WorldEvent::ClientExitRequested {
+                client_id: self.local_client.client_id,
+            });
+        }
+        if self.game.visual_changes.full_terrain_refresh {
+            self.push_event(WorldEvent::TerrainRefreshRequested);
+        }
+        if !self.game.visual_changes.changed_tiles.is_empty() {
+            self.push_event(WorldEvent::TerrainTilesChanged {
+                positions: self.game.visual_changes.changed_tiles.clone(),
+            });
+        }
     }
 }
 
@@ -332,5 +434,30 @@ mod tests {
         session.advance_tick();
 
         assert_eq!(session.current_tick().get(), 1);
+    }
+
+    #[test]
+    fn legacy_update_emits_tick_events() {
+        let mut session = GameSession::new();
+        session.sequence_local_commands(vec![PlayerCommand::Interact]);
+
+        session.update_legacy(
+            crate::input::PlayerInput::default(),
+            crate::multiplayer::FIXED_DELTA_SECONDS,
+        );
+        let events = session.drain_events();
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::CommandsProcessed {
+                command_count: 1,
+                ..
+            }
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorldEvent::TickAdvanced { .. }))
+        );
     }
 }
