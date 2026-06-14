@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     game_state::GameState,
-    multiplayer::{LOCAL_PLAYER_ID, PlayerId},
+    multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
 };
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -98,6 +98,59 @@ fn default_player_roster() -> Vec<PlayerId> {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PersistentPlayerState {
+    pub player_id: PlayerId,
+    pub credits: u32,
+    pub cargo_used: u32,
+    pub cargo_capacity: u32,
+    pub fuel: f32,
+    pub hull: f32,
+}
+
+impl PersistentPlayerState {
+    #[must_use]
+    pub fn local_from_game(game: &GameState) -> Self {
+        Self {
+            player_id: LOCAL_PLAYER_ID,
+            credits: game.player.credits,
+            cargo_used: game.player.cargo_used(),
+            cargo_capacity: game.player.cargo_capacity,
+            fuel: game.player.fuel,
+            hull: game.player.hull,
+        }
+    }
+}
+
+const fn default_persistent_players() -> Vec<PersistentPlayerState> {
+    Vec::new()
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PersistentSessionState {
+    pub simulation_tick: SimulationTick,
+    pub players: Vec<PersistentPlayerState>,
+}
+
+impl PersistentSessionState {
+    #[must_use]
+    pub fn local_from_game(game: &GameState) -> Self {
+        Self {
+            simulation_tick: SimulationTick::default(),
+            players: vec![PersistentPlayerState::local_from_game(game)],
+        }
+    }
+}
+
+impl Default for PersistentSessionState {
+    fn default() -> Self {
+        Self {
+            simulation_tick: SimulationTick::default(),
+            players: default_persistent_players(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentWorldSave {
     #[serde(default)]
     pub save_authority: SaveAuthority,
@@ -106,6 +159,8 @@ pub struct PersistentWorldSave {
     #[serde(default = "default_player_roster")]
     pub player_roster: Vec<PlayerId>,
     pub default_player_id: PlayerId,
+    #[serde(default)]
+    pub session: PersistentSessionState,
     pub game: GameState,
 }
 
@@ -117,6 +172,7 @@ impl PersistentWorldSave {
             session_kind: SaveSessionKind::LocalOnly,
             player_roster: default_player_roster(),
             default_player_id: LOCAL_PLAYER_ID,
+            session: PersistentSessionState::local_from_game(game),
             game: game.clone_for_save(),
         }
     }
@@ -181,6 +237,7 @@ fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
         session_kind: SaveSessionKind::LocalOnly,
         player_roster: default_player_roster(),
         default_player_id: LOCAL_PLAYER_ID,
+        session: PersistentSessionState::local_from_game(&legacy_save.game),
         game: legacy_save.game,
     }
     .into_legacy_game();
@@ -341,7 +398,7 @@ impl Error for SaveError {}
 mod tests {
     use crate::{
         game_state::GameState,
-        multiplayer::LOCAL_PLAYER_ID,
+        multiplayer::{LOCAL_PLAYER_ID, SimulationTick},
         save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
     };
 
@@ -364,6 +421,11 @@ mod tests {
         assert_eq!(loaded.world.default_player_id, LOCAL_PLAYER_ID);
         assert_eq!(loaded.world.player_roster, vec![LOCAL_PLAYER_ID]);
         assert_eq!(
+            loaded.world.session.simulation_tick,
+            SimulationTick::default()
+        );
+        assert_eq!(loaded.world.session.players[0].player_id, LOCAL_PLAYER_ID);
+        assert_eq!(
             loaded.world.game.player.cargo_capacity,
             game.player.cargo_capacity
         );
@@ -383,6 +445,20 @@ mod tests {
         assert_eq!(loaded.version, 2);
         assert_eq!(
             loaded.game.player.cargo_capacity,
+            game.player.cargo_capacity
+        );
+    }
+
+    #[test]
+    fn persistent_session_state_preserves_local_player_metadata() {
+        let game = GameState::new();
+        let session = super::PersistentSessionState::local_from_game(&game);
+
+        assert_eq!(session.simulation_tick, SimulationTick::default());
+        assert_eq!(session.players.len(), 1);
+        assert_eq!(session.players[0].player_id, LOCAL_PLAYER_ID);
+        assert_eq!(
+            session.players[0].cargo_capacity,
             game.player.cargo_capacity
         );
     }
