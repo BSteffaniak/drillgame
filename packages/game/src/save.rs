@@ -1,12 +1,18 @@
-use std::{error::Error, fmt, fs, io, path::Path, time::SystemTime};
+use std::{
+    env,
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::game_state::GameState;
 
-const SETTINGS_PATH: &str = "drillgame-settings.json";
+const SETTINGS_FILE_NAME: &str = "settings.json";
 
-const SAVE_PATH: &str = "drillgame-save.json";
+const SAVE_FILE_NAME: &str = "save.json";
 const SAVE_SLOTS: usize = 3;
 const SAVE_VERSION: u32 = 2;
 
@@ -27,12 +33,12 @@ impl Default for SettingsFile {
 
 pub fn save_settings(settings: SettingsFile) -> Result<(), SaveError> {
     let json = serde_json::to_string_pretty(&settings).map_err(SaveError::Serialize)?;
-    fs::write(SETTINGS_PATH, json).map_err(SaveError::Io)
+    write_state_file(settings_path(), json)
 }
 
 #[must_use]
 pub fn load_settings() -> SettingsFile {
-    let Ok(json) = fs::read_to_string(SETTINGS_PATH) else {
+    let Ok(json) = fs::read_to_string(settings_path()) else {
         return SettingsFile::default();
     };
     serde_json::from_str(&json).unwrap_or_default()
@@ -57,31 +63,31 @@ struct SaveFile {
 }
 
 pub fn save_game(game: &GameState) -> Result<(), SaveError> {
-    save_game_to_path(game, SAVE_PATH)
+    save_game_to_path(game, save_path())
 }
 
 pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
-    save_game_to_path(game, &slot_path(slot))
+    save_game_to_path(game, slot_path(slot))
 }
 
-fn save_game_to_path(game: &GameState, path: &str) -> Result<(), SaveError> {
+fn save_game_to_path(game: &GameState, path: impl AsRef<Path>) -> Result<(), SaveError> {
     let save = SaveFile {
         version: SAVE_VERSION,
         game: game.clone_for_save(),
     };
     let json = serde_json::to_string_pretty(&save).map_err(SaveError::Serialize)?;
-    fs::write(path, json).map_err(SaveError::Io)
+    write_state_file(path, json)
 }
 
 pub fn load_game_slot(slot: usize) -> Result<GameState, SaveError> {
-    load_game_from_path(&slot_path(slot))
+    load_game_from_path(slot_path(slot))
 }
 
 pub fn load_game() -> Result<GameState, SaveError> {
-    load_game_from_path(SAVE_PATH)
+    load_game_from_path(save_path())
 }
 
-fn load_game_from_path(path: &str) -> Result<GameState, SaveError> {
+fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     let json = fs::read_to_string(path).map_err(SaveError::Io)?;
     let mut save: SaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
     if save.version != SAVE_VERSION && save.version != 1 {
@@ -102,7 +108,7 @@ pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
-    let game = load_game_from_path(&path).ok()?;
+    let game = load_game_from_path(path).ok()?;
     Some(SaveSlotMetadata {
         depth: (game.player.y / crate::game_state::TILE_SIZE).floor() as i32,
         credits: game.player.credits,
@@ -117,12 +123,12 @@ pub fn save_slot_metadata(slot: usize) -> Option<SaveSlotMetadata> {
 
 #[must_use]
 pub fn save_exists() -> bool {
-    Path::new(SAVE_PATH).exists()
+    save_path().exists()
 }
 
 #[must_use]
 pub fn save_slot_exists(slot: usize) -> bool {
-    Path::new(&slot_path(slot)).exists()
+    slot_path(slot).exists()
 }
 
 #[must_use]
@@ -130,8 +136,40 @@ pub const fn save_slot_count() -> usize {
     SAVE_SLOTS
 }
 
-fn slot_path(slot: usize) -> String {
-    format!("drillgame-save-slot-{}.json", slot + 1)
+fn write_state_file(path: impl AsRef<Path>, contents: String) -> Result<(), SaveError> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(SaveError::Io)?;
+    }
+    fs::write(path, contents).map_err(SaveError::Io)
+}
+
+fn settings_path() -> PathBuf {
+    default_state_dir().join(SETTINGS_FILE_NAME)
+}
+
+fn save_path() -> PathBuf {
+    default_state_dir().join(SAVE_FILE_NAME)
+}
+
+fn slot_path(slot: usize) -> PathBuf {
+    default_state_dir().join(format!("save-slot-{}.json", slot + 1))
+}
+
+fn default_state_dir() -> PathBuf {
+    if let Ok(path) = env::var("DRILLGAME_STATE_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Ok(state_home) = env::var("XDG_STATE_HOME") {
+        return PathBuf::from(state_home).join("drillgame");
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("drillgame");
+    }
+    env::temp_dir().join("drillgame")
 }
 
 #[derive(Debug)]
