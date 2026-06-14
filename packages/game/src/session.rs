@@ -71,6 +71,76 @@ pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
     ]
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransientEffectDomain {
+    LocalClientPresentation,
+    GameplayRelevantWorld,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransientEffectBoundary {
+    pub name: &'static str,
+    pub domain: TransientEffectDomain,
+}
+
+impl TransientEffectBoundary {
+    #[must_use]
+    pub const fn local_client_presentation(name: &'static str) -> Self {
+        Self {
+            name,
+            domain: TransientEffectDomain::LocalClientPresentation,
+        }
+    }
+
+    #[must_use]
+    pub const fn gameplay_relevant_world(name: &'static str) -> Self {
+        Self {
+            name,
+            domain: TransientEffectDomain::GameplayRelevantWorld,
+        }
+    }
+}
+
+#[must_use]
+pub const fn planned_transient_effect_boundaries() -> [TransientEffectBoundary; 8] {
+    [
+        TransientEffectBoundary::local_client_presentation("dust_particles"),
+        TransientEffectBoundary::local_client_presentation("spark_particles"),
+        TransientEffectBoundary::local_client_presentation("sound_cues"),
+        TransientEffectBoundary::local_client_presentation("screen_flash"),
+        TransientEffectBoundary::local_client_presentation("camera_shake"),
+        TransientEffectBoundary::gameplay_relevant_world("hazard_clouds"),
+        TransientEffectBoundary::gameplay_relevant_world("falling_boulders"),
+        TransientEffectBoundary::gameplay_relevant_world("active_drill_progress"),
+    ]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerScopedSystem {
+    Movement,
+    Drilling,
+    ActiveDrill,
+    Cargo,
+    VitalStatus,
+    Scanner,
+    Placement,
+    EconomyService,
+}
+
+#[must_use]
+pub const fn planned_player_scoped_systems() -> [PlayerScopedSystem; 8] {
+    [
+        PlayerScopedSystem::Movement,
+        PlayerScopedSystem::Drilling,
+        PlayerScopedSystem::ActiveDrill,
+        PlayerScopedSystem::Cargo,
+        PlayerScopedSystem::VitalStatus,
+        PlayerScopedSystem::Scanner,
+        PlayerScopedSystem::Placement,
+        PlayerScopedSystem::EconomyService,
+    ]
+}
+
 /// Compact player data for render/network/save-adjacent synchronization experiments.
 ///
 /// This is not a save format. It is an explicit snapshot boundary that can later be split into
@@ -262,6 +332,10 @@ impl WorldState {
     #[must_use]
     pub fn player(&self, player_id: PlayerId) -> Option<&Player> {
         self.players.get(&player_id)
+    }
+
+    pub fn player_mut(&mut self, player_id: PlayerId) -> Option<&mut Player> {
+        self.players.get_mut(&player_id)
     }
 
     #[must_use]
@@ -526,6 +600,16 @@ impl GameSession {
     #[must_use]
     pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
         planned_state_boundaries()
+    }
+
+    #[must_use]
+    pub const fn planned_transient_effect_boundaries() -> [TransientEffectBoundary; 8] {
+        planned_transient_effect_boundaries()
+    }
+
+    #[must_use]
+    pub const fn planned_player_scoped_systems() -> [PlayerScopedSystem; 8] {
+        planned_player_scoped_systems()
     }
 
     #[must_use]
@@ -884,9 +968,12 @@ impl Default for GameSession {
 mod tests {
     use std::time::Duration;
 
-    use crate::multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand};
+    use crate::{
+        game_state::GameState,
+        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand},
+    };
 
-    use super::GameSession;
+    use super::{GameSession, WorldState};
 
     #[test]
     fn session_starts_with_single_player_compatibility_client() {
@@ -946,6 +1033,48 @@ mod tests {
 
         assert_eq!(session.world().player_count(), 1);
         assert!(session.world().player(LOCAL_PLAYER_ID).is_some());
+    }
+
+    #[test]
+    fn world_state_exposes_mutable_player_lookup() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+
+        world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .credits = 123;
+
+        assert_eq!(
+            world
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .credits,
+            123
+        );
+    }
+
+    #[test]
+    fn planned_transient_effect_boundaries_identify_local_and_world_effects() {
+        let boundaries = GameSession::planned_transient_effect_boundaries();
+
+        assert!(boundaries.iter().any(|boundary| {
+            boundary.name == "camera_shake"
+                && boundary.domain == super::TransientEffectDomain::LocalClientPresentation
+        }));
+        assert!(boundaries.iter().any(|boundary| {
+            boundary.name == "hazard_clouds"
+                && boundary.domain == super::TransientEffectDomain::GameplayRelevantWorld
+        }));
+    }
+
+    #[test]
+    fn planned_player_scoped_systems_cover_legacy_player_logic() {
+        let systems = GameSession::planned_player_scoped_systems();
+
+        assert!(systems.contains(&super::PlayerScopedSystem::Movement));
+        assert!(systems.contains(&super::PlayerScopedSystem::Drilling));
+        assert!(systems.contains(&super::PlayerScopedSystem::Cargo));
+        assert!(systems.contains(&super::PlayerScopedSystem::EconomyService));
     }
 
     #[test]

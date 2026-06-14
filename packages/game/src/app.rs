@@ -90,6 +90,8 @@ fn observe_multiplayer_scaffolding(
         .player(session.local_client().controlled_player_id);
     let _legacy_visual_changes = session.game().visual_changes();
     let _player_count = session.world().player_count();
+    let mut world_probe = session.world().clone();
+    let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _sequenced_commands = session.sequence_local_commands(player_commands);
     let _pending_command_count = session.pending_command_count(current_tick);
@@ -100,6 +102,8 @@ fn observe_multiplayer_scaffolding(
     let _compatibility_mode = GameSession::compatibility_mode();
     let _target_compatibility_mode = GameSession::target_compatibility_mode();
     let _planned_state_boundaries = GameSession::planned_state_boundaries();
+    let _planned_transient_effect_boundaries = GameSession::planned_transient_effect_boundaries();
+    let _planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
