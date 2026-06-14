@@ -90,6 +90,7 @@ fn observe_multiplayer_scaffolding(
         .player(session.local_client().controlled_player_id);
     let _legacy_visual_changes = session.game().visual_changes();
     let _player_count = session.world().player_count();
+    let _authoritative_summary = session.world().authoritative_summary();
     let mut world_probe = session.world().clone();
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
@@ -106,6 +107,7 @@ fn observe_multiplayer_scaffolding(
     let _planned_player_scoped_systems = GameSession::planned_player_scoped_systems();
     let _fixed_tick_audit_items = GameSession::fixed_tick_audit_items();
     let _snapshot_purposes = GameSession::snapshot_purposes();
+    let _client_presentation_fields = GameSession::client_presentation_fields();
     let _split_screen_viewports = GameSession::split_screen_viewports(session.client_count());
     let _world_event_catalog = GameSession::world_event_catalog();
     let _local_view = session.local_view();

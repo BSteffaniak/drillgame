@@ -397,11 +397,47 @@ pub enum WorldEvent {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthoritativeWorldSummary {
+    pub tick: SimulationTick,
+    pub player_count: usize,
+    pub terrain_width: i32,
+    pub terrain_height: i32,
+    pub hazard_count: usize,
+    pub bomb_count: usize,
+    pub infrastructure_count: usize,
+    pub active_contract_count: usize,
+    pub expedition_count: usize,
+    pub market_salt: u32,
+    pub won_game: bool,
+}
+
+impl AuthoritativeWorldSummary {
+    #[must_use]
+    pub fn from_legacy_game(tick: SimulationTick, game: &GameState, player_count: usize) -> Self {
+        Self {
+            tick,
+            player_count,
+            terrain_width: game.terrain.width(),
+            terrain_height: game.terrain.height(),
+            hazard_count: game.hazard_clouds.len() + game.falling_boulders.len(),
+            bomb_count: game.placed_bombs.len(),
+            infrastructure_count: game.infrastructure.len(),
+            active_contract_count: usize::from(game.side_contract_active)
+                + game.active_side_contracts.len(),
+            expedition_count: game.active_expeditions.len(),
+            market_salt: game.market_salt,
+            won_game: game.won_game,
+        }
+    }
+}
+
 /// Compatibility world wrapper used to introduce explicit player identity before the legacy
 /// monolithic `GameState` is fully split into authoritative world state and local client state.
 #[derive(Clone, Debug)]
 pub struct WorldState {
     simulation_tick: SimulationTick,
+    authoritative_summary: AuthoritativeWorldSummary,
     players: BTreeMap<PlayerId, Player>,
 }
 
@@ -410,6 +446,11 @@ impl WorldState {
     pub fn from_legacy_game(game: &GameState) -> Self {
         Self {
             simulation_tick: SimulationTick::default(),
+            authoritative_summary: AuthoritativeWorldSummary::from_legacy_game(
+                SimulationTick::default(),
+                game,
+                1,
+            ),
             players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
         }
     }
@@ -421,6 +462,12 @@ impl WorldState {
 
     pub const fn set_simulation_tick(&mut self, tick: SimulationTick) {
         self.simulation_tick = tick;
+        self.authoritative_summary.tick = tick;
+    }
+
+    #[must_use]
+    pub const fn authoritative_summary(&self) -> &AuthoritativeWorldSummary {
+        &self.authoritative_summary
     }
 
     #[must_use]
@@ -448,6 +495,8 @@ impl WorldState {
     fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
         self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
+        self.authoritative_summary =
+            AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
     }
 }
 
@@ -717,6 +766,32 @@ impl ClientPredictionState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientPresentationField {
+    Camera,
+    RunMode,
+    Viewport,
+    MasterVolume,
+    Fullscreen,
+    SettingsDirty,
+    ExitRequested,
+    Prediction,
+}
+
+#[must_use]
+pub const fn client_presentation_fields() -> [ClientPresentationField; 8] {
+    [
+        ClientPresentationField::Camera,
+        ClientPresentationField::RunMode,
+        ClientPresentationField::Viewport,
+        ClientPresentationField::MasterVolume,
+        ClientPresentationField::Fullscreen,
+        ClientPresentationField::SettingsDirty,
+        ClientPresentationField::ExitRequested,
+        ClientPresentationField::Prediction,
+    ]
+}
+
 /// Local client state that is intentionally separate from authoritative gameplay state.
 #[derive(Clone, Debug)]
 pub struct ClientState {
@@ -826,6 +901,11 @@ impl GameSession {
     #[must_use]
     pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
         snapshot_purposes()
+    }
+
+    #[must_use]
+    pub const fn client_presentation_fields() -> [ClientPresentationField; 8] {
+        client_presentation_fields()
     }
 
     #[must_use]
@@ -1292,6 +1372,32 @@ mod tests {
             session.world_snapshot().tick,
             session.world().simulation_tick()
         );
+    }
+
+    #[test]
+    fn world_state_summarizes_authoritative_legacy_domains() {
+        let session = GameSession::new();
+        let summary = session.world().authoritative_summary();
+
+        assert_eq!(summary.tick, session.world().simulation_tick());
+        assert_eq!(summary.player_count, 1);
+        assert_eq!(summary.terrain_width, session.game().terrain.width());
+        assert_eq!(summary.terrain_height, session.game().terrain.height());
+        assert_eq!(summary.bomb_count, session.game().placed_bombs.len());
+        assert_eq!(
+            summary.infrastructure_count,
+            session.game().infrastructure.len()
+        );
+    }
+
+    #[test]
+    fn client_state_catalogs_presentation_fields() {
+        let fields = GameSession::client_presentation_fields();
+
+        assert!(fields.contains(&super::ClientPresentationField::Camera));
+        assert!(fields.contains(&super::ClientPresentationField::RunMode));
+        assert!(fields.contains(&super::ClientPresentationField::Prediction));
+        assert!(fields.contains(&super::ClientPresentationField::ExitRequested));
     }
 
     #[test]
