@@ -1,9 +1,11 @@
 use crate::{
     game_state::GameState,
+    input::PlayerInput,
     multiplayer::{
         ClientId, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId,
         SequencedPlayerCommand, SimulationTick,
     },
+    save::SettingsFile,
 };
 
 /// Local client state that is intentionally separate from authoritative gameplay state.
@@ -11,6 +13,10 @@ use crate::{
 pub struct ClientState {
     pub client_id: ClientId,
     pub controlled_player_id: PlayerId,
+    pub master_volume: f32,
+    pub fullscreen: bool,
+    pub settings_dirty: bool,
+    pub exit_requested: bool,
     next_input_sequence: InputSequence,
 }
 
@@ -20,6 +26,10 @@ impl ClientState {
         Self {
             client_id,
             controlled_player_id,
+            master_volume: 0.8,
+            fullscreen: false,
+            settings_dirty: false,
+            exit_requested: false,
             next_input_sequence: InputSequence::new(0),
         }
     }
@@ -78,6 +88,55 @@ impl GameSession {
         self.current_tick
     }
 
+    pub const fn apply_settings(&mut self, settings: SettingsFile) {
+        self.local_client.master_volume = settings.master_volume;
+        self.local_client.fullscreen = settings.fullscreen;
+        self.sync_client_settings_to_legacy_game();
+    }
+
+    #[must_use]
+    pub const fn current_settings(&self) -> SettingsFile {
+        SettingsFile {
+            master_volume: self.local_client.master_volume,
+            fullscreen: self.local_client.fullscreen,
+        }
+    }
+
+    #[must_use]
+    pub const fn should_exit(&self) -> bool {
+        self.local_client.exit_requested || self.game.request_exit
+    }
+
+    #[must_use]
+    pub const fn master_volume(&self) -> f32 {
+        self.local_client.master_volume
+    }
+
+    #[must_use]
+    pub const fn fullscreen(&self) -> bool {
+        self.local_client.fullscreen
+    }
+
+    pub const fn take_settings_dirty(&mut self) -> bool {
+        let legacy_dirty = self.game.take_settings_dirty();
+        let client_dirty = self.local_client.settings_dirty;
+        self.local_client.settings_dirty = false;
+        legacy_dirty || client_dirty
+    }
+
+    const fn sync_client_settings_from_legacy_game(&mut self) {
+        self.local_client.master_volume = self.game.master_volume;
+        self.local_client.fullscreen = self.game.fullscreen;
+        self.local_client.settings_dirty |= self.game.settings_dirty;
+        self.local_client.exit_requested |= self.game.request_exit;
+    }
+
+    const fn sync_client_settings_to_legacy_game(&mut self) {
+        self.game.master_volume = self.local_client.master_volume;
+        self.game.fullscreen = self.local_client.fullscreen;
+        self.game.settings_dirty = self.local_client.settings_dirty;
+    }
+
     pub fn sequence_local_commands(
         &mut self,
         commands: Vec<PlayerCommand>,
@@ -96,8 +155,10 @@ impl GameSession {
             .collect()
     }
 
-    pub fn update_legacy(&mut self, input: crate::input::PlayerInput, delta_seconds: f32) {
+    pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
+        self.sync_client_settings_to_legacy_game();
         self.game.update(input, delta_seconds);
+        self.sync_client_settings_from_legacy_game();
     }
 }
 

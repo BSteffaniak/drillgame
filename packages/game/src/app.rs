@@ -4,7 +4,7 @@ use crate::{
     input_mapping::map_local_input,
     multiplayer::FIXED_DELTA_SECONDS,
     rendering::GameRenderer,
-    save::{SettingsFile, load_settings, save_settings},
+    save::{load_settings, save_settings},
     session::GameSession,
 };
 
@@ -24,9 +24,8 @@ pub fn run() {
 
     let settings = load_settings();
     let mut session = GameSession::new();
-    session.game_mut().master_volume = settings.master_volume;
-    session.game_mut().fullscreen = settings.fullscreen;
-    if session.game().fullscreen {
+    session.apply_settings(settings);
+    if session.fullscreen() {
         raylib.toggle_fullscreen();
     }
     let audio = match AudioBus::new() {
@@ -39,7 +38,7 @@ pub fn run() {
 
     let mut renderer = GameRenderer::new(&mut raylib, &thread, session.game());
 
-    while !session.game().request_exit {
+    while !session.should_exit() {
         let delta_seconds = raylib.get_frame_time();
         debug_assert!(
             delta_seconds <= FRAME_DELTA_SPIKE_WARN_SECONDS,
@@ -59,16 +58,13 @@ pub fn run() {
         if (input.fullscreen
             || input.volume_up
             || input.volume_down
-            || session.game_mut().take_settings_dirty())
-            && let Err(error) = save_settings(SettingsFile {
-                master_volume: session.game().master_volume,
-                fullscreen: session.game().fullscreen,
-            })
+            || session.take_settings_dirty())
+            && let Err(error) = save_settings(session.current_settings())
         {
             eprintln!("Settings save failed: {error}");
         }
         if let Some(audio) = &audio {
-            audio.set_volume(session.game().master_volume);
+            audio.set_volume(session.master_volume());
             audio.play(&session.game().sound_cues);
         }
 
