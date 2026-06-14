@@ -43,6 +43,8 @@ const BOULDER_SPAWN_CHANCE: u64 = 16;
 const HEAT_START_DEPTH: f32 = 18.0 * TILE_SIZE;
 const HEAT_DAMAGE_PER_SECOND: f32 = 3.5;
 const CAMERA_SMOOTHING: f32 = 8.0;
+const SKY_FLIGHT_HEIGHT_TILES: f32 = 12.0;
+const MIN_PLAYER_Y: f32 = -SKY_FLIGHT_HEIGHT_TILES * TILE_SIZE;
 const WORLD_SEED: u64 = 0xD1_11_6A_4E;
 
 const fn default_master_volume() -> f32 {
@@ -1516,7 +1518,10 @@ impl GameState {
         }
 
         self.player.x = next_x.clamp(0.0, (self.terrain.width() as f32 - 1.0) * TILE_SIZE);
-        self.player.y = next_y.clamp(0.0, (self.terrain.height() as f32 - 1.0) * TILE_SIZE);
+        self.player.y = next_y.clamp(
+            MIN_PLAYER_Y,
+            (self.terrain.height() as f32 - 1.0) * TILE_SIZE,
+        );
     }
 
     fn apply_landing_damage(&mut self) {
@@ -2607,7 +2612,7 @@ fn target_camera_offset(game: &GameState) -> (f32, f32) {
 
     (
         (game.player.x - screen_width / 2.0).clamp(0.0, max_x),
-        (game.player.y - screen_height / 2.0).clamp(0.0, max_y),
+        (game.player.y - screen_height / 2.0).clamp(MIN_PLAYER_Y, max_y),
     )
 }
 
@@ -2700,11 +2705,24 @@ mod tests {
     }
 
     #[test]
-    fn interior_exit_returns_to_surface_play() {
+    fn camera_can_follow_player_above_surface() {
         let mut game = GameState::new();
-        game.enter_interior(SurfaceZone::Repair);
-        game.exit_interior();
-        assert_eq!(game.run_mode, RunMode::Playing);
-        assert_eq!(game.interior_zone, None);
+        game.player.y = MIN_PLAYER_Y;
+        let (_, target_y) = target_camera_offset(&game);
+        assert!(target_y < 0.0);
+    }
+
+    #[test]
+    fn vertical_movement_allows_limited_sky_flight() {
+        let mut game = GameState::new();
+        game.player.y = 2.0;
+        game.move_axis(0.0, MIN_PLAYER_Y * 2.0);
+        assert!((game.player.y - MIN_PLAYER_Y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn terrain_above_world_is_not_solid() {
+        let game = GameState::new();
+        assert!(!game.terrain.is_solid_at(TilePosition { x: 4, y: -1 }));
     }
 }

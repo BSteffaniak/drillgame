@@ -194,6 +194,10 @@ impl Terrain {
 
     #[must_use]
     pub fn is_solid_at(&self, position: TilePosition) -> bool {
+        if position.y < 0 {
+            return false;
+        }
+
         self.tile(position)
             .is_some_and(|tile| tile.kind != TileKind::Air)
     }

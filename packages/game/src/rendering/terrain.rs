@@ -10,7 +10,11 @@ use crate::{
 pub(super) const TERRAIN_CHUNK_SIZE_TILES: i32 = 32;
 
 const TILE_SIZE_PIXELS: i32 = TILE_SIZE as i32;
-const UNEXPLORED_COLOR: Color = Color::new(18, 14, 18, 255);
+const SKY_CLEAR_MAX_TILE_Y: i32 = 4;
+const UNEXPLORED_GRADIENT_START_TILE_Y: i32 = SKY_CLEAR_MAX_TILE_Y + 1;
+const UNEXPLORED_FULL_DARK_TILE_Y: i32 = 34;
+const UNEXPLORED_MIN_DARK_ALPHA: i32 = 48;
+const UNEXPLORED_MAX_DARK_ALPHA: i32 = 255;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ChunkPosition {
@@ -159,7 +163,7 @@ impl TerrainChunk {
                 };
 
                 let explored = game.is_explored(position);
-                if explored && tile.kind == TileKind::Air {
+                if (explored || tile_y <= SKY_CLEAR_MAX_TILE_Y) && tile.kind == TileKind::Air {
                     continue;
                 }
 
@@ -170,14 +174,24 @@ impl TerrainChunk {
                     local_y,
                     TILE_SIZE_PIXELS,
                     TILE_SIZE_PIXELS,
-                    if explored {
-                        layer_tile_color(tile.kind, tile_y)
-                    } else {
-                        UNEXPLORED_COLOR
-                    },
+                    layer_tile_color(tile.kind, tile_y),
                 );
 
-                if explored && tile.kind != TileKind::Air {
+                if !explored {
+                    let darkness_alpha = unexplored_darkness_alpha(tile_y);
+                    if darkness_alpha > 0 {
+                        texture_draw.draw_rectangle(
+                            local_x,
+                            local_y,
+                            TILE_SIZE_PIXELS,
+                            TILE_SIZE_PIXELS,
+                            Color::new(0, 0, 0, darkness_alpha),
+                        );
+                    }
+                    continue;
+                }
+
+                if tile.kind != TileKind::Air {
                     draw_tile_texture(
                         &mut texture_draw,
                         local_x,
@@ -188,7 +202,7 @@ impl TerrainChunk {
                     );
                 }
 
-                if explored && tile.durability > 0 {
+                if tile.durability > 0 {
                     draw_tile_durability_lines(
                         &mut texture_draw,
                         local_x,
@@ -338,6 +352,21 @@ pub(super) const fn layer_tile_color(kind: TileKind, y: i32) -> Color {
     base
 }
 
+const fn unexplored_darkness_alpha(tile_y: i32) -> u8 {
+    if tile_y <= SKY_CLEAR_MAX_TILE_Y {
+        return 0;
+    }
+
+    let gradient_span = UNEXPLORED_FULL_DARK_TILE_Y - UNEXPLORED_GRADIENT_START_TILE_Y;
+    if gradient_span <= 0 || tile_y >= UNEXPLORED_FULL_DARK_TILE_Y {
+        return UNEXPLORED_MAX_DARK_ALPHA as u8;
+    }
+
+    let distance = tile_y - UNEXPLORED_GRADIENT_START_TILE_Y;
+    let alpha_range = UNEXPLORED_MAX_DARK_ALPHA - UNEXPLORED_MIN_DARK_ALPHA;
+    (UNEXPLORED_MIN_DARK_ALPHA + (alpha_range * distance) / gradient_span) as u8
+}
+
 const fn tile_color(kind: TileKind) -> Color {
     match kind {
         TileKind::Air => Color::BLANK,
@@ -394,5 +423,26 @@ const fn chunk_position_for_tile(position: TilePosition) -> ChunkPosition {
     ChunkPosition {
         x: position.x / TERRAIN_CHUNK_SIZE_TILES,
         y: position.y / TERRAIN_CHUNK_SIZE_TILES,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unexplored_darkness_keeps_sky_clear() {
+        assert_eq!(unexplored_darkness_alpha(SKY_CLEAR_MAX_TILE_Y), 0);
+    }
+
+    #[test]
+    fn unexplored_darkness_increases_with_depth() {
+        let shallow = unexplored_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y);
+        let middle = unexplored_darkness_alpha(UNEXPLORED_GRADIENT_START_TILE_Y + 10);
+        let deep = unexplored_darkness_alpha(UNEXPLORED_FULL_DARK_TILE_Y);
+
+        assert!(shallow < middle);
+        assert!(middle < deep);
+        assert_eq!(deep, 255);
     }
 }
