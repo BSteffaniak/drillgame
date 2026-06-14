@@ -36,6 +36,7 @@ pub(super) fn draw_world(
 ) {
     draw_surface_buildings(draw);
     terrain.draw(draw, camera);
+    draw_infrastructure(draw, game);
 
     if let Some(drill) = game.active_drill {
         let x = (drill.target.x as f32 * TILE_SIZE) as i32;
@@ -93,6 +94,18 @@ pub(super) fn draw_world(
         if progress > 0.45 {
             draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
         }
+    }
+}
+
+fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
+    for item in &game.infrastructure {
+        let x = (item.position.x as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
+        let y = (item.position.y as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
+        let pulse = (game.update_ticks as f32 * 0.12).sin().abs();
+        draw.draw_circle_lines(x, y, 11.0 + pulse * 3.0, Color::SKYBLUE);
+        draw.draw_rectangle(x - 4, y - 10, 8, 20, Color::DARKBLUE);
+        draw.draw_line(x, y - 12, x, y - 22, Color::RAYWHITE);
+        draw.draw_text("R", x - 4, y - 5, 12, Color::RAYWHITE);
     }
 }
 

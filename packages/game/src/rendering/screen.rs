@@ -80,6 +80,18 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         };
         draw.draw_text(&scanner, 22, 116, 16, Color::SKYBLUE);
     }
+    if game.player.signal_relay_kits > 0 {
+        draw.draw_text(
+            &format!(
+                "Signal relays: {} (R to place)",
+                game.player.signal_relay_kits
+            ),
+            720,
+            74,
+            16,
+            Color::GREEN,
+        );
+    }
 
     if game.escape_sequence_seconds > 0.0 {
         draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));

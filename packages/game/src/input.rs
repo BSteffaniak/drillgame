@@ -28,6 +28,7 @@ pub struct PlayerInput {
     pub fullscreen: bool,
     pub bomb: bool,
     pub scan: bool,
+    pub place_relay: bool,
 }
 
 #[must_use]
@@ -71,6 +72,7 @@ pub fn read_input(raylib: &RaylibHandle) -> PlayerInput {
         fullscreen: raylib.is_key_pressed(KeyboardKey::KEY_F11),
         bomb: raylib.is_key_pressed(KeyboardKey::KEY_B),
         scan: raylib.is_key_pressed(KeyboardKey::KEY_C),
+        place_relay: raylib.is_key_pressed(KeyboardKey::KEY_R),
     }
 }
 

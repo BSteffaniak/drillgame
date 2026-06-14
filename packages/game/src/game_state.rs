@@ -152,6 +152,26 @@ pub struct DustParticle {
     pub life: f32,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum InfrastructureKind {
+    SignalRelay,
+}
+
+impl InfrastructureKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SignalRelay => "Signal Relay",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct PlacedInfrastructure {
+    pub kind: InfrastructureKind,
+    pub position: TilePosition,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HazardCloud {
     pub x: f32,
@@ -456,6 +476,8 @@ pub struct GameState {
     #[serde(default)]
     pub placed_bombs: Vec<PlacedBomb>,
     #[serde(default)]
+    pub infrastructure: Vec<PlacedInfrastructure>,
+    #[serde(default)]
     pub service_animation: Option<ServiceAnimation>,
     #[serde(default)]
     pub service_animation_seconds: f32,
@@ -590,6 +612,7 @@ impl GameState {
             dust_particles: Vec::new(),
             hazard_clouds: Vec::new(),
             placed_bombs: Vec::new(),
+            infrastructure: Vec::new(),
             service_animation: None,
             service_animation_seconds: 0.0,
             market_salt: 0,
@@ -773,6 +796,7 @@ impl GameState {
         self.handle_interaction(input);
         self.handle_scanner(input);
         self.handle_bomb(input);
+        self.handle_infrastructure_placement(input);
         self.apply_movement(input, delta_seconds);
         self.update_drilling(input, delta_seconds);
         self.apply_depth_pressure(delta_seconds);
@@ -1946,6 +1970,39 @@ impl GameState {
             "Bomb armed: 2.4 seconds. {} bombs left. Clear out!",
             self.player.bombs
         );
+    }
+
+    fn handle_infrastructure_placement(&mut self, input: PlayerInput) {
+        if !input.place_relay {
+            return;
+        }
+        if self.player.signal_relay_kits == 0 {
+            "No signal relay kits. Craft one at HQ first.".clone_into(&mut self.message);
+            return;
+        }
+        let position = self.player.tile_position(TILE_SIZE);
+        if position.y < 8 {
+            "Signal relays must be placed underground.".clone_into(&mut self.message);
+            return;
+        }
+        if self
+            .infrastructure
+            .iter()
+            .any(|item| item.position == position)
+        {
+            "Infrastructure already occupies this tile.".clone_into(&mut self.message);
+            return;
+        }
+        self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_sub(1);
+        self.infrastructure.push(PlacedInfrastructure {
+            kind: InfrastructureKind::SignalRelay,
+            position,
+        });
+        self.message = format!(
+            "Placed {}. Deep rescue signal improved.",
+            InfrastructureKind::SignalRelay.name()
+        );
+        self.sound_cues.push(SoundCue::Upgrade);
     }
 
     fn apply_movement(&mut self, input: PlayerInput, delta_seconds: f32) {
