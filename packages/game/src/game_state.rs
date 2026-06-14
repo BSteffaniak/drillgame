@@ -342,6 +342,49 @@ impl CollectionLog {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum WorldEventKind {
+    MarketCrash,
+    MarketBoom,
+    RareBuyer,
+    FuelShortage,
+    RepairBacklog,
+    HeatWave,
+    CollapseSurge,
+    DeepPressureStorm,
+    GasBloom,
+    Earthquake,
+    MeteorShower,
+    RivalClaims,
+}
+
+impl WorldEventKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MarketCrash => "Market crash",
+            Self::MarketBoom => "Market boom",
+            Self::RareBuyer => "Rare buyer",
+            Self::FuelShortage => "Fuel shortage",
+            Self::RepairBacklog => "Repair backlog",
+            Self::HeatWave => "Heat wave",
+            Self::CollapseSurge => "Collapse surge",
+            Self::DeepPressureStorm => "Deep pressure storm",
+            Self::GasBloom => "Gas bloom",
+            Self::Earthquake => "Earthquake",
+            Self::MeteorShower => "Meteor shower",
+            Self::RivalClaims => "Rival claims",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct ActiveWorldEvent {
+    pub kind: WorldEventKind,
+    pub days_remaining: u32,
+    pub severity: u32,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ExpeditionObjectiveKind {
     #[default]
@@ -556,6 +599,8 @@ pub struct GameState {
     #[serde(default)]
     pub town_event: String,
     #[serde(default)]
+    pub active_world_events: Vec<ActiveWorldEvent>,
+    #[serde(default)]
     pub scan_markers: Vec<ScanMarker>,
     #[serde(default)]
     pub collapse_warnings: Vec<TilePosition>,
@@ -682,6 +727,7 @@ impl GameState {
             scanner_cooldown_seconds: 0.0,
             town_event_day: 0,
             town_event: "Normal market conditions.".to_owned(),
+            active_world_events: Vec::new(),
             scan_markers: Vec::new(),
             collapse_warnings: Vec::new(),
             side_contract_active: false,
@@ -800,6 +846,7 @@ impl GameState {
         self.update_service_animation(delta_seconds);
         self.update_scanner_timers(delta_seconds);
         self.update_boulders(delta_seconds);
+        self.update_world_event_hazards();
         self.camera_shake_seconds = (self.camera_shake_seconds - delta_seconds).max(0.0);
         self.screen_flash_seconds = (self.screen_flash_seconds - delta_seconds).max(0.0);
         self.update_hazards(delta_seconds);
@@ -1020,9 +1067,59 @@ impl GameState {
     }
 
     #[must_use]
+    pub fn has_world_event(&self, kind: WorldEventKind) -> bool {
+        self.active_world_events
+            .iter()
+            .any(|event| event.kind == kind && event.days_remaining > 0)
+    }
+
+    #[must_use]
+    pub fn world_event_severity(&self, kind: WorldEventKind) -> u32 {
+        self.active_world_events
+            .iter()
+            .filter(|event| event.kind == kind && event.days_remaining > 0)
+            .map(|event| event.severity)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn active_world_event_summary(&self) -> String {
+        if self.active_world_events.is_empty() {
+            return "No active world events.".to_owned();
+        }
+        self.active_world_events
+            .iter()
+            .map(|event| {
+                format!(
+                    "{} S{} ({}d)",
+                    event.kind.label(),
+                    event.severity,
+                    event.days_remaining
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    #[must_use]
     pub fn mineral_market_value(&self, mineral: MineralKind) -> u32 {
-        let factor =
+        let mut factor =
             self.mineral_market_factor(mineral) + u32::from(self.town_development.depot_level) * 3;
+        if self.has_world_event(WorldEventKind::MarketBoom) {
+            factor += 25;
+        }
+        if self.has_world_event(WorldEventKind::RareBuyer)
+            && matches!(
+                mineral,
+                MineralKind::Diamond | MineralKind::Mythril | MineralKind::Uranium
+            )
+        {
+            factor += 45;
+        }
+        if self.has_world_event(WorldEventKind::MarketCrash) {
+            factor = factor.saturating_sub(25).max(45);
+        }
         (mineral.value() * factor) / 100
     }
 
@@ -1475,7 +1572,13 @@ impl GameState {
             format!("Fuel topped up for {cost} credits.")
         };
         if cost > 0 {
-            if self.town_event_day.is_multiple_of(5) {
+            if self.has_world_event(WorldEventKind::FuelShortage) {
+                let surcharge = (cost / 4).min(self.player.credits);
+                self.player.credits -= surcharge;
+                self.message = format!(
+                    "Fuel topped up for {cost} credits. Fuel shortage surcharge: {surcharge}."
+                );
+            } else if self.town_event_day.is_multiple_of(5) {
                 let refund = cost / 5;
                 self.player.credits += refund;
                 self.message = format!("Fuel topped up for {cost} credits. Sale refund: {refund}.");
@@ -1496,7 +1599,13 @@ impl GameState {
             format!("Hull repaired for {cost} credits.")
         };
         if cost > 0 {
-            if self.town_event_day % 5 == 2 {
+            if self.has_world_event(WorldEventKind::RepairBacklog) {
+                let surcharge = (cost / 4).min(self.player.credits);
+                self.player.credits -= surcharge;
+                self.message = format!(
+                    "Hull repaired for {cost} credits. Repair backlog event surcharge: {surcharge}."
+                );
+            } else if self.town_event_day % 5 == 2 {
                 let surcharge = (cost / 10).min(self.player.credits);
                 self.player.credits -= surcharge;
                 self.message = format!(
@@ -2137,8 +2246,35 @@ impl GameState {
         self.modal = Some(ModalScreen::Shop);
     }
 
+    fn update_world_event_hazards(&mut self) {
+        if self.run_mode != RunMode::Playing || self.game_over || self.player.y < TILE_SIZE * 8.0 {
+            return;
+        }
+        if self.has_world_event(WorldEventKind::CollapseSurge)
+            && self.update_ticks.is_multiple_of(180)
+        {
+            self.spawn_cave_in();
+            "Collapse surge: falling rock detected nearby.".clone_into(&mut self.message);
+        }
+        if self.has_world_event(WorldEventKind::GasBloom) && self.update_ticks.is_multiple_of(240) {
+            self.hazard_clouds.push(HazardCloud {
+                x: self.player.x,
+                y: self.player.y + TILE_SIZE,
+                life: 6.0,
+                radius: 12.0,
+            });
+            "Gas bloom: corrosive vapor is spreading through open tunnels."
+                .clone_into(&mut self.message);
+        }
+    }
+
     fn handle_scanner(&mut self, input: PlayerInput) {
         if !input.scan {
+            return;
+        }
+        if self.has_world_event(WorldEventKind::DeepPressureStorm) {
+            "Deep pressure storm is scrambling scanner returns today."
+                .clone_into(&mut self.message);
             return;
         }
         if self.player.scanner_level == 0 {
@@ -2891,7 +3027,9 @@ impl GameState {
         }
 
         let depth_factor = ((self.player.y - safe_depth) / (12.0 * TILE_SIZE)).max(1.0);
-        let damage = HEAT_DAMAGE_PER_SECOND * depth_factor * delta_seconds;
+        let heat_multiplier =
+            1.0 + self.world_event_severity(WorldEventKind::HeatWave) as f32 * 0.18;
+        let damage = HEAT_DAMAGE_PER_SECOND * depth_factor * heat_multiplier * delta_seconds;
         self.player.hull = (self.player.hull - damage).max(0.0);
         "Depth pressure overheating hull. Upgrade radiator.".clone_into(&mut self.message);
     }
@@ -2911,10 +3049,12 @@ impl GameState {
         }
 
         let player_tile = self.player.tile_position(TILE_SIZE);
+        let heat_multiplier =
+            1.0 + self.world_event_severity(WorldEventKind::HeatWave) as f32 * 0.18;
         let damage = if self.is_pump_protected(player_tile) {
-            2.5 * delta_seconds
+            2.5 * heat_multiplier * delta_seconds
         } else {
-            9.0 * delta_seconds
+            9.0 * heat_multiplier * delta_seconds
         };
         self.player.hull = (self.player.hull - damage).max(0.0);
         self.sound_cues.push(SoundCue::Damage);
@@ -3055,8 +3195,87 @@ impl GameState {
         self.advance_town_event();
     }
 
+    fn tick_world_events(&mut self) {
+        for event in &mut self.active_world_events {
+            event.days_remaining = event.days_remaining.saturating_sub(1);
+        }
+        self.active_world_events
+            .retain(|event| event.days_remaining > 0);
+    }
+
+    fn schedule_world_event(&mut self) {
+        if !self.town_event_day.is_multiple_of(3) {
+            return;
+        }
+        let kind = match (self.market_salt + self.town_event_day) % 12 {
+            0 => WorldEventKind::MarketCrash,
+            1 => WorldEventKind::MarketBoom,
+            2 => WorldEventKind::RareBuyer,
+            3 => WorldEventKind::FuelShortage,
+            4 => WorldEventKind::RepairBacklog,
+            5 => WorldEventKind::HeatWave,
+            6 => WorldEventKind::CollapseSurge,
+            7 => WorldEventKind::DeepPressureStorm,
+            8 => WorldEventKind::GasBloom,
+            9 => WorldEventKind::Earthquake,
+            10 => WorldEventKind::MeteorShower,
+            _ => WorldEventKind::RivalClaims,
+        };
+        if self.has_world_event(kind) {
+            return;
+        }
+        let severity = 1 + (self.town_event_day + self.market_salt) % 3;
+        let days_remaining = 2 + severity.min(2);
+        self.active_world_events.push(ActiveWorldEvent {
+            kind,
+            days_remaining,
+            severity,
+        });
+        self.apply_world_event_start(kind, severity);
+        self.message = format!(
+            "World event: {} severity {severity} for {days_remaining} days.",
+            kind.label()
+        );
+    }
+
+    fn apply_world_event_start(&mut self, kind: WorldEventKind, severity: u32) {
+        match kind {
+            WorldEventKind::Earthquake => {
+                self.spawn_cave_in();
+                self.apply_seismic_pump_strain();
+                self.shake_camera(0.6, 12.0 + severity as f32 * 4.0);
+            }
+            WorldEventKind::GasBloom => {
+                self.hazard_clouds.push(HazardCloud {
+                    x: self.player.x,
+                    y: self.player.y + TILE_SIZE,
+                    life: 8.0 + severity as f32,
+                    radius: 12.0 + severity as f32 * 2.0,
+                });
+            }
+            WorldEventKind::MeteorShower => {
+                self.start_side_contract();
+                self.contracts.active.reward = self.contracts.active.reward.saturating_add(75);
+            }
+            WorldEventKind::RivalClaims => {
+                self.expedition_offers.clear();
+                self.refresh_expedition_offers();
+            }
+            WorldEventKind::MarketCrash
+            | WorldEventKind::MarketBoom
+            | WorldEventKind::RareBuyer
+            | WorldEventKind::FuelShortage
+            | WorldEventKind::RepairBacklog
+            | WorldEventKind::HeatWave
+            | WorldEventKind::CollapseSurge
+            | WorldEventKind::DeepPressureStorm => {}
+        }
+    }
+
     fn advance_town_event(&mut self) {
         self.town_event_day = self.town_event_day.saturating_add(1);
+        self.tick_world_events();
+        self.schedule_world_event();
         self.town_event = match self.town_event_day % 5 {
             0 => "Fuel sale: mechanics whisper about cheaper surface fuel.".to_owned(),
             1 => "Gold boom: depot buyers are bidding aggressively.".to_owned(),
