@@ -296,6 +296,12 @@ impl CommandSequenceTracker {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MessageRoutingPolicy {
+    SharedWorldLogAndPerClientHud,
+    PerClientOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceOwnershipPolicy {
     PerPlayer,
     SharedTeam,
@@ -316,6 +322,11 @@ pub enum CollisionPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransportPolicy {
     TransportAgnosticProtocolFirst,
+}
+
+#[must_use]
+pub const fn initial_message_routing_policy() -> MessageRoutingPolicy {
+    MessageRoutingPolicy::SharedWorldLogAndPerClientHud
 }
 
 #[must_use]
@@ -477,9 +488,9 @@ mod tests {
         ClientId, CommandAcceptance, CommandSequenceTracker, InputSequence, PlayerCommand,
         PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
         SimulationTick, command_conflicts, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_resource_ownership_policy,
-        initial_transport_policy, per_client_ui_policy, session_continuity_decision,
-        session_shutdown_decision, terrain_recovery_decision,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
+        initial_resource_ownership_policy, initial_transport_policy, per_client_ui_policy,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
     };
 
     #[test]
@@ -671,6 +682,10 @@ mod tests {
 
     #[test]
     fn initial_multiplayer_policy_decisions_are_explicit() {
+        assert_eq!(
+            initial_message_routing_policy(),
+            super::MessageRoutingPolicy::SharedWorldLogAndPerClientHud
+        );
         assert_eq!(
             initial_resource_ownership_policy(),
             super::ResourceOwnershipPolicy::PerPlayer
