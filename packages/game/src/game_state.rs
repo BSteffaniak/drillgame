@@ -3002,6 +3002,7 @@ impl GameState {
             self.market_history.remove(0);
         }
         self.apply_infrastructure_maintenance();
+        self.apply_seismic_pump_strain();
         for mineral in all_minerals() {
             let history = self.mineral_market_history.entry(mineral).or_default();
             history.push(market_factor_for(
@@ -3013,6 +3014,34 @@ impl GameState {
                 history.remove(0);
             }
         }
+    }
+
+    fn apply_seismic_pump_strain(&mut self) {
+        if self.town_event_day % 5 != 3 {
+            return;
+        }
+        let mut damaged = 0_u32;
+        let mut failed = 0_u32;
+        for item in &mut self.infrastructure {
+            if item.kind != InfrastructureKind::PumpStation {
+                continue;
+            }
+            damaged += 1;
+            let before = item.durability;
+            item.durability = item.durability.saturating_sub(35);
+            if before > 0 && item.durability == 0 {
+                failed += 1;
+            }
+        }
+        if damaged == 0 {
+            return;
+        }
+        self.infrastructure.retain(|item| item.durability > 0);
+        self.message = if failed == 0 {
+            format!("Seismic tremor strained {damaged} pump station(s).")
+        } else {
+            format!("Seismic tremor strained {damaged} pump station(s); {failed} failed.")
+        };
     }
 
     fn apply_infrastructure_maintenance(&mut self) {
