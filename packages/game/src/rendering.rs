@@ -54,6 +54,18 @@ impl GameRenderer {
         self.terrain.sync(raylib, thread, game);
     }
 
+    pub fn render_client_views(
+        &self,
+        draw: &mut RaylibDrawHandle<'_>,
+        game: &GameState,
+        views: &[&ClientView],
+    ) {
+        let Some(view) = views.first() else {
+            return;
+        };
+        self.render_client_view(draw, game, view);
+    }
+
     pub fn render_client_view(
         &self,
         draw: &mut RaylibDrawHandle<'_>,

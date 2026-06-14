@@ -390,6 +390,11 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn render_views(&self) -> Vec<&ClientView> {
+        self.client_views()
+    }
+
+    #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -681,6 +686,7 @@ mod tests {
         assert_eq!(session.client_count(), 1);
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].client_id, LOCAL_CLIENT_ID);
+        assert_eq!(session.render_views().len(), views.len());
     }
 
     #[test]

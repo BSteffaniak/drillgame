@@ -61,8 +61,9 @@ pub fn run() {
         let _origin_chunk_revision =
             terrain_revisions.revision(crate::session::TerrainChunkPosition { x: 0, y: 0 });
         let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
+        let _local_view = session.local_view();
         let _client_view_count = session.client_count();
-        let _client_views = session.client_views();
+        let _client_views = session.render_views();
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
@@ -86,6 +87,7 @@ pub fn run() {
         renderer.sync(&mut raylib, &thread, session.game_mut());
 
         let mut draw = raylib.begin_drawing(&thread);
-        renderer.render_client_view(&mut draw, session.game(), session.local_view());
+        let client_views = session.client_views();
+        renderer.render_client_views(&mut draw, session.game(), &client_views);
     }
 }
