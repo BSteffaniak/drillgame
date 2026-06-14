@@ -90,6 +90,8 @@ impl WorldDelta {
 
 const TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
 const KEYFRAME_INTERVAL_TICKS: u64 = SIMULATION_HZ as u64 * 5;
+const DEFAULT_VIEWPORT_WIDTH: i32 = 1280;
+const DEFAULT_VIEWPORT_HEIGHT: i32 = 720;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TerrainChunkPosition {
@@ -223,11 +225,32 @@ impl WorldState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Viewport {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl Viewport {
+    #[must_use]
+    pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
 /// Per-client presentation state used by renderers and future split-screen views.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClientView {
     pub client_id: ClientId,
     pub controlled_player_id: PlayerId,
+    pub viewport: Viewport,
     pub camera: raylib::prelude::Vector2,
     pub run_mode: RunMode,
 }
@@ -238,6 +261,7 @@ impl ClientView {
         Self {
             client_id: LOCAL_CLIENT_ID,
             controlled_player_id: LOCAL_PLAYER_ID,
+            viewport: Viewport::new(0, 0, DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT),
             camera: render_camera(game),
             run_mode: game.run_mode,
         }
@@ -295,7 +319,8 @@ impl Default for ClientState {
 pub struct GameSession {
     game: GameState,
     world: WorldState,
-    local_client: ClientState,
+    clients: BTreeMap<ClientId, ClientState>,
+    local_client_id: ClientId,
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
     terrain_revisions: TerrainRevisionTracker,
@@ -308,10 +333,12 @@ impl GameSession {
     pub fn new() -> Self {
         let game = GameState::new();
         let world = WorldState::from_legacy_game(&game);
+        let local_client = ClientState::default();
         Self {
             game,
             world,
-            local_client: ClientState::default(),
+            clients: BTreeMap::from([(LOCAL_CLIENT_ID, local_client)]),
+            local_client_id: LOCAL_CLIENT_ID,
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
             terrain_revisions: TerrainRevisionTracker::default(),
@@ -340,13 +367,31 @@ impl GameSession {
     }
 
     #[must_use]
-    pub const fn local_client(&self) -> &ClientState {
-        &self.local_client
+    pub fn local_client(&self) -> &ClientState {
+        self.clients
+            .get(&self.local_client_id)
+            .expect("local client exists in game session")
+    }
+
+    fn local_client_mut(&mut self) -> &mut ClientState {
+        self.clients
+            .get_mut(&self.local_client_id)
+            .expect("local client exists in game session")
     }
 
     #[must_use]
-    pub const fn local_view(&self) -> &ClientView {
-        &self.local_client.view
+    pub fn local_view(&self) -> &ClientView {
+        &self.local_client().view
+    }
+
+    #[must_use]
+    pub fn client_views(&self) -> Vec<&ClientView> {
+        self.clients.values().map(|client| &client.view).collect()
+    }
+
+    #[must_use]
+    pub fn client_count(&self) -> usize {
+        self.clients.len()
     }
 
     #[must_use]
@@ -403,71 +448,87 @@ impl GameSession {
         self.pending_events.push(event);
     }
 
-    pub const fn apply_settings(&mut self, settings: SettingsFile) {
-        self.local_client.master_volume = settings.master_volume;
-        self.local_client.fullscreen = settings.fullscreen;
+    pub fn apply_settings(&mut self, settings: SettingsFile) {
+        let local_client = self.local_client_mut();
+        local_client.master_volume = settings.master_volume;
+        local_client.fullscreen = settings.fullscreen;
         self.sync_client_settings_to_legacy_game();
     }
 
     #[must_use]
-    pub const fn current_settings(&self) -> SettingsFile {
+    pub fn current_settings(&self) -> SettingsFile {
         SettingsFile {
-            master_volume: self.local_client.master_volume,
-            fullscreen: self.local_client.fullscreen,
+            master_volume: self.local_client().master_volume,
+            fullscreen: self.local_client().fullscreen,
         }
     }
 
     #[must_use]
-    pub const fn should_exit(&self) -> bool {
-        self.local_client.exit_requested || self.game.request_exit
+    pub fn should_exit(&self) -> bool {
+        self.local_client().exit_requested || self.game.request_exit
     }
 
     #[must_use]
-    pub const fn master_volume(&self) -> f32 {
-        self.local_client.master_volume
+    pub fn master_volume(&self) -> f32 {
+        self.local_client().master_volume
     }
 
     #[must_use]
-    pub const fn fullscreen(&self) -> bool {
-        self.local_client.fullscreen
+    pub fn fullscreen(&self) -> bool {
+        self.local_client().fullscreen
     }
 
-    pub const fn take_settings_dirty(&mut self) -> bool {
+    pub fn take_settings_dirty(&mut self) -> bool {
         let legacy_dirty = self.game.take_settings_dirty();
-        let client_dirty = self.local_client.settings_dirty;
-        self.local_client.settings_dirty = false;
+        let local_client = self.local_client_mut();
+        let client_dirty = local_client.settings_dirty;
+        local_client.settings_dirty = false;
         legacy_dirty || client_dirty
     }
 
     fn sync_client_settings_from_legacy_game(&mut self) {
-        let settings_changed = (self.local_client.master_volume - self.game.master_volume).abs()
-            > f32::EPSILON
-            || self.local_client.fullscreen != self.game.fullscreen
-            || self.game.settings_dirty;
-        let exit_requested = self.game.request_exit && !self.local_client.exit_requested;
+        let local_client_id = self.local_client_id;
+        let game_master_volume = self.game.master_volume;
+        let game_fullscreen = self.game.fullscreen;
+        let game_settings_dirty = self.game.settings_dirty;
+        let game_request_exit = self.game.request_exit;
+        let view = ClientView::from_legacy_game(&self.game);
+        let settings_changed;
+        let exit_requested;
+        {
+            let local_client = self.local_client_mut();
+            settings_changed = (local_client.master_volume - game_master_volume).abs()
+                > f32::EPSILON
+                || local_client.fullscreen != game_fullscreen
+                || game_settings_dirty;
+            exit_requested = game_request_exit && !local_client.exit_requested;
 
-        self.local_client.master_volume = self.game.master_volume;
-        self.local_client.fullscreen = self.game.fullscreen;
-        self.local_client.settings_dirty |= self.game.settings_dirty;
-        self.local_client.exit_requested |= self.game.request_exit;
-        self.local_client.view = ClientView::from_legacy_game(&self.game);
+            local_client.master_volume = game_master_volume;
+            local_client.fullscreen = game_fullscreen;
+            local_client.settings_dirty |= game_settings_dirty;
+            local_client.exit_requested |= game_request_exit;
+            local_client.view = view;
+        }
 
         if settings_changed {
             self.push_event(WorldEvent::ClientSettingsChanged {
-                client_id: self.local_client.client_id,
+                client_id: local_client_id,
             });
         }
         if exit_requested {
             self.push_event(WorldEvent::ClientExitRequested {
-                client_id: self.local_client.client_id,
+                client_id: local_client_id,
             });
         }
     }
 
-    const fn sync_client_settings_to_legacy_game(&mut self) {
-        self.game.master_volume = self.local_client.master_volume;
-        self.game.fullscreen = self.local_client.fullscreen;
-        self.game.settings_dirty = self.local_client.settings_dirty;
+    fn sync_client_settings_to_legacy_game(&mut self) {
+        let master_volume = self.local_client().master_volume;
+        let fullscreen = self.local_client().fullscreen;
+        let settings_dirty = self.local_client().settings_dirty;
+        self.game.master_volume = master_volume;
+        self.game.fullscreen = fullscreen;
+        self.game.settings_dirty = settings_dirty;
     }
 
     pub fn sequence_local_commands(
@@ -483,16 +544,19 @@ impl GameSession {
         &mut self,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
-        let player_id = self.local_client.controlled_player_id;
+        let player_id = self.local_client().controlled_player_id;
         let target_tick = self.current_tick;
 
         commands
             .into_iter()
-            .map(|command| SequencedPlayerCommand {
-                player_id,
-                sequence: self.local_client.next_sequence(),
-                target_tick,
-                command,
+            .map(|command| {
+                let sequence = self.local_client_mut().next_sequence();
+                SequencedPlayerCommand {
+                    player_id,
+                    sequence,
+                    target_tick,
+                    command,
+                }
             })
             .collect()
     }
@@ -558,7 +622,7 @@ impl GameSession {
         }
         if !previous_request_exit && self.game.request_exit {
             self.push_event(WorldEvent::ClientExitRequested {
-                client_id: self.local_client.client_id,
+                client_id: self.local_client_id,
             });
         }
         if self.game.visual_changes.full_terrain_refresh {
@@ -604,6 +668,19 @@ mod tests {
         assert_eq!(session.local_view().client_id, LOCAL_CLIENT_ID);
         assert_eq!(session.local_view().controlled_player_id, LOCAL_PLAYER_ID);
         assert_eq!(session.local_view().run_mode, session.game().run_mode);
+        assert_eq!(session.local_view().viewport.width, 1280);
+        assert_eq!(session.local_view().viewport.height, 720);
+    }
+
+    #[test]
+    fn session_exposes_local_client_view_collection() {
+        let session = GameSession::new();
+
+        let views = session.client_views();
+
+        assert_eq!(session.client_count(), 1);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].client_id, LOCAL_CLIENT_ID);
     }
 
     #[test]
