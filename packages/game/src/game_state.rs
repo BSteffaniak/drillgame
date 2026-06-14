@@ -338,6 +338,7 @@ pub enum ExpeditionObjectiveKind {
     ReachDepth,
     DeliverCargo,
     ScanHazards,
+    BuildPumpStations,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -358,6 +359,9 @@ impl Expedition {
                 format!("Deliver {} x{}", self.target.name(), self.required)
             }
             ExpeditionObjectiveKind::ScanHazards => format!("Map {} hazards", self.required),
+            ExpeditionObjectiveKind::BuildPumpStations => {
+                format!("Install {} pump station(s)", self.required)
+            }
         }
     }
     #[must_use]
@@ -366,7 +370,9 @@ impl Expedition {
             ExpeditionObjectiveKind::ReachDepth if self.required >= 120 => "extreme",
             ExpeditionObjectiveKind::ReachDepth if self.required >= 90 => "high",
             ExpeditionObjectiveKind::DeliverCargo if self.required >= 3 => "medium",
-            ExpeditionObjectiveKind::ScanHazards => "medium",
+            ExpeditionObjectiveKind::ScanHazards | ExpeditionObjectiveKind::BuildPumpStations => {
+                "medium"
+            }
             _ => "low",
         }
     }
@@ -977,6 +983,13 @@ impl GameState {
                 self.scan_markers
                     .iter()
                     .filter(|marker| marker.kind == expedition.target)
+                    .count()
+                    .min(expedition.required as usize) as u32
+            }
+            ExpeditionObjectiveKind::BuildPumpStations => {
+                self.infrastructure
+                    .iter()
+                    .filter(|item| item.kind == InfrastructureKind::PumpStation)
                     .count()
                     .min(expedition.required as usize) as u32
             }
@@ -1597,6 +1610,13 @@ impl GameState {
                 required: 4,
                 reward: 360 + day * 10,
                 expires_day: day + 3,
+            },
+            Expedition {
+                kind: ExpeditionObjectiveKind::BuildPumpStations,
+                target: TileKind::MagmaVent,
+                required: 2,
+                reward: 460 + day * 12,
+                expires_day: day + 5,
             },
         ];
     }
@@ -3414,6 +3434,13 @@ fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
             game.scan_markers
                 .iter()
                 .filter(|marker| marker.kind == expedition.target)
+                .count()
+                >= expedition.required as usize
+        }
+        ExpeditionObjectiveKind::BuildPumpStations => {
+            game.infrastructure
+                .iter()
+                .filter(|item| item.kind == InfrastructureKind::PumpStation)
                 .count()
                 >= expedition.required as usize
         }
