@@ -536,28 +536,38 @@ impl GameSession {
         &mut self,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
-        let sequenced = self.sequence_commands_for_local_player(commands);
+        self.sequence_client_commands(self.local_client_id, commands)
+    }
+
+    pub fn sequence_client_commands(
+        &mut self,
+        client_id: ClientId,
+        commands: Vec<PlayerCommand>,
+    ) -> Vec<SequencedPlayerCommand> {
+        let sequenced = self.sequence_commands_for_client(client_id, commands);
         self.buffer_commands(sequenced.clone());
         sequenced
     }
 
-    fn sequence_commands_for_local_player(
+    fn sequence_commands_for_client(
         &mut self,
+        client_id: ClientId,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
-        let player_id = self.local_client().controlled_player_id;
         let target_tick = self.current_tick;
+        let client = self
+            .clients
+            .get_mut(&client_id)
+            .expect("client exists in game session");
+        let player_id = client.controlled_player_id;
 
         commands
             .into_iter()
-            .map(|command| {
-                let sequence = self.local_client_mut().next_sequence();
-                SequencedPlayerCommand {
-                    player_id,
-                    sequence,
-                    target_tick,
-                    command,
-                }
+            .map(|command| SequencedPlayerCommand {
+                player_id,
+                sequence: client.next_sequence(),
+                target_tick,
+                command,
             })
             .collect()
     }
@@ -714,6 +724,19 @@ mod tests {
         assert_eq!(commands[0].player_id, LOCAL_PLAYER_ID);
         assert_eq!(commands[0].sequence.get(), 0);
         assert_eq!(commands[0].target_tick, session.current_tick());
+        assert_eq!(session.pending_command_count(session.current_tick()), 1);
+    }
+
+    #[test]
+    fn client_commands_share_authoritative_session_path() {
+        let mut session = GameSession::new();
+
+        let commands =
+            session.sequence_client_commands(LOCAL_CLIENT_ID, vec![PlayerCommand::Interact]);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].player_id, LOCAL_PLAYER_ID);
+        assert_eq!(commands[0].sequence.get(), 0);
         assert_eq!(session.pending_command_count(session.current_tick()), 1);
     }
 
