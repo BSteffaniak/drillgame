@@ -1376,6 +1376,7 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let options = [
         "Complete active contract",
         "Sell loose cargo",
+        "Auto-sort low-grade cargo",
         "Receipt history",
     ];
     for (index, option) in options.iter().enumerate() {
