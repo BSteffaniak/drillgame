@@ -400,6 +400,8 @@ pub struct GameState {
     #[serde(default)]
     pub market_history: Vec<u32>,
     #[serde(default)]
+    pub mineral_market_history: std::collections::BTreeMap<MineralKind, Vec<u32>>,
+    #[serde(default)]
     pub scanner_pulse_seconds: f32,
     #[serde(default)]
     pub scanner_cooldown_seconds: f32,
@@ -528,6 +530,7 @@ impl GameState {
             service_animation_seconds: 0.0,
             market_salt: 0,
             market_history: vec![market_factor(0, 0)],
+            mineral_market_history: initial_mineral_market_history(0, 0),
             scanner_pulse_seconds: 0.0,
             scanner_cooldown_seconds: 0.0,
             town_event_day: 0,
@@ -784,9 +787,21 @@ impl GameState {
 
     #[must_use]
     pub fn mineral_market_value(&self, mineral: MineralKind) -> u32 {
-        let factor = market_factor(self.market_salt, self.town_event_day)
-            + u32::from(self.town_development.depot_level) * 3;
+        let factor =
+            self.mineral_market_factor(mineral) + u32::from(self.town_development.depot_level) * 3;
         (mineral.value() * factor) / 100
+    }
+
+    #[must_use]
+    pub const fn mineral_market_factor(&self, mineral: MineralKind) -> u32 {
+        market_factor_for(self.market_salt, self.town_event_day, mineral)
+    }
+
+    #[must_use]
+    pub fn previous_mineral_market_factor(&self, mineral: MineralKind) -> Option<u32> {
+        self.mineral_market_history
+            .get(&mineral)
+            .and_then(|history| history.iter().rev().nth(1).copied())
     }
 
     const fn tile_index(&self, position: TilePosition) -> Option<usize> {
@@ -898,6 +913,10 @@ impl GameState {
             }
             if self.won_game {
                 self.deep_claim_status = DeepClaimStatus::Unlocked;
+            }
+            if self.mineral_market_history.is_empty() {
+                self.mineral_market_history =
+                    initial_mineral_market_history(self.market_salt, self.town_event_day);
             }
             self.save_version = current_save_version();
         }
@@ -1637,10 +1656,22 @@ impl GameState {
             );
         }
 
-        let factor = market_factor(self.market_salt, self.town_event_day)
-            + u32::from(self.town_development.depot_level) * 3;
+        let depot_bonus = u32::from(self.town_development.depot_level) * 3;
+        let adjusted = self
+            .player
+            .cargo
+            .iter()
+            .map(|(mineral, count)| {
+                mineral.value() * count * (self.mineral_market_factor(*mineral) + depot_bonus) / 100
+            })
+            .sum::<u32>()
+            + self
+                .player
+                .artifacts
+                .iter()
+                .map(|(artifact, count)| artifact.value() * count)
+                .sum::<u32>();
         let payout = sell_cargo(&mut self.player);
-        let adjusted = payout.saturating_mul(factor) / 100;
         if adjusted != payout {
             self.player.credits = self
                 .player
@@ -1651,7 +1682,10 @@ impl GameState {
         self.market_salt = self.market_salt.wrapping_add(1);
         if adjusted > 0 {
             self.total_earnings += adjusted;
-            let _ = writeln!(&mut self.last_depot_receipt, "MARKET {factor}%");
+            let _ = writeln!(
+                &mut self.last_depot_receipt,
+                "MARKET mineral pricing applied"
+            );
             let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {adjusted} cr");
             self.depot_receipts.push(self.last_depot_receipt.clone());
             if self.depot_receipts.len() > 5 {
@@ -1662,7 +1696,7 @@ impl GameState {
             "No cargo to sell.".clone_into(&mut self.message);
         } else {
             self.sound_cues.push(SoundCue::Sell);
-            self.message = format!("Sold cargo for {adjusted} credits at {factor}% market.");
+            self.message = format!("Sold cargo for {adjusted} credits at current mineral markets.");
         }
     }
 
@@ -2492,6 +2526,17 @@ impl GameState {
         if self.market_history.len() > 7 {
             self.market_history.remove(0);
         }
+        for mineral in all_minerals() {
+            let history = self.mineral_market_history.entry(mineral).or_default();
+            history.push(market_factor_for(
+                self.market_salt,
+                self.town_event_day,
+                mineral,
+            ));
+            if history.len() > 7 {
+                history.remove(0);
+            }
+        }
     }
 
     fn update_status_messages(&mut self) {
@@ -2897,6 +2942,42 @@ const fn scanner_can_mark(kind: TileKind, scanner_level: u8) -> bool {
 
 const fn current_save_version() -> u32 {
     2
+}
+
+const fn all_minerals() -> [MineralKind; 10] {
+    [
+        MineralKind::Copper,
+        MineralKind::Iron,
+        MineralKind::Silver,
+        MineralKind::Gold,
+        MineralKind::Emerald,
+        MineralKind::Ruby,
+        MineralKind::Diamond,
+        MineralKind::Platinum,
+        MineralKind::Uranium,
+        MineralKind::Mythril,
+    ]
+}
+
+fn initial_mineral_market_history(
+    salt: u32,
+    event_day: u32,
+) -> std::collections::BTreeMap<MineralKind, Vec<u32>> {
+    all_minerals()
+        .into_iter()
+        .map(|mineral| (mineral, vec![market_factor_for(salt, event_day, mineral)]))
+        .collect()
+}
+
+const fn market_factor_for(salt: u32, event_day: u32, mineral: MineralKind) -> u32 {
+    let mineral_salt = salt.wrapping_add(mineral.value().wrapping_mul(13));
+    let base = market_factor(mineral_salt, event_day);
+    match (event_day % 5, mineral) {
+        (1, MineralKind::Gold | MineralKind::Silver | MineralKind::Platinum) => base + 16,
+        (0, MineralKind::Copper | MineralKind::Iron) => base + 8,
+        (4, MineralKind::Ruby | MineralKind::Emerald | MineralKind::Diamond) => base + 10,
+        _ => base,
+    }
 }
 
 const fn market_factor(salt: u32, event_day: u32) -> u32 {

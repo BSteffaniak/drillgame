@@ -1103,9 +1103,25 @@ fn draw_modal_depot(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         MineralKind::Mythril,
     ];
     for (index, mineral) in minerals.iter().enumerate() {
+        let current = game.mineral_market_factor(*mineral);
+        let previous = game
+            .previous_mineral_market_factor(*mineral)
+            .unwrap_or(current);
+        let trend = match current.cmp(&previous) {
+            std::cmp::Ordering::Greater => "↑",
+            std::cmp::Ordering::Less => "↓",
+            std::cmp::Ordering::Equal => "→",
+        };
+        let label = if current >= 120 {
+            "high"
+        } else if current <= 90 {
+            "low"
+        } else {
+            "avg"
+        };
         draw.draw_text(
             &format!(
-                "{}: {} cr",
+                "{}: {} cr {trend} {label}",
                 mineral.name(),
                 game.mineral_market_value(*mineral)
             ),
