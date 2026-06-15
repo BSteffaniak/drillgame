@@ -202,6 +202,7 @@ fn observe_multiplayer_scaffolding(
     let _render_predicted_player_for_view = render_frame_plan.views.first().and_then(|view| {
         render_frame_plan.predicted_player_for_view(view, &prediction_presentation_plan)
     });
+    let _feedback_output_count = prediction_presentation_plan.feedback_outputs.len();
     let _save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
         session.world(),
         session.game(),

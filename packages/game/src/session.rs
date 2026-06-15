@@ -1231,6 +1231,32 @@ pub enum TentativeFeedbackPresentation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TentativeFeedbackChannel {
+    Render,
+    Audio,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TentativeFeedbackOutput {
+    pub presentation: TentativeFeedbackPresentation,
+    pub channel: TentativeFeedbackChannel,
+}
+
+impl TentativeFeedbackPresentation {
+    #[must_use]
+    pub const fn output(self) -> TentativeFeedbackOutput {
+        let channel = match self {
+            Self::MovementVisual | Self::DrillProgressVisual => TentativeFeedbackChannel::Render,
+            Self::DrillContactAudio => TentativeFeedbackChannel::Audio,
+        };
+        TentativeFeedbackOutput {
+            presentation: self,
+            channel,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PredictionFailureResolution {
     RequestTerrainChunk,
     RequestAuthoritativeSnapshot,
@@ -1319,6 +1345,7 @@ pub struct PredictionPresentationPlan {
     pub tentative_feedback: Vec<TentativeFeedbackPresentation>,
     pub remote_players: Vec<RemotePlayerPresentation>,
     pub failure_resolutions: Vec<PredictionFailureResolution>,
+    pub feedback_outputs: Vec<TentativeFeedbackOutput>,
 }
 
 /// Local prediction/reconciliation bookkeeping for one client.
@@ -1492,6 +1519,14 @@ impl ClientPredictionState {
                     TentativeFeedbackPresentation::DrillProgressVisual
                 }
             })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn tentative_feedback_outputs(&self) -> Vec<TentativeFeedbackOutput> {
+        self.tentative_feedback_presentations()
+            .into_iter()
+            .map(TentativeFeedbackPresentation::output)
             .collect()
     }
 
@@ -1902,6 +1937,7 @@ impl GameSession {
             tentative_feedback: prediction.tentative_feedback_presentations(),
             remote_players: prediction.remote_presentations(remote_alpha, remote_stall_seconds),
             failure_resolutions: prediction.prediction_failure_resolutions(),
+            feedback_outputs: prediction.tentative_feedback_outputs(),
         }
     }
 
@@ -2406,6 +2442,13 @@ mod tests {
         assert_eq!(
             plan.tentative_feedback,
             vec![super::TentativeFeedbackPresentation::DrillContactAudio]
+        );
+        assert_eq!(
+            plan.feedback_outputs,
+            vec![super::TentativeFeedbackOutput {
+                presentation: super::TentativeFeedbackPresentation::DrillContactAudio,
+                channel: super::TentativeFeedbackChannel::Audio,
+            }]
         );
     }
 
@@ -3151,6 +3194,19 @@ mod tests {
             vec![
                 super::TentativeFeedbackPresentation::MovementVisual,
                 super::TentativeFeedbackPresentation::DrillContactAudio,
+            ]
+        );
+        assert_eq!(
+            prediction.tentative_feedback_outputs(),
+            vec![
+                super::TentativeFeedbackOutput {
+                    presentation: super::TentativeFeedbackPresentation::MovementVisual,
+                    channel: super::TentativeFeedbackChannel::Render,
+                },
+                super::TentativeFeedbackOutput {
+                    presentation: super::TentativeFeedbackPresentation::DrillContactAudio,
+                    channel: super::TentativeFeedbackChannel::Audio,
+                },
             ]
         );
         let offset = prediction.correction_offset().expect("offset set");
