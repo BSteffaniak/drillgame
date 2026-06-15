@@ -197,6 +197,8 @@ fn observe_multiplayer_scaffolding(
     let _client_fully_split = client_ownership.fully_split();
     let _keyboard_command_policy =
         GameSession::command_source_policy(crate::multiplayer::CommandSource::Keyboard);
+    let fixed_tick_migration_summary = GameSession::fixed_tick_migration_summary();
+    let _fixed_tick_audit_complete = fixed_tick_migration_summary.audit_complete();
     let _render_view_count = render_frame_plan.view_count();
     let _render_player_for_view = render_frame_plan
         .views

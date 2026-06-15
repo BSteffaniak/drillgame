@@ -98,6 +98,50 @@ pub struct FixedTickAuditItem {
     pub plan: FixedTickMigrationPlan,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FixedTickMigrationSummary {
+    pub fixed_ready: usize,
+    pub authoritative_migrations: usize,
+    pub presentation_exemptions: usize,
+    pub unresolved_variable_delta: usize,
+}
+
+impl FixedTickMigrationSummary {
+    #[must_use]
+    pub fn from_items(items: &[FixedTickAuditItem]) -> Self {
+        let fixed_ready = items
+            .iter()
+            .filter(|item| item.status == FixedTickMigrationStatus::FixedTickReady)
+            .count();
+        let authoritative_migrations = items
+            .iter()
+            .filter(|item| item.plan == FixedTickMigrationPlan::MigrateToAuthoritativeTick)
+            .count();
+        let presentation_exemptions = items
+            .iter()
+            .filter(|item| item.plan == FixedTickMigrationPlan::KeepVariablePresentationOnly)
+            .count();
+        let unresolved_variable_delta = items
+            .iter()
+            .filter(|item| {
+                item.status == FixedTickMigrationStatus::StillVariableDelta
+                    && item.plan != FixedTickMigrationPlan::KeepVariablePresentationOnly
+            })
+            .count();
+        Self {
+            fixed_ready,
+            authoritative_migrations,
+            presentation_exemptions,
+            unresolved_variable_delta,
+        }
+    }
+
+    #[must_use]
+    pub const fn audit_complete(self) -> bool {
+        self.unresolved_variable_delta == 0
+    }
+}
+
 #[must_use]
 pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
     [
@@ -2034,6 +2078,11 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn fixed_tick_migration_summary() -> FixedTickMigrationSummary {
+        FixedTickMigrationSummary::from_items(&fixed_tick_audit_items())
+    }
+
+    #[must_use]
     pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
         snapshot_purposes()
     }
@@ -3163,6 +3212,17 @@ mod tests {
             item.system == "drilling_progress"
                 && item.status == super::FixedTickMigrationStatus::CompatibilityFixedStep
         }));
+    }
+
+    #[test]
+    fn fixed_tick_audit_summary_counts_authoritative_and_presentation_work() {
+        let summary = GameSession::fixed_tick_migration_summary();
+
+        assert_eq!(summary.fixed_ready, 1);
+        assert_eq!(summary.presentation_exemptions, 1);
+        assert!(summary.authoritative_migrations >= 1);
+        assert!(summary.unresolved_variable_delta > 0);
+        assert!(!summary.audit_complete());
     }
 
     #[test]
