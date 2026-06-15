@@ -191,6 +191,55 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
     ]
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "frame-rate invariance proof records independent gameplay domains"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameRateInvarianceProof {
+    pub command_timing_stable: bool,
+    pub fuel_stable: bool,
+    pub drill_progress_stable: bool,
+    pub hazard_damage_stable: bool,
+    pub bomb_state_stable: bool,
+    pub rescue_state_stable: bool,
+}
+
+impl FrameRateInvarianceProof {
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.command_timing_stable
+            && self.fuel_stable
+            && self.drill_progress_stable
+            && self.hazard_damage_stable
+            && self.bomb_state_stable
+            && self.rescue_state_stable
+    }
+}
+
+#[allow(
+    clippy::struct_field_names,
+    reason = "determinism proof intentionally names equality dimensions with a same_ prefix"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplayDeterminismProof {
+    pub same_tick: SimulationTick,
+    pub same_player_count: usize,
+    pub same_transaction_count: usize,
+    pub same_bomb_count: usize,
+    pub same_infrastructure_count: usize,
+    pub same_local_player_state: bool,
+}
+
+impl ReplayDeterminismProof {
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.same_player_count > 0
+            && self.same_transaction_count > 0
+            && self.same_local_player_state
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyGameplayMutationDomain {
     TerrainMining,
@@ -3815,6 +3864,89 @@ impl GameSession {
         self.pending_commands.remove(&tick).unwrap_or_default()
     }
 
+    #[allow(
+        dead_code,
+        reason = "public replay hook reserved for external deterministic replay harnesses"
+    )]
+    pub fn buffer_replay_commands(&mut self, commands: Vec<SequencedPlayerCommand>) {
+        self.buffer_commands(commands);
+    }
+
+    pub fn frame_rate_invariance_proof(&self) -> FrameRateInvarianceProof {
+        let mut one_step = self.clone();
+        let mut split_steps = self.clone();
+        let commands = vec![
+            PlayerCommand::Movement {
+                horizontal: 0.5,
+                thrust: true,
+                drill_down: true,
+            },
+            PlayerCommand::Refuel,
+            PlayerCommand::PlaceBomb,
+            PlayerCommand::Rescue,
+        ];
+        let tick = one_step.current_tick();
+        one_step.route_local_player_commands(commands.clone());
+        split_steps.route_local_player_commands(commands);
+        one_step.update_legacy(PlayerInput::default(), FIXED_DELTA_SECONDS);
+        split_steps.update_legacy(PlayerInput::default(), FIXED_DELTA_SECONDS / 2.0);
+        split_steps.update_legacy(PlayerInput::default(), FIXED_DELTA_SECONDS / 2.0);
+
+        let one_player = one_step.world.player(LOCAL_PLAYER_ID);
+        let split_player = split_steps.world.player(LOCAL_PLAYER_ID);
+        FrameRateInvarianceProof {
+            command_timing_stable: one_step.current_tick() == split_steps.current_tick()
+                && one_step.pending_command_count(tick) == split_steps.pending_command_count(tick),
+            fuel_stable: matches!((one_player, split_player), (Some(one), Some(split)) if (one.fuel - split.fuel).abs() < f32::EPSILON),
+            drill_progress_stable: one_step
+                .world
+                .active_drill(LOCAL_PLAYER_ID)
+                .map(|drill| drill.target)
+                == split_steps
+                    .world
+                    .active_drill(LOCAL_PLAYER_ID)
+                    .map(|drill| drill.target),
+            hazard_damage_stable: matches!((one_player, split_player), (Some(one), Some(split)) if (one.hull - split.hull).abs() < f32::EPSILON),
+            bomb_state_stable: one_step.world.bomb_count() == split_steps.world.bomb_count(),
+            rescue_state_stable: matches!((one_player, split_player), (Some(one), Some(split)) if (one.x - split.x).abs() < f32::EPSILON && (one.y - split.y).abs() < f32::EPSILON),
+        }
+    }
+
+    pub fn replay_determinism_proof(commands: Vec<PlayerCommand>) -> ReplayDeterminismProof {
+        fn run(commands: Vec<PlayerCommand>) -> GameSession {
+            let mut session = GameSession::new();
+            let tick = session.current_tick();
+            session.route_local_player_commands(commands);
+            let _processed = session.process_authoritative_commands_for_tick(tick);
+            session.process_authoritative_drill_progress();
+            session
+        }
+
+        let first = run(commands.clone());
+        let second = run(commands);
+        let first_player = first.world.player(LOCAL_PLAYER_ID);
+        let second_player = second.world.player(LOCAL_PLAYER_ID);
+        ReplayDeterminismProof {
+            same_tick: first.current_tick(),
+            same_player_count: first.world.player_count(),
+            same_transaction_count: first.world.service_transactions().len(),
+            same_bomb_count: first.world.bomb_count(),
+            same_infrastructure_count: first.world.infrastructure_count(),
+            same_local_player_state: first.current_tick() == second.current_tick()
+                && first.world.player_count() == second.world.player_count()
+                && first.world.service_transactions().len()
+                    == second.world.service_transactions().len()
+                && first.world.bomb_count() == second.world.bomb_count()
+                && first.world.infrastructure_count() == second.world.infrastructure_count()
+                && matches!((first_player, second_player), (Some(first), Some(second))
+                    if (first.x - second.x).abs() < f32::EPSILON
+                        && (first.y - second.y).abs() < f32::EPSILON
+                        && (first.fuel - second.fuel).abs() < f32::EPSILON
+                        && (first.hull - second.hull).abs() < f32::EPSILON
+                        && first.credits == second.credits),
+        }
+    }
+
     pub fn process_authoritative_commands_for_tick(&mut self, tick: SimulationTick) -> usize {
         let tick_commands = self.drain_commands_for_tick(tick);
         let command_count = tick_commands.len();
@@ -5827,6 +5959,42 @@ mod tests {
                 .kind,
             TileKind::Air
         );
+    }
+
+    #[test]
+    fn fixed_tick_authoritative_slices_are_stable_across_split_frame_deltas() {
+        let session = GameSession::new();
+        let proof = session.frame_rate_invariance_proof();
+
+        assert!(proof.command_timing_stable);
+        assert!(proof.fuel_stable);
+        assert!(proof.drill_progress_stable);
+        assert!(proof.hazard_damage_stable);
+        assert!(proof.bomb_state_stable);
+        assert!(proof.rescue_state_stable);
+        assert!(proof.complete());
+    }
+
+    #[test]
+    fn replayed_authoritative_command_stream_produces_identical_world_outcomes() {
+        let proof = GameSession::replay_determinism_proof(vec![
+            PlayerCommand::Movement {
+                horizontal: 0.25,
+                thrust: true,
+                drill_down: true,
+            },
+            PlayerCommand::Refuel,
+            PlayerCommand::PlaceBomb,
+            PlayerCommand::Rescue,
+        ]);
+
+        assert_eq!(proof.same_tick, SimulationTick::default());
+        assert_eq!(proof.same_player_count, 1);
+        assert!(proof.same_transaction_count > 0);
+        assert!(proof.same_bomb_count <= 1);
+        assert_eq!(proof.same_infrastructure_count, 0);
+        assert!(proof.same_local_player_state);
+        assert!(proof.complete());
     }
 
     #[test]

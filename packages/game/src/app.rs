@@ -162,6 +162,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let variable_delta_audit = GameSession::variable_delta_audit_summary();
     let _legacy_mutation_inventory_complete = legacy_mutation_inventory.inventory_complete();
     let _variable_delta_complete = variable_delta_audit.gameplay_delta_audit_complete();
+    let _frame_rate_invariance =
+        session.world().player_count() > 0 && session.frame_rate_invariance_proof().complete();
+    let _replay_determinism =
+        GameSession::replay_determinism_proof(vec![PlayerCommand::Refuel]).complete();
     let _compatibility_mode = GameSession::compatibility_mode();
     let _target_compatibility_mode = GameSession::target_compatibility_mode();
     let _planned_state_boundaries = GameSession::planned_state_boundaries();
