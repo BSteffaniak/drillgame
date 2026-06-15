@@ -1140,7 +1140,11 @@ impl WorldState {
         let result = self.terrain.chip(target);
         if matches!(
             result,
-            MineResult::Blocked | MineResult::TooDangerous | MineResult::Mined(_)
+            MineResult::Blocked
+                | MineResult::TooDangerous
+                | MineResult::Exploded
+                | MineResult::Blast
+                | MineResult::Mined(_)
         ) {
             self.active_drills.remove(&player_id);
         }
@@ -3162,6 +3166,37 @@ impl GameSession {
         command_count
     }
 
+    fn process_authoritative_drill_progress(&mut self) {
+        let active_players: Vec<PlayerId> = self.world.active_drills.keys().copied().collect();
+        for player_id in active_players {
+            let Some(target) = self.world.active_drill(player_id).map(|drill| drill.target) else {
+                continue;
+            };
+            let Some(result) = self.world.chip_active_drill_target(player_id) else {
+                continue;
+            };
+            let positions = vec![target];
+            let revisions = self.terrain_revisions.mark_tiles_changed(positions.clone());
+            self.push_event(WorldEvent::TerrainTilesChanged { positions });
+            if !revisions.is_empty() {
+                self.push_event(WorldEvent::TerrainChunksChanged { revisions });
+            }
+            match result {
+                MineResult::Mined(TileKind::Ore(_)) => {
+                    self.push_event(WorldEvent::CargoChanged { player_id });
+                }
+                MineResult::TooDangerous => {
+                    self.push_event(WorldEvent::PlayerDamaged { player_id });
+                }
+                MineResult::Blocked
+                | MineResult::Exploded
+                | MineResult::Blast
+                | MineResult::Chipped
+                | MineResult::Mined(_) => {}
+            }
+        }
+    }
+
     pub fn acknowledge_client_commands_through(
         &mut self,
         client_id: ClientId,
@@ -3193,6 +3228,7 @@ impl GameSession {
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
             self.process_authoritative_commands_for_tick(tick);
+            self.process_authoritative_drill_progress();
             self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
             self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
             self.sync_legacy_terrain_from_world();
@@ -4813,6 +4849,73 @@ mod tests {
                 .kind,
             TileKind::Air
         );
+    }
+
+    #[test]
+    fn session_fixed_tick_chips_authoritative_drill_into_cargo_and_terrain_delta() {
+        let mut session = GameSession::new();
+        let target = TilePosition { x: 97, y: 5 };
+        session
+            .game
+            .terrain
+            .set_kind(target, TileKind::Ore(crate::terrain::MineralKind::Copper));
+        session
+            .world
+            .sync_from_legacy_game(session.current_tick(), &session.game.clone());
+        session.world.set_active_drill(
+            LOCAL_PLAYER_ID,
+            Some(DrillState {
+                target,
+                direction: DrillDirection::Down,
+                progress: 1.0,
+                initial_durability: 1,
+                seconds_per_chip: 0.0,
+                sound_timer: 0.0,
+                dust_timer: 0.0,
+            }),
+        );
+
+        session.update_legacy(PlayerInput::default(), 0.25);
+
+        assert_eq!(
+            session
+                .world()
+                .terrain()
+                .tile(target)
+                .expect("tile exists")
+                .kind,
+            TileKind::Air
+        );
+        assert_eq!(
+            session
+                .game()
+                .terrain
+                .tile(target)
+                .expect("tile exists")
+                .kind,
+            TileKind::Air
+        );
+        assert_eq!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .cargo
+                .get(&crate::terrain::MineralKind::Copper)
+                .copied(),
+            Some(1)
+        );
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::TerrainTilesChanged { positions } if positions.contains(&target)
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::CargoChanged {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
     }
 
     #[test]
