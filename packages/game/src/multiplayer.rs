@@ -211,6 +211,15 @@ impl CommandNetworkSession {
         }
     }
 
+    #[must_use]
+    pub const fn current_tick(&self) -> SimulationTick {
+        self.current_tick
+    }
+
+    pub const fn set_current_tick(&mut self, current_tick: SimulationTick) {
+        self.current_tick = current_tick;
+    }
+
     pub fn apply_command_packet(
         &mut self,
         packet: &CommandPacket,
@@ -239,6 +248,23 @@ impl CommandNetworkSession {
                         reason: acceptance,
                         authoritative_tick: self.current_tick,
                     })
+                }
+            })
+            .collect()
+    }
+
+    pub fn apply_command_packet_messages(
+        &mut self,
+        packet: &CommandPacket,
+    ) -> Vec<ProtocolMessage> {
+        self.apply_command_packet(packet)
+            .into_iter()
+            .map(|response| match response {
+                CommandApplicationResponse::Acknowledged(acknowledgement) => {
+                    ProtocolMessage::CommandAcknowledgement(acknowledgement)
+                }
+                CommandApplicationResponse::Rejected(rejection) => {
+                    ProtocolMessage::CommandRejection(rejection)
                 }
             })
             .collect()
@@ -407,6 +433,7 @@ pub enum ProtocolMessage {
     },
     CommandPacket(CommandPacket),
     CommandAcknowledgement(CommandAcknowledgement),
+    CommandRejection(CommandRejection),
     SnapshotKeyframe {
         tick: SimulationTick,
     },
@@ -437,6 +464,7 @@ impl ProtocolMessage {
             | Self::JoinAccepted { .. }
             | Self::ReconnectRequest { .. }
             | Self::CommandAcknowledgement(_)
+            | Self::CommandRejection(_)
             | Self::TerrainChunkRequest { .. }
             | Self::TerrainChunkResponse { .. } => ReliabilityClass::Reliable,
         }
@@ -1064,6 +1092,7 @@ mod tests {
 
         let accepted = network_session.apply_command_packet(&accepted_packet);
         let rejected = network_session.apply_command_packet(&rejected_packet);
+        let messages = network_session.apply_command_packet_messages(&rejected_packet);
 
         assert!(matches!(
             accepted.as_slice(),
@@ -1078,6 +1107,17 @@ mod tests {
                 }
             )]
         ));
+        assert_eq!(network_session.current_tick(), SimulationTick::new(10));
+        network_session.set_current_tick(SimulationTick::new(11));
+        assert_eq!(network_session.current_tick(), SimulationTick::new(11));
+        assert!(matches!(
+            messages.as_slice(),
+            [ProtocolMessage::CommandRejection(super::CommandRejection {
+                reason: CommandAcceptance::TooFarInFuture,
+                ..
+            })]
+        ));
+        assert_eq!(messages[0].reliability_class(), ReliabilityClass::Reliable);
     }
 
     #[test]
