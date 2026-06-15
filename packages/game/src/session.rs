@@ -1640,6 +1640,56 @@ pub enum CorrectionPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalMovementPredictionPlan {
+    pub player_id: PlayerId,
+    pub authoritative_x: f32,
+    pub authoritative_y: f32,
+    pub predicted_x: f32,
+    pub predicted_y: f32,
+    pub delta_seconds: f32,
+}
+
+impl LocalMovementPredictionPlan {
+    #[must_use]
+    pub const fn from_snapshot(snapshot: &PlayerSnapshot, delta_seconds: f32) -> Self {
+        let predicted = PredictedMovement {
+            player_id: snapshot.player_id,
+            x: snapshot.velocity_x.mul_add(delta_seconds, snapshot.x),
+            y: snapshot.velocity_y.mul_add(delta_seconds, snapshot.y),
+            velocity_x: snapshot.velocity_x,
+            velocity_y: snapshot.velocity_y,
+        };
+        Self {
+            player_id: snapshot.player_id,
+            authoritative_x: snapshot.x,
+            authoritative_y: snapshot.y,
+            predicted_x: predicted.x,
+            predicted_y: predicted.y,
+            delta_seconds,
+        }
+    }
+
+    #[must_use]
+    pub fn predicted_movement(self) -> PredictedMovement {
+        PredictedMovement {
+            player_id: self.player_id,
+            x: self.predicted_x,
+            y: self.predicted_y,
+            velocity_x: if self.delta_seconds == 0.0 {
+                0.0
+            } else {
+                (self.predicted_x - self.authoritative_x) / self.delta_seconds
+            },
+            velocity_y: if self.delta_seconds == 0.0 {
+                0.0
+            } else {
+                (self.predicted_y - self.authoritative_y) / self.delta_seconds
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PredictedMovement {
     pub player_id: PlayerId,
     pub x: f32,
@@ -2383,11 +2433,20 @@ impl GameSession {
 
     #[must_use]
     pub fn predicted_local_movement(&self, delta_seconds: f32) -> Option<PredictedMovement> {
+        self.local_movement_prediction_plan(delta_seconds)
+            .map(LocalMovementPredictionPlan::predicted_movement)
+    }
+
+    #[must_use]
+    pub fn local_movement_prediction_plan(
+        &self,
+        delta_seconds: f32,
+    ) -> Option<LocalMovementPredictionPlan> {
         let view = self.local_view();
         let player = self.world.player(view.controlled_player_id)?;
         let snapshot =
             PlayerSnapshot::from_world_player(view.controlled_player_id, player, &self.world);
-        Some(ClientPredictionState::predict_local_movement(
+        Some(LocalMovementPredictionPlan::from_snapshot(
             &snapshot,
             delta_seconds,
         ))
@@ -3052,9 +3111,15 @@ mod tests {
         let predicted = session
             .predicted_local_movement(0.5)
             .expect("local player prediction exists");
+        let prediction_plan = session
+            .local_movement_prediction_plan(0.5)
+            .expect("local movement prediction plan exists");
 
         assert_eq!(predicted.player_id, LOCAL_PLAYER_ID);
         assert!((predicted.x - (session.game().player.x + 5.0)).abs() < f32::EPSILON);
+        assert_eq!(prediction_plan.player_id, LOCAL_PLAYER_ID);
+        assert!((prediction_plan.predicted_x - predicted.x).abs() < f32::EPSILON);
+        assert!((prediction_plan.predicted_movement().x - predicted.x).abs() < f32::EPSILON);
     }
 
     #[test]
