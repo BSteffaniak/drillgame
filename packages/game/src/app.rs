@@ -199,6 +199,9 @@ fn observe_multiplayer_scaffolding(
         GameSession::command_source_policy(crate::multiplayer::CommandSource::Keyboard);
     let fixed_tick_migration_summary = GameSession::fixed_tick_migration_summary();
     let _fixed_tick_audit_complete = fixed_tick_migration_summary.audit_complete();
+    let gameplay_event_routing_summary = GameSession::gameplay_event_routing_summary();
+    let _presentation_events_separated =
+        gameplay_event_routing_summary.separates_local_presentation();
     let _render_view_count = render_frame_plan.view_count();
     let _render_player_for_view = render_frame_plan
         .views

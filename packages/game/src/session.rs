@@ -233,6 +233,43 @@ pub const fn planned_transient_effect_boundaries() -> [TransientEffectBoundary; 
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GameplayEventRoutingSummary {
+    pub authoritative_events: usize,
+    pub local_presentation_boundaries: usize,
+    pub gameplay_world_boundaries: usize,
+}
+
+impl GameplayEventRoutingSummary {
+    #[must_use]
+    pub fn from_events_and_boundaries(
+        events: &[WorldEvent],
+        boundaries: &[TransientEffectBoundary],
+    ) -> Self {
+        let authoritative_events = events.len();
+        let local_presentation_boundaries = boundaries
+            .iter()
+            .filter(|boundary| boundary.domain == TransientEffectDomain::LocalClientPresentation)
+            .count();
+        let gameplay_world_boundaries = boundaries
+            .iter()
+            .filter(|boundary| boundary.domain == TransientEffectDomain::GameplayRelevantWorld)
+            .count();
+        Self {
+            authoritative_events,
+            local_presentation_boundaries,
+            gameplay_world_boundaries,
+        }
+    }
+
+    #[must_use]
+    pub const fn separates_local_presentation(self) -> bool {
+        self.authoritative_events > 0
+            && self.local_presentation_boundaries > 0
+            && self.gameplay_world_boundaries > 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerScopedSystem {
     Movement,
     Drilling,
@@ -2121,6 +2158,14 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn gameplay_event_routing_summary() -> GameplayEventRoutingSummary {
+        GameplayEventRoutingSummary::from_events_and_boundaries(
+            &Self::world_event_catalog(),
+            &planned_transient_effect_boundaries(),
+        )
+    }
+
+    #[must_use]
     pub fn new() -> Self {
         let game = GameState::new();
         let world = WorldState::from_legacy_game(&game);
@@ -3249,6 +3294,16 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, super::WorldEvent::BombPlaced { .. }))
         );
+    }
+
+    #[test]
+    fn gameplay_event_routing_summary_separates_local_presentation_effects() {
+        let summary = GameSession::gameplay_event_routing_summary();
+
+        assert!(summary.authoritative_events > 0);
+        assert_eq!(summary.local_presentation_boundaries, 5);
+        assert_eq!(summary.gameplay_world_boundaries, 3);
+        assert!(summary.separates_local_presentation());
     }
 
     #[test]
