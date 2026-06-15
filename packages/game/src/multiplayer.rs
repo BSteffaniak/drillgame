@@ -1320,6 +1320,57 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_host_client_transport_smoke_test_exchanges_join_and_ack() {
+        let mut host =
+            HostSessionRuntime::new(super::HostRuntimeConfig::default(), SimulationTick::new(5));
+        let mut client = ClientSessionRuntime::new(super::ClientRuntimeConfig {
+            mode: super::ClientRuntimeMode::RemoteNetwork,
+            client_id: ClientId::new(42),
+            player_id: None,
+        });
+        let mut queues = InMemoryTransportQueues::default();
+
+        queues.send_to_host(client.connect_request());
+        for packet in queues.drain_client_to_host() {
+            if let ProtocolMessage::JoinRequest { client_id, .. } = packet.message {
+                let accepted = host
+                    .accept_client(client_id, PlayerId::new(77), SimulationTick::new(5))
+                    .expect("join accepted");
+                queues.send_to_client(client_id, accepted);
+            }
+        }
+        for packet in queues.drain_host_to_client(client.config.client_id) {
+            client.handle_message(packet.message);
+        }
+
+        assert_eq!(client.assigned_player_id, Some(PlayerId::new(77)));
+        assert_eq!(client.latest_authoritative_tick, SimulationTick::new(5));
+
+        queues.send_to_host(ProtocolMessage::CommandPacket(CommandPacket {
+            client_id: client.config.client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id: PlayerId::new(77),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(5),
+                command: PlayerCommand::Interact,
+            }],
+        }));
+        for packet in queues.drain_client_to_host() {
+            if let ProtocolMessage::CommandPacket(command_packet) = packet.message {
+                for response in host.apply_command_packet(&command_packet) {
+                    queues.send_to_client(command_packet.client_id, response);
+                }
+            }
+        }
+        for packet in queues.drain_host_to_client(client.config.client_id) {
+            client.handle_message(packet.message);
+        }
+
+        assert_eq!(client.latest_authoritative_tick, SimulationTick::new(5));
+        assert!(client.pending_messages.is_empty());
+    }
+
+    #[test]
     fn runtime_plan_builds_join_reconnect_and_chunk_exchange_messages() {
         let plan = NetworkRuntimePlan::default();
         let join_messages = plan.reliable_exchange_messages(SimulationTick::new(44));
