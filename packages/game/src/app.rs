@@ -173,7 +173,12 @@ fn observe_multiplayer_scaffolding(
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
-    let _render_view_count = session.render_frame_plan().view_count();
+    let render_frame_plan = session.render_frame_plan();
+    let _render_view_count = render_frame_plan.view_count();
+    let _render_player_for_view = render_frame_plan
+        .views
+        .first()
+        .and_then(|view| render_frame_plan.player_for_view(view));
     let prediction = session.local_client().prediction();
     let _prediction_replay_len = prediction.replay_commands().len();
     let _prediction_buffer_len = prediction.unacknowledged_commands().len();

@@ -242,11 +242,13 @@ pub struct PlayerSnapshot {
     pub fuel: f32,
     pub hull: f32,
     pub credits: u32,
+    pub cargo_used: u32,
+    pub scanner_cooldown_seconds: f32,
 }
 
 impl PlayerSnapshot {
     #[must_use]
-    pub const fn from_player(player_id: PlayerId, player: &Player) -> Self {
+    pub fn from_player(player_id: PlayerId, player: &Player) -> Self {
         Self {
             player_id,
             x: player.x,
@@ -256,7 +258,17 @@ impl PlayerSnapshot {
             fuel: player.fuel,
             hull: player.hull,
             credits: player.credits,
+            cargo_used: player.cargo_used(),
+            scanner_cooldown_seconds: 0.0,
         }
+    }
+
+    #[must_use]
+    pub fn from_world_player(player_id: PlayerId, player: &Player, world: &WorldState) -> Self {
+        let mut snapshot = Self::from_player(player_id, player);
+        snapshot.scanner_cooldown_seconds =
+            world.scanner_cooldown_seconds(player_id).unwrap_or(0.0);
+        snapshot
     }
 }
 
@@ -908,7 +920,7 @@ impl WorldState {
     pub fn player_snapshots(&self) -> Vec<PlayerSnapshot> {
         self.players
             .iter()
-            .map(|(player_id, player)| PlayerSnapshot::from_player(*player_id, player))
+            .map(|(player_id, player)| PlayerSnapshot::from_world_player(*player_id, player, self))
             .collect()
     }
 
@@ -1078,6 +1090,7 @@ pub struct ClientView {
 pub struct RenderFramePlan {
     pub world_summary: AuthoritativeWorldSummary,
     pub views: Vec<ClientView>,
+    pub players: Vec<PlayerSnapshot>,
 }
 
 impl RenderFramePlan {
@@ -1089,12 +1102,20 @@ impl RenderFramePlan {
         Self {
             world_summary: world.authoritative_summary().clone(),
             views: clients.values().map(|client| client.view).collect(),
+            players: world.player_snapshots(),
         }
     }
 
     #[must_use]
     pub const fn view_count(&self) -> usize {
         self.views.len()
+    }
+
+    #[must_use]
+    pub fn player_for_view(&self, view: &ClientView) -> Option<&PlayerSnapshot> {
+        self.players
+            .iter()
+            .find(|player| player.player_id == view.controlled_player_id)
     }
 }
 
@@ -2087,6 +2108,23 @@ mod tests {
     }
 
     #[test]
+    fn render_frame_plan_exposes_per_view_player_state() {
+        let mut session = GameSession::new();
+        session
+            .world
+            .set_scanner_cooldown_seconds(LOCAL_PLAYER_ID, 2.0);
+
+        let plan = session.render_frame_plan();
+        let player = plan
+            .player_for_view(&plan.views[0])
+            .expect("controlled player snapshot exists");
+
+        assert_eq!(player.player_id, LOCAL_PLAYER_ID);
+        assert_eq!(player.cargo_used, session.game().player.cargo_used());
+        assert!((player.scanner_cooldown_seconds - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn session_world_tracks_legacy_local_player() {
         let session = GameSession::new();
 
@@ -2623,6 +2661,8 @@ mod tests {
             fuel: 3.0,
             hull: 4.0,
             credits: 6,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
         });
 
         assert_eq!(prediction.remote_snapshot_count(LOCAL_PLAYER_ID), 1);
@@ -2663,6 +2703,8 @@ mod tests {
             fuel: 3.0,
             hull: 4.0,
             credits: 6,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
         };
         let next = super::PlayerSnapshot {
             x: 20.0,
