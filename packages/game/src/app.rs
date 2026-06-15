@@ -188,6 +188,8 @@ fn observe_multiplayer_scaffolding(
         session.game(),
     );
     let _predicted_session_movement = session.predicted_local_movement(delta_seconds);
+    let _prediction_presentation_plan =
+        session.prediction_presentation_plan(None, delta_seconds, 0.5, 0.0);
     let prediction = session.local_client().prediction();
     let _prediction_replay_len = prediction.replay_commands().len();
     let _prediction_buffer_len = prediction.unacknowledged_commands().len();

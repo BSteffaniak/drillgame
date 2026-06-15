@@ -1231,6 +1231,15 @@ pub struct RemotePlayerPresentation {
     pub extrapolated: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictionPresentationPlan {
+    pub local_movement: Option<PredictedMovement>,
+    pub correction: Option<ReconciledMovement>,
+    pub tentative_feedback: Vec<TentativeFeedbackPresentation>,
+    pub remote_players: Vec<RemotePlayerPresentation>,
+    pub failure_resolutions: Vec<PredictionFailureResolution>,
+}
+
 /// Local prediction/reconciliation bookkeeping for one client.
 #[derive(Clone, Debug, Default)]
 pub struct ClientPredictionState {
@@ -1450,6 +1459,29 @@ impl ClientPredictionState {
         if snapshots.len() > MAX_REMOTE_SNAPSHOTS {
             snapshots.remove(0);
         }
+    }
+
+    #[must_use]
+    pub fn remote_presentations(
+        &self,
+        alpha: f32,
+        stall_seconds: f32,
+    ) -> Vec<RemotePlayerPresentation> {
+        self.remote_player_snapshots
+            .values()
+            .filter_map(|snapshots| {
+                let latest = snapshots.last()?;
+                let (previous, next) = snapshots
+                    .get(snapshots.len().saturating_sub(2))
+                    .map_or((latest, None), |previous| (previous, Some(latest)));
+                Some(Self::remote_player_presentation(
+                    previous,
+                    next,
+                    alpha,
+                    stall_seconds,
+                ))
+            })
+            .collect()
     }
 
     fn remember_commands(&mut self, commands: &[SequencedPlayerCommand]) {
@@ -1731,6 +1763,31 @@ impl GameSession {
             &snapshot,
             delta_seconds,
         ))
+    }
+
+    #[must_use]
+    pub fn prediction_presentation_plan(
+        &self,
+        authoritative_snapshot: Option<&PlayerSnapshot>,
+        delta_seconds: f32,
+        remote_alpha: f32,
+        remote_stall_seconds: f32,
+    ) -> PredictionPresentationPlan {
+        let local_movement = self.predicted_local_movement(delta_seconds);
+        let correction =
+            local_movement
+                .zip(authoritative_snapshot)
+                .map(|(predicted, authoritative)| {
+                    ClientPredictionState::reconcile_movement(predicted, authoritative)
+                });
+        let prediction = self.local_client().prediction();
+        PredictionPresentationPlan {
+            local_movement,
+            correction,
+            tentative_feedback: prediction.tentative_feedback_presentations(),
+            remote_players: prediction.remote_presentations(remote_alpha, remote_stall_seconds),
+            failure_resolutions: prediction.prediction_failure_resolutions(),
+        }
     }
 
     #[must_use]
@@ -2163,6 +2220,25 @@ mod tests {
 
         assert_eq!(predicted.player_id, LOCAL_PLAYER_ID);
         assert!((predicted.x - (session.game().player.x + 5.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn session_builds_prediction_presentation_plan() {
+        let mut session = GameSession::new();
+        session
+            .local_client_mut()
+            .prediction
+            .push_feedback(super::LocalTentativeFeedback::DrillContact);
+        let authoritative = session.world_snapshot().players[0].clone();
+
+        let plan = session.prediction_presentation_plan(Some(&authoritative), 0.5, 0.5, 0.0);
+
+        assert!(plan.local_movement.is_some());
+        assert!(plan.correction.is_some());
+        assert_eq!(
+            plan.tentative_feedback,
+            vec![super::TentativeFeedbackPresentation::DrillContactAudio]
+        );
     }
 
     #[test]
