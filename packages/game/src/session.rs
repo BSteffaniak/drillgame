@@ -1074,6 +1074,30 @@ pub struct ClientView {
     pub run_mode: RunMode,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderFramePlan {
+    pub world_summary: AuthoritativeWorldSummary,
+    pub views: Vec<ClientView>,
+}
+
+impl RenderFramePlan {
+    #[must_use]
+    pub fn from_world_and_clients(
+        world: &WorldState,
+        clients: &BTreeMap<ClientId, ClientState>,
+    ) -> Self {
+        Self {
+            world_summary: world.authoritative_summary().clone(),
+            views: clients.values().map(|client| client.view).collect(),
+        }
+    }
+
+    #[must_use]
+    pub const fn view_count(&self) -> usize {
+        self.views.len()
+    }
+}
+
 impl ClientView {
     #[must_use]
     pub fn from_legacy_game(game: &GameState) -> Self {
@@ -1660,6 +1684,11 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn render_frame_plan(&self) -> RenderFramePlan {
+        RenderFramePlan::from_world_and_clients(&self.world, &self.clients)
+    }
+
+    #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -2040,6 +2069,21 @@ mod tests {
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].client_id, LOCAL_CLIENT_ID);
         assert_eq!(session.render_views().len(), views.len());
+    }
+
+    #[test]
+    fn render_frame_plan_uses_world_and_client_state() {
+        let session = GameSession::new();
+
+        let plan = session.render_frame_plan();
+
+        assert_eq!(plan.world_summary.tick, session.world().simulation_tick());
+        assert_eq!(
+            plan.world_summary.player_count,
+            session.world().player_count()
+        );
+        assert_eq!(plan.view_count(), session.client_count());
+        assert_eq!(plan.views[0].controlled_player_id, LOCAL_PLAYER_ID);
     }
 
     #[test]
