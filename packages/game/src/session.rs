@@ -12,10 +12,11 @@ use crate::{
     },
     input::PlayerInput,
     multiplayer::{
-        ClientId, CommandAcknowledgement, CommandRejection, CommandSource, FIXED_DELTA_SECONDS,
-        InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
-        NetworkPlayerSnapshot, NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand,
-        PlayerId, ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        ClientId, CommandAcknowledgement, CommandApplicationResponse, CommandNetworkSession,
+        CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS, InputSequence,
+        LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot,
+        NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand, PlayerId,
+        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -2556,6 +2557,7 @@ pub struct GameSession {
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
     terrain_revisions: TerrainRevisionTracker,
+    command_network_session: CommandNetworkSession,
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
     pending_events: Vec<WorldEvent>,
     latest_local_movement_intent: Option<PlayerMovementIntent>,
@@ -2660,6 +2662,7 @@ impl GameSession {
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
             terrain_revisions: TerrainRevisionTracker::default(),
+            command_network_session: CommandNetworkSession::new(SimulationTick::default(), 8),
             pending_commands: BTreeMap::new(),
             pending_events: Vec::new(),
             latest_local_movement_intent: None,
@@ -2848,6 +2851,11 @@ impl GameSession {
     #[must_use]
     pub const fn current_tick(&self) -> SimulationTick {
         self.current_tick
+    }
+
+    #[must_use]
+    pub const fn command_network_session(&self) -> &CommandNetworkSession {
+        &self.command_network_session
     }
 
     #[must_use]
@@ -3239,10 +3247,41 @@ impl GameSession {
         }
     }
 
+    pub fn apply_live_command_packet(&mut self, packet: &CommandPacket) -> Vec<ProtocolMessage> {
+        self.command_network_session
+            .set_current_tick(self.current_tick);
+        self.command_network_session
+            .apply_command_packet(packet)
+            .into_iter()
+            .map(|response| match response {
+                CommandApplicationResponse::Acknowledged(acknowledgement) => {
+                    if packet.client_id == acknowledgement.client_id {
+                        let accepted_commands: Vec<SequencedPlayerCommand> = packet
+                            .commands
+                            .iter()
+                            .filter(|command| {
+                                command.sequence == acknowledgement.acknowledged_sequence
+                            })
+                            .cloned()
+                            .collect();
+                        self.buffer_commands(accepted_commands);
+                    }
+                    self.apply_command_acknowledgement(&acknowledgement);
+                    ProtocolMessage::CommandAcknowledgement(acknowledgement)
+                }
+                CommandApplicationResponse::Rejected(rejection) => {
+                    self.apply_command_rejection(&rejection);
+                    ProtocolMessage::CommandRejection(rejection)
+                }
+            })
+            .collect()
+    }
+
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
+            self.command_network_session.set_current_tick(tick);
             self.process_authoritative_commands_for_tick(tick);
             self.process_authoritative_drill_progress();
             self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
@@ -3361,9 +3400,9 @@ mod tests {
         },
         input::PlayerInput,
         multiplayer::{
-            ClientId, CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
-            LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
-            ProtocolMessage, SequencedPlayerCommand, SimulationTick,
+            ClientId, CommandAcknowledgement, CommandPacket, CommandRejection, CommandSource,
+            InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand,
+            PlayerId, ProtocolMessage, SequencedPlayerCommand, SimulationTick,
         },
         terrain::{MineResult, TileKind, TilePosition},
     };
@@ -4932,6 +4971,61 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn live_command_packet_applies_acknowledgements_and_rejections() {
+        let mut session = GameSession::new();
+        let accepted_sequence = InputSequence::new(0);
+        let packet = CommandPacket {
+            client_id: LOCAL_CLIENT_ID,
+            commands: vec![SequencedPlayerCommand {
+                player_id: LOCAL_PLAYER_ID,
+                sequence: accepted_sequence,
+                target_tick: session.current_tick(),
+                command: PlayerCommand::Movement {
+                    horizontal: 0.75,
+                    thrust: false,
+                    drill_down: false,
+                },
+            }],
+        };
+
+        let responses = session.apply_live_command_packet(&packet);
+
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(
+            responses[0],
+            ProtocolMessage::CommandAcknowledgement(CommandAcknowledgement {
+                acknowledged_sequence,
+                ..
+            }) if acknowledged_sequence == accepted_sequence
+        ));
+        assert_eq!(
+            session.process_authoritative_commands_for_tick(session.current_tick()),
+            1
+        );
+        assert!(
+            (session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .velocity_x
+                - 0.75)
+                .abs()
+                < f32::EPSILON
+        );
+
+        let duplicate_responses = session.apply_live_command_packet(&packet);
+
+        assert_eq!(duplicate_responses.len(), 1);
+        assert!(matches!(
+            duplicate_responses[0],
+            ProtocolMessage::CommandRejection(CommandRejection {
+                sequence,
+                ..
+            }) if sequence == accepted_sequence
+        ));
     }
 
     #[test]

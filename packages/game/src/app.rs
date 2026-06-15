@@ -120,6 +120,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _live_keyframe_message = session.live_snapshot_keyframe_message();
+    let _command_network_tick = session.command_network_session().current_tick();
     let _world_terrain_width = session.world().terrain().width();
     let mut terrain_probe = session.world().clone();
     let _terrain_probe_chip_result =
@@ -211,6 +212,11 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         let _split_screen_batch = local_multiplayer_probe
             .route_split_screen_player_commands(crate::multiplayer::ClientId::new(2), Vec::new());
         let _live_delta_message = local_multiplayer_probe.drain_live_world_delta_message();
+        let _live_command_responses =
+            local_multiplayer_probe.apply_live_command_packet(&crate::multiplayer::CommandPacket {
+                client_id: crate::multiplayer::ClientId::new(2),
+                commands: Vec::new(),
+            });
     }
     let render_frame_plan = session.render_frame_plan();
     let world_ownership = session.world().ownership_summary();
