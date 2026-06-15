@@ -6,8 +6,8 @@ use std::{
 
 use crate::{
     game_state::{
-        DrillDirection, DrillState, GameState, HazardCloud, ModalScreen, PlacedBomb,
-        PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
+        DrillDirection, DrillState, GameState, HazardCloud, InfrastructureKind, ModalScreen,
+        PlacedBomb, PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
     },
     input::PlayerInput,
     multiplayer::{
@@ -757,8 +757,27 @@ impl WorldState {
                     PlayerScopedCommandOutcome::IgnoredUnavailable
                 } else {
                     player.bombs -= 1;
+                    self.bombs.push(PlacedBomb {
+                        x: player.x,
+                        y: TILE_SIZE.mul_add(0.4, player.y),
+                        timer_seconds: 2.4,
+                    });
                     PlayerScopedCommandOutcome::Applied
                 }
+            }
+            PlayerCommand::PlaceInfrastructure { slot } => {
+                let Some(kind) = infrastructure_kind_for_slot(slot) else {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                };
+                if !consume_infrastructure_kit(player, kind) {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                self.infrastructure.push(PlacedInfrastructure {
+                    kind,
+                    position: player.tile_position(TILE_SIZE),
+                    durability: 100,
+                });
+                PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::BuyUpgrade { index } => {
                 match index {
@@ -775,7 +794,6 @@ impl WorldState {
             PlayerCommand::Interact
             | PlayerCommand::Cancel
             | PlayerCommand::Confirm
-            | PlayerCommand::PlaceInfrastructure { .. }
             | PlayerCommand::SelectUpgrade { .. }
             | PlayerCommand::Rescue => PlayerScopedCommandOutcome::IgnoredUnavailable,
         }
@@ -810,6 +828,34 @@ impl WorldState {
         self.authoritative_summary =
             AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
     }
+}
+
+const fn infrastructure_kind_for_slot(slot: u8) -> Option<InfrastructureKind> {
+    match slot {
+        0 => Some(InfrastructureKind::SignalRelay),
+        1 => Some(InfrastructureKind::SurveyDrone),
+        2 => Some(InfrastructureKind::CargoLift),
+        3 => Some(InfrastructureKind::TunnelSupport),
+        4 => Some(InfrastructureKind::PumpStation),
+        5 => Some(InfrastructureKind::OreProcessor),
+        _ => None,
+    }
+}
+
+const fn consume_infrastructure_kit(player: &mut Player, kind: InfrastructureKind) -> bool {
+    let kit_count = match kind {
+        InfrastructureKind::SignalRelay => &mut player.signal_relay_kits,
+        InfrastructureKind::SurveyDrone => &mut player.survey_drone_kits,
+        InfrastructureKind::CargoLift => &mut player.cargo_lift_kits,
+        InfrastructureKind::TunnelSupport => &mut player.tunnel_support_kits,
+        InfrastructureKind::PumpStation => &mut player.pump_station_kits,
+        InfrastructureKind::OreProcessor => &mut player.ore_processor_kits,
+    };
+    if *kit_count == 0 {
+        return false;
+    }
+    *kit_count -= 1;
+    true
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1807,7 +1853,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        game_state::{DrillState, GameState, ModalScreen, SoundCue},
+        game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
         multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId, SimulationTick},
     };
 
@@ -1968,6 +2014,44 @@ mod tests {
         );
 
         assert!(world.active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn world_state_applies_player_scoped_bomb_and_infrastructure_placement() {
+        let mut game = GameState::new();
+        game.player.bombs = 1;
+        game.player.signal_relay_kits = 1;
+        let mut world = WorldState::from_legacy_game(&game);
+
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::PlaceBomb),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(world.bomb_count(), 1);
+        assert_eq!(
+            world.player(LOCAL_PLAYER_ID).expect("player exists").bombs,
+            0
+        );
+
+        assert_eq!(
+            world.apply_player_command(
+                LOCAL_PLAYER_ID,
+                &PlayerCommand::PlaceInfrastructure { slot: 0 },
+            ),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(world.infrastructure_count(), 1);
+        assert_eq!(
+            world.infrastructure()[0].kind,
+            InfrastructureKind::SignalRelay
+        );
+        assert_eq!(
+            world
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .signal_relay_kits,
+            0
+        );
     }
 
     #[test]
