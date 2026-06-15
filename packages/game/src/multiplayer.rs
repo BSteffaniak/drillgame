@@ -343,6 +343,22 @@ impl TransportPacket {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InMemoryTransportStatus {
+    pub queued_client_to_host: usize,
+    pub queued_host_to_client_packets: usize,
+    pub addressed_clients: usize,
+}
+
+impl InMemoryTransportStatus {
+    #[must_use]
+    pub const fn is_idle(self) -> bool {
+        self.queued_client_to_host == 0
+            && self.queued_host_to_client_packets == 0
+            && self.addressed_clients == 0
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct InMemoryTransportQueues {
     client_to_host: Vec<TransportPacket>,
@@ -368,6 +384,15 @@ impl InMemoryTransportQueues {
 
     pub fn drain_host_to_client(&mut self, client_id: ClientId) -> Vec<TransportPacket> {
         self.host_to_clients.remove(&client_id).unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn status(&self) -> InMemoryTransportStatus {
+        InMemoryTransportStatus {
+            queued_client_to_host: self.client_to_host.len(),
+            queued_host_to_client_packets: self.host_to_clients.values().map(Vec::len).sum(),
+            addressed_clients: self.host_to_clients.len(),
+        }
     }
 }
 
@@ -1382,6 +1407,14 @@ mod tests {
                 snapshot_tick: SimulationTick::new(6),
             },
         );
+        assert_eq!(
+            queues.status(),
+            super::InMemoryTransportStatus {
+                queued_client_to_host: 1,
+                queued_host_to_client_packets: 1,
+                addressed_clients: 1,
+            }
+        );
 
         let host_packets = queues.drain_client_to_host();
         assert_eq!(
@@ -1391,6 +1424,7 @@ mod tests {
         let client_packets = queues.drain_host_to_client(client_id);
         assert_eq!(client_packets[0].reliability, ReliabilityClass::Reliable);
         assert!(queues.drain_host_to_client(client_id).is_empty());
+        assert!(queues.status().is_idle());
     }
 
     #[test]

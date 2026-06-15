@@ -286,4 +286,6 @@ fn observe_multiplayer_scaffolding(
     });
     let client_runtime_status = client_runtime_probe.runtime_status();
     let _client_joined = client_runtime_status.joined();
+    let transport_queues_probe = crate::multiplayer::InMemoryTransportQueues::default();
+    let _transport_idle = transport_queues_probe.status().is_idle();
 }
