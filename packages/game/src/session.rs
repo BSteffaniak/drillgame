@@ -217,6 +217,19 @@ impl FrameRateInvarianceProof {
     }
 }
 
+const AUTHORITATIVE_HORIZONTAL_SPEED: f32 = 140.0;
+const AUTHORITATIVE_THRUST_SPEED: f32 = 120.0;
+const AUTHORITATIVE_GRAVITY: f32 = 160.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AuthoritativeMovementStep {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+}
+
 #[allow(
     clippy::struct_field_names,
     reason = "determinism proof intentionally names equality dimensions with a same_ prefix"
@@ -1474,6 +1487,32 @@ impl WorldState {
         }
         self.bombs = remaining;
         results
+    }
+
+    pub fn step_authoritative_movement(
+        &mut self,
+        player_id: PlayerId,
+        horizontal: f32,
+        thrust: bool,
+        delta_seconds: f32,
+    ) -> Option<AuthoritativeMovementStep> {
+        let player = self.players.get_mut(&player_id)?;
+        player.velocity_x = horizontal.clamp(-1.0, 1.0) * AUTHORITATIVE_HORIZONTAL_SPEED;
+        if thrust && player.fuel > 0.0 {
+            player.velocity_y = -AUTHORITATIVE_THRUST_SPEED;
+            player.fuel = (player.fuel - delta_seconds).max(0.0);
+        } else {
+            player.velocity_y = AUTHORITATIVE_GRAVITY.mul_add(delta_seconds, player.velocity_y);
+        }
+        player.x = player.velocity_x.mul_add(delta_seconds, player.x);
+        player.y = player.velocity_y.mul_add(delta_seconds, player.y);
+        Some(AuthoritativeMovementStep {
+            player_id,
+            x: player.x,
+            y: player.y,
+            velocity_x: player.velocity_x,
+            velocity_y: player.velocity_y,
+        })
     }
 
     pub fn apply_contract_reward(
@@ -4501,6 +4540,7 @@ impl GameSession {
             self.maybe_emit_keyframe_event();
         }
         self.sync_client_settings_to_legacy_game();
+        self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
         let previous_message = self.game.message.clone();
         let previous_player = self.game.player.clone();
         let previous_request_exit = self.game.request_exit;
@@ -4510,13 +4550,57 @@ impl GameSession {
         self.sync_legacy_mutations_into_world_preserving_authoritative_movement(&previous_player);
     }
 
+    fn step_authoritative_movement_from_latest_intents(&mut self, delta_seconds: f32) {
+        let intents: Vec<(PlayerId, f32, bool)> = self
+            .clients
+            .values()
+            .filter_map(|client| {
+                let prediction = client.prediction();
+                prediction
+                    .unacknowledged_commands()
+                    .iter()
+                    .rev()
+                    .find_map(|command| {
+                        if let PlayerCommand::Movement {
+                            horizontal,
+                            thrust,
+                            drill_down: _,
+                        } = command.command
+                        {
+                            Some((command.player_id, horizontal, thrust))
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect();
+        for (player_id, horizontal, thrust) in intents {
+            let _step = self.world.step_authoritative_movement(
+                player_id,
+                horizontal,
+                thrust,
+                delta_seconds,
+            );
+        }
+    }
+
     fn sync_legacy_mutations_into_world_preserving_authoritative_movement(
         &mut self,
         previous_legacy_player: &Player,
     ) {
         let authoritative_player = self.world.player(LOCAL_PLAYER_ID).cloned();
+        let secondary_players: Vec<(PlayerId, Player)> = self
+            .world
+            .players
+            .iter()
+            .filter(|(player_id, _player)| **player_id != LOCAL_PLAYER_ID)
+            .map(|(player_id, player)| (*player_id, player.clone()))
+            .collect();
         self.world
             .sync_from_legacy_game(self.current_tick, &self.game);
+        for (player_id, player) in secondary_players {
+            self.world.insert_player(player_id, player);
+        }
         if let (Some(authoritative_player), Some(world_player)) =
             (authoritative_player, self.world.player_mut(LOCAL_PLAYER_ID))
         {
@@ -6523,6 +6607,47 @@ mod tests {
             .expect("player exists");
         assert!(player.hull < 50.0);
         assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn local_split_screen_authoritative_movement_moves_secondary_player_independently() {
+        let mut session = GameSession::new();
+        let secondary_client = ClientId::new(2);
+        let secondary_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(secondary_client, secondary_player));
+        let primary_before = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("primary exists")
+            .x;
+        let secondary_before = session
+            .world()
+            .player(secondary_player)
+            .expect("secondary exists")
+            .x;
+
+        session.route_split_screen_player_commands(
+            secondary_client,
+            vec![PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: false,
+                drill_down: false,
+            }],
+        );
+        session.update_legacy(PlayerInput::default(), FIXED_DELTA_SECONDS);
+
+        let primary_after = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("primary exists")
+            .x;
+        let secondary_after = session
+            .world()
+            .player(secondary_player)
+            .expect("secondary exists")
+            .x;
+        assert!((primary_after - primary_before).abs() < f32::EPSILON);
+        assert!(secondary_after > secondary_before);
     }
 
     #[test]
