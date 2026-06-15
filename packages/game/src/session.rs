@@ -2896,6 +2896,22 @@ impl GameSession {
         WorldDelta::new(self.current_tick, self.drain_events())
     }
 
+    pub fn live_snapshot_keyframe_message(&self) -> ProtocolMessage {
+        self.world_snapshot().keyframe_message()
+    }
+
+    pub fn live_world_delta_message(delta: &WorldDelta) -> ProtocolMessage {
+        ProtocolMessage::WorldDelta {
+            tick: delta.tick,
+            payload: delta.compact_network_delta().network_payload(),
+        }
+    }
+
+    pub fn drain_live_world_delta_message(&mut self) -> ProtocolMessage {
+        let delta = self.drain_world_delta();
+        Self::live_world_delta_message(&delta)
+    }
+
     fn push_event(&mut self, event: WorldEvent) {
         self.pending_events.push(event);
     }
@@ -4916,6 +4932,47 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn live_world_snapshot_and_delta_messages_use_authoritative_world_state() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        let tick = session.current_tick();
+        session.route_split_screen_player_commands(
+            second_client,
+            vec![PlayerCommand::Movement {
+                horizontal: -1.0,
+                thrust: false,
+                drill_down: false,
+            }],
+        );
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+
+        let keyframe = session.live_snapshot_keyframe_message();
+        let ProtocolMessage::SnapshotKeyframe { snapshot } = keyframe else {
+            panic!("expected snapshot keyframe");
+        };
+        assert_eq!(snapshot.tick, session.world().simulation_tick());
+        assert!(
+            snapshot
+                .players
+                .iter()
+                .any(|player| player.player_id == second_player && player.velocity_x < 0.0)
+        );
+
+        let delta = session.drain_world_delta();
+        let delta_message = GameSession::live_world_delta_message(&delta);
+        let ProtocolMessage::WorldDelta { tick, payload } = delta_message else {
+            panic!("expected world delta");
+        };
+        assert_eq!(tick, delta.tick);
+        assert!(matches!(
+            payload,
+            NetworkDeltaPayload::Players { players } if players.contains(&second_player)
+        ));
     }
 
     #[test]
