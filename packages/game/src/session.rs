@@ -2880,6 +2880,31 @@ impl GameSession {
         self.sequence_local_commands(commands)
     }
 
+    pub fn route_client_player_commands(
+        &mut self,
+        client_id: ClientId,
+        source: CommandSource,
+        commands: Vec<PlayerCommand>,
+    ) -> SequencedCommandBatch {
+        if client_id == self.local_client_id {
+            self.latest_local_movement_intent = commands
+                .iter()
+                .rev()
+                .find_map(PlayerMovementIntent::from_command);
+            self.latest_local_authoritative_commands
+                .clone_from(&commands);
+        }
+        self.sequence_client_commands_from_source(client_id, source, commands)
+    }
+
+    pub fn route_split_screen_player_commands(
+        &mut self,
+        client_id: ClientId,
+        commands: Vec<PlayerCommand>,
+    ) -> SequencedCommandBatch {
+        self.route_client_player_commands(client_id, CommandSource::SplitScreenClient, commands)
+    }
+
     pub fn update_legacy_input_from_authoritative_commands(
         &self,
         input: PlayerInput,
@@ -4424,6 +4449,51 @@ mod tests {
         assert_eq!(session.client_views().len(), 2);
         assert!(!session.add_local_client_player(second_client, PlayerId::new(3)));
         assert!(!session.add_local_client_player(ClientId::new(3), second_player));
+    }
+
+    #[test]
+    fn split_screen_commands_route_to_each_client_player_stream() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        let tick = session.current_tick();
+
+        let local_batch = session.route_client_player_commands(
+            LOCAL_CLIENT_ID,
+            CommandSource::Keyboard,
+            vec![PlayerCommand::Movement {
+                horizontal: 0.25,
+                thrust: false,
+                drill_down: false,
+            }],
+        );
+        let split_batch = session.route_split_screen_player_commands(
+            second_client,
+            vec![PlayerCommand::Movement {
+                horizontal: -0.75,
+                thrust: false,
+                drill_down: false,
+            }],
+        );
+
+        assert_eq!(local_batch.commands[0].player_id, LOCAL_PLAYER_ID);
+        assert_eq!(split_batch.commands[0].player_id, second_player);
+        assert_eq!(split_batch.source, CommandSource::SplitScreenClient);
+        assert!(split_batch.predicted_locally);
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 2);
+        let local_velocity = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .velocity_x;
+        let second_velocity = session
+            .world()
+            .player(second_player)
+            .expect("second player exists")
+            .velocity_x;
+        assert!((local_velocity - 0.25).abs() < f32::EPSILON);
+        assert!((second_velocity + 0.75).abs() < f32::EPSILON);
     }
 
     #[test]

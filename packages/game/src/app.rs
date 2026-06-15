@@ -196,10 +196,14 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
     let mut local_multiplayer_probe = session.clone();
-    let _added_local_client = local_multiplayer_probe.add_local_client_player(
+    let added_local_client = local_multiplayer_probe.add_local_client_player(
         crate::multiplayer::ClientId::new(2),
         crate::multiplayer::PlayerId::new(2),
     );
+    if added_local_client {
+        let _split_screen_batch = local_multiplayer_probe
+            .route_split_screen_player_commands(crate::multiplayer::ClientId::new(2), Vec::new());
+    }
     let render_frame_plan = session.render_frame_plan();
     let world_ownership = session.world().ownership_summary();
     let client_ownership = session.local_client().ownership_summary();
