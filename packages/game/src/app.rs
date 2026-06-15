@@ -223,10 +223,12 @@ fn observe_multiplayer_scaffolding(
     let _render_viewport_plans = render_frame_plan.viewport_plans(&prediction_presentation_plan);
     let _render_hud_snapshots = render_frame_plan.hud_snapshots();
     let _feedback_output_count = prediction_presentation_plan.feedback_outputs.len();
-    let _save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
+    let save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
         session.world(),
         session.game(),
     );
+    let save_restore_summary = save_from_world.restore_summary();
+    let _save_roster_matches_players = save_restore_summary.roster_matches_persistent_players();
     let _prediction_recovery_actions =
         session.prediction_recovery_actions(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let _prediction_failure_recovery_plan = session

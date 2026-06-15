@@ -175,6 +175,31 @@ impl Default for PersistentSessionState {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct PersistentWorldRestoreSummary {
+    pub simulation_tick: SimulationTick,
+    pub roster_players: usize,
+    pub persistent_players: usize,
+    pub default_player_present: bool,
+}
+
+impl PersistentWorldRestoreSummary {
+    #[must_use]
+    pub fn from_save(save: &PersistentWorldSave) -> Self {
+        Self {
+            simulation_tick: save.session.simulation_tick,
+            roster_players: save.player_roster.len(),
+            persistent_players: save.session.players.len(),
+            default_player_present: save.player_roster.contains(&save.default_player_id),
+        }
+    }
+
+    #[must_use]
+    pub const fn roster_matches_persistent_players(&self) -> bool {
+        self.roster_players == self.persistent_players
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentWorldSave {
     #[serde(default)]
@@ -221,6 +246,11 @@ impl PersistentWorldSave {
     #[must_use]
     pub fn into_legacy_game(self) -> GameState {
         self.game
+    }
+
+    #[must_use]
+    pub fn restore_summary(&self) -> PersistentWorldRestoreSummary {
+        PersistentWorldRestoreSummary::from_save(self)
     }
 }
 
@@ -524,6 +554,23 @@ mod tests {
         assert_eq!(save.session.simulation_tick, SimulationTick::new(42));
         assert_eq!(save.session.players[0].credits, 321);
         assert!((save.session.players[0].fuel - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn world_save_restore_summary_tracks_roster_and_session_state() {
+        let mut game = GameState::new();
+        game.player.credits = 654;
+        let mut world = WorldState::from_legacy_game(&game);
+        world.set_simulation_tick(SimulationTick::new(77));
+
+        let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
+        let summary = save.restore_summary();
+
+        assert_eq!(summary.simulation_tick, SimulationTick::new(77));
+        assert_eq!(summary.roster_players, 1);
+        assert_eq!(summary.persistent_players, 1);
+        assert!(summary.default_player_present);
+        assert!(summary.roster_matches_persistent_players());
     }
 
     #[test]
