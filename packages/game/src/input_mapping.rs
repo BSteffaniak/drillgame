@@ -1,6 +1,6 @@
 use crate::{
     input::PlayerInput,
-    multiplayer::{ClientAction, CommandSource, PlayerCommand},
+    multiplayer::{ClientAction, ClientId, CommandSource, PlayerCommand},
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -13,6 +13,22 @@ pub struct MappedInput {
 pub struct CommandProducer {
     pub source: CommandSource,
     pub commands: Vec<PlayerCommand>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalInputProducer {
+    pub client_id: ClientId,
+    pub producer: CommandProducer,
+}
+
+impl LocalInputProducer {
+    #[must_use]
+    pub const fn new(client_id: ClientId, producer: CommandProducer) -> Self {
+        Self {
+            client_id,
+            producer,
+        }
+    }
 }
 
 impl CommandProducer {
@@ -55,6 +71,31 @@ pub const fn online_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
 #[must_use]
 pub fn local_keyboard_commands(input: PlayerInput) -> CommandProducer {
     CommandProducer::new(CommandSource::Keyboard, map_player_commands(input))
+}
+
+#[must_use]
+pub fn split_screen_keyboard_commands(input: PlayerInput) -> CommandProducer {
+    CommandProducer::new(CommandSource::SplitScreenClient, map_player_commands(input))
+}
+
+#[must_use]
+pub fn local_split_screen_inputs(
+    primary_client_id: ClientId,
+    primary_input: PlayerInput,
+    secondary_client_id: Option<ClientId>,
+    secondary_input: Option<PlayerInput>,
+) -> Vec<LocalInputProducer> {
+    let mut producers = vec![LocalInputProducer::new(
+        primary_client_id,
+        local_keyboard_commands(primary_input),
+    )];
+    if let (Some(client_id), Some(input)) = (secondary_client_id, secondary_input) {
+        producers.push(LocalInputProducer::new(
+            client_id,
+            split_screen_keyboard_commands(input),
+        ));
+    }
+    producers
 }
 
 #[must_use]
@@ -146,12 +187,13 @@ const fn infrastructure_slots(input: PlayerInput) -> [(bool, u8); 6] {
 mod tests {
     use crate::{
         input::PlayerInput,
-        multiplayer::{ClientAction, CommandSource},
+        multiplayer::{ClientAction, ClientId, CommandSource},
     };
 
     use super::{
-        PlayerCommand, ai_commands, gamepad_commands, local_keyboard_commands, map_local_input,
-        online_commands, replay_commands, split_screen_commands,
+        PlayerCommand, ai_commands, gamepad_commands, local_keyboard_commands,
+        local_split_screen_inputs, map_local_input, online_commands, replay_commands,
+        split_screen_commands,
     };
 
     #[test]
@@ -199,6 +241,44 @@ mod tests {
                 .contains(&ClientAction::ToggleLocalMultiplayer)
         );
         assert!(mapped.player_commands.contains(&PlayerCommand::PlaceBomb));
+    }
+
+    #[test]
+    fn local_split_screen_inputs_route_primary_and_secondary_clients_separately() {
+        let primary = PlayerInput {
+            horizontal: -1.0,
+            thrust: true,
+            ..PlayerInput::default()
+        };
+        let secondary = PlayerInput {
+            horizontal: 1.0,
+            drill_down: true,
+            ..PlayerInput::default()
+        };
+
+        let producers = local_split_screen_inputs(
+            ClientId::new(1),
+            primary,
+            Some(ClientId::new(2)),
+            Some(secondary),
+        );
+
+        assert_eq!(producers.len(), 2);
+        assert_eq!(producers[0].client_id, ClientId::new(1));
+        assert_eq!(producers[0].producer.source, CommandSource::Keyboard);
+        assert_eq!(producers[1].client_id, ClientId::new(2));
+        assert_eq!(
+            producers[1].producer.source,
+            CommandSource::SplitScreenClient
+        );
+        assert_eq!(
+            producers[1].producer.commands[0],
+            PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: false,
+                drill_down: true,
+            }
+        );
     }
 
     #[test]

@@ -3812,6 +3812,14 @@ impl GameSession {
         self.clients.len()
     }
 
+    #[must_use]
+    pub fn secondary_local_client_id(&self) -> Option<ClientId> {
+        self.clients
+            .keys()
+            .copied()
+            .find(|client_id| *client_id != self.local_client_id)
+    }
+
     pub fn add_local_client_player(&mut self, client_id: ClientId, player_id: PlayerId) -> bool {
         if self.clients.contains_key(&client_id) || self.world.player(player_id).is_some() {
             return false;

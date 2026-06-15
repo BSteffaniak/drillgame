@@ -1,6 +1,6 @@
 use crate::{
     audio::AudioBus,
-    input::read_input,
+    input::{read_input, read_primary_keyboard_input, read_secondary_keyboard_input},
     input_mapping::{
         ai_commands, gamepad_commands, local_keyboard_commands, map_local_input, online_commands,
         replay_commands, split_screen_commands,
@@ -61,7 +61,17 @@ pub fn run() {
         {
             let _enabled_split_screen = session.enable_default_local_split_screen();
         }
-        session.route_local_player_commands(mapped_input.player_commands.clone());
+        let secondary_input =
+            (session.client_count() > 1).then(|| read_secondary_keyboard_input(&raylib));
+        for local_input in crate::input_mapping::local_split_screen_inputs(
+            crate::multiplayer::LOCAL_CLIENT_ID,
+            read_primary_keyboard_input(&raylib),
+            session.secondary_local_client_id(),
+            secondary_input,
+        ) {
+            let _batch =
+                session.route_command_producer(local_input.client_id, local_input.producer);
+        }
         observe_multiplayer_scaffolding(&mut session, delta_seconds);
 
         let authoritative_input = session.update_legacy_input_from_authoritative_commands(input);

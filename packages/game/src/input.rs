@@ -40,13 +40,17 @@ pub struct PlayerInput {
 
 #[must_use]
 pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
-    let left = raylib.is_key_down(KeyboardKey::KEY_A) || raylib.is_key_down(KeyboardKey::KEY_LEFT);
-    let right =
-        raylib.is_key_down(KeyboardKey::KEY_D) || raylib.is_key_down(KeyboardKey::KEY_RIGHT);
-    let up = raylib.is_key_down(KeyboardKey::KEY_W)
-        || raylib.is_key_down(KeyboardKey::KEY_UP)
-        || raylib.is_key_down(KeyboardKey::KEY_SPACE);
-    let down = raylib.is_key_down(KeyboardKey::KEY_S) || raylib.is_key_down(KeyboardKey::KEY_DOWN);
+    let mut input = read_primary_keyboard_input(raylib);
+    input.exit_requested = exit_requested;
+    input
+}
+
+#[must_use]
+pub fn read_primary_keyboard_input(raylib: &RaylibHandle) -> PlayerInput {
+    let left = raylib.is_key_down(KeyboardKey::KEY_A);
+    let right = raylib.is_key_down(KeyboardKey::KEY_D);
+    let up = raylib.is_key_down(KeyboardKey::KEY_W) || raylib.is_key_down(KeyboardKey::KEY_SPACE);
+    let down = raylib.is_key_down(KeyboardKey::KEY_S);
 
     PlayerInput {
         horizontal: horizontal_axis(left, right),
@@ -86,7 +90,27 @@ pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
         place_support: raylib.is_key_pressed(KeyboardKey::KEY_U),
         place_pump: raylib.is_key_pressed(KeyboardKey::KEY_O),
         place_processor: raylib.is_key_pressed(KeyboardKey::KEY_P),
-        exit_requested,
+        exit_requested: false,
+    }
+}
+
+#[must_use]
+pub fn read_secondary_keyboard_input(raylib: &RaylibHandle) -> PlayerInput {
+    let left = raylib.is_key_down(KeyboardKey::KEY_LEFT);
+    let right = raylib.is_key_down(KeyboardKey::KEY_RIGHT);
+    let up = raylib.is_key_down(KeyboardKey::KEY_UP);
+    let down = raylib.is_key_down(KeyboardKey::KEY_DOWN);
+
+    PlayerInput {
+        horizontal: horizontal_axis(left, right),
+        thrust: up,
+        drill_down: down,
+        interact: raylib.is_key_pressed(KeyboardKey::KEY_RIGHT_CONTROL),
+        confirm: raylib.is_key_pressed(KeyboardKey::KEY_RIGHT_CONTROL),
+        cancel: raylib.is_key_pressed(KeyboardKey::KEY_RIGHT_SHIFT),
+        bomb: raylib.is_key_pressed(KeyboardKey::KEY_KP_0),
+        scan: raylib.is_key_pressed(KeyboardKey::KEY_KP_DECIMAL),
+        ..PlayerInput::default()
     }
 }
 
