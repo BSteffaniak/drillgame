@@ -1371,6 +1371,15 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderViewportPlan {
+    pub client_id: ClientId,
+    pub viewport: Viewport,
+    pub clip_enabled: bool,
+    pub local_player: Option<RenderPlayerPresentation>,
+    pub remote_player_count: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderFramePlan {
     pub world_summary: AuthoritativeWorldSummary,
@@ -1449,6 +1458,25 @@ impl RenderFramePlan {
             .iter()
             .copied()
             .filter(|player| player.player_id != view.controlled_player_id)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn viewport_plans(
+        &self,
+        prediction_plan: &PredictionPresentationPlan,
+    ) -> Vec<RenderViewportPlan> {
+        self.views
+            .iter()
+            .map(|view| RenderViewportPlan {
+                client_id: view.client_id,
+                viewport: view.viewport,
+                clip_enabled: true,
+                local_player: self.predicted_player_for_view(view, prediction_plan),
+                remote_player_count: self
+                    .remote_player_presentations(view, prediction_plan)
+                    .len(),
+            })
             .collect()
     }
 }
@@ -2918,6 +2946,37 @@ mod tests {
 
         assert_eq!(remotes.len(), 1);
         assert_eq!(remotes[0].player_id, remote_player_id);
+    }
+
+    #[test]
+    fn render_frame_plan_builds_clipped_viewport_plans() {
+        let mut session = GameSession::new();
+        let remote_player_id = PlayerId::new(99);
+        session
+            .local_client_mut()
+            .prediction
+            .push_remote_snapshot(super::PlayerSnapshot {
+                player_id: remote_player_id,
+                x: 20.0,
+                y: 30.0,
+                velocity_x: 2.0,
+                velocity_y: 0.0,
+                fuel: 1.0,
+                hull: 1.0,
+                credits: 0,
+                cargo_used: 0,
+                scanner_cooldown_seconds: 0.0,
+            });
+        let frame_plan = session.render_frame_plan();
+        let prediction_plan = session.prediction_presentation_plan(None, 0.5, 0.5, 0.1);
+
+        let viewport_plans = frame_plan.viewport_plans(&prediction_plan);
+
+        assert_eq!(viewport_plans.len(), frame_plan.view_count());
+        assert!(viewport_plans[0].clip_enabled);
+        assert_eq!(viewport_plans[0].client_id, LOCAL_CLIENT_ID);
+        assert_eq!(viewport_plans[0].remote_player_count, 1);
+        assert!(viewport_plans[0].local_player.is_some());
     }
 
     #[test]
