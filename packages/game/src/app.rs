@@ -288,4 +288,12 @@ fn observe_multiplayer_scaffolding(
     let _client_joined = client_runtime_status.joined();
     let transport_queues_probe = crate::multiplayer::InMemoryTransportQueues::default();
     let _transport_idle = transport_queues_probe.status().is_idle();
+    let protocol_exchange_batch = crate::multiplayer::ProtocolMessage::exchange_batch(
+        crate::multiplayer::ProtocolExchangeKind::WorldDelta,
+        vec![crate::multiplayer::ProtocolMessage::WorldDelta {
+            tick: SimulationTick::default(),
+            payload: crate::multiplayer::NetworkDeltaPayload::Noop,
+        }],
+    );
+    let _protocol_exchange_unreliable_count = protocol_exchange_batch.unreliable_count();
 }

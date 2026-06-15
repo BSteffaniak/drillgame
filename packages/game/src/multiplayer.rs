@@ -702,6 +702,36 @@ pub struct NetworkWorldSnapshot {
     pub players: Vec<NetworkPlayerSnapshot>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtocolExchangeKind {
+    JoinHandshake,
+    SnapshotKeyframe,
+    WorldDelta,
+    TerrainChunk,
+    CommandResponse,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProtocolExchangeBatch {
+    pub kind: ProtocolExchangeKind,
+    pub messages: Vec<ProtocolMessage>,
+}
+
+impl ProtocolExchangeBatch {
+    #[must_use]
+    pub fn reliable_count(&self) -> usize {
+        self.messages
+            .iter()
+            .filter(|message| message.reliability_class() == ReliabilityClass::Reliable)
+            .count()
+    }
+
+    #[must_use]
+    pub fn unreliable_count(&self) -> usize {
+        self.messages.len() - self.reliable_count()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum ProtocolMessage {
     JoinRequest {
@@ -754,6 +784,14 @@ impl ProtocolMessage {
             | Self::TerrainChunkRequest { .. }
             | Self::TerrainChunkResponse { .. } => ReliabilityClass::Reliable,
         }
+    }
+
+    #[must_use]
+    pub const fn exchange_batch(
+        kind: ProtocolExchangeKind,
+        messages: Vec<Self>,
+    ) -> ProtocolExchangeBatch {
+        ProtocolExchangeBatch { kind, messages }
     }
 }
 
@@ -1362,6 +1400,32 @@ mod tests {
             payload: NetworkDeltaPayload::Noop,
         });
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(21));
+    }
+
+    #[test]
+    fn protocol_exchange_batches_count_reliability_classes() {
+        let batch = ProtocolMessage::exchange_batch(
+            super::ProtocolExchangeKind::JoinHandshake,
+            vec![
+                ProtocolMessage::JoinRequest {
+                    client_id: ClientId::new(1),
+                    session_token: None,
+                },
+                ProtocolMessage::JoinAccepted {
+                    client_id: ClientId::new(1),
+                    player_id: PlayerId::new(2),
+                    snapshot_tick: SimulationTick::new(3),
+                },
+                ProtocolMessage::WorldDelta {
+                    tick: SimulationTick::new(3),
+                    payload: NetworkDeltaPayload::Noop,
+                },
+            ],
+        );
+
+        assert_eq!(batch.kind, super::ProtocolExchangeKind::JoinHandshake);
+        assert_eq!(batch.reliable_count(), 2);
+        assert_eq!(batch.unreliable_count(), 1);
     }
 
     #[test]
