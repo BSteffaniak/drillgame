@@ -5,7 +5,9 @@ use crate::{
         ai_commands, gamepad_commands, local_keyboard_commands, map_local_input, online_commands,
         replay_commands, split_screen_commands,
     },
-    multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand, SimulationTick},
+    multiplayer::{
+        FIXED_DELTA_SECONDS, HostRuntimeConfig, HostSessionRuntime, PlayerCommand, SimulationTick,
+    },
     rendering::GameRenderer,
     save::{load_settings, save_settings},
     session::{
@@ -272,4 +274,8 @@ fn observe_multiplayer_scaffolding(
     prediction_probe.push_remote_snapshot(snapshot);
     let _remote_snapshot_count =
         prediction_probe.remote_snapshot_count(crate::multiplayer::LOCAL_PLAYER_ID);
+    let host_runtime_probe =
+        HostSessionRuntime::new(HostRuntimeConfig::default(), SimulationTick::default());
+    let host_runtime_status = host_runtime_probe.runtime_status();
+    let _host_has_capacity = host_runtime_status.has_capacity();
 }

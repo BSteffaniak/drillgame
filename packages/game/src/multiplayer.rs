@@ -437,6 +437,23 @@ pub enum TransportIntegrationStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HostRuntimeStatus {
+    pub mode: HostRuntimeMode,
+    pub connected_clients: usize,
+    pub max_clients: u8,
+    pub join_in_progress_enabled: bool,
+    pub reconnect_enabled: bool,
+    pub transport_selected: bool,
+}
+
+impl HostRuntimeStatus {
+    #[must_use]
+    pub fn has_capacity(&self) -> bool {
+        self.connected_clients < usize::from(self.max_clients)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostSessionRuntime {
     pub config: HostRuntimeConfig,
     pub command_session: CommandNetworkSession,
@@ -512,6 +529,19 @@ impl HostSessionRuntime {
 
     pub fn apply_command_packet(&mut self, packet: &CommandPacket) -> Vec<ProtocolMessage> {
         self.command_session.apply_command_packet_messages(packet)
+    }
+
+    #[must_use]
+    pub fn runtime_status(&self) -> HostRuntimeStatus {
+        HostRuntimeStatus {
+            mode: self.config.mode.clone(),
+            connected_clients: self.connected_clients.len(),
+            max_clients: self.config.max_clients,
+            join_in_progress_enabled: self.config.allow_join_in_progress,
+            reconnect_enabled: self.config.allow_reconnect,
+            transport_selected: transport_integration_status()
+                == TransportIntegrationStatus::Selected,
+        }
     }
 }
 
@@ -1207,6 +1237,13 @@ mod tests {
             .expect("client accepted");
         assert_eq!(host.connected_client_count(), 1);
         assert_eq!(host.connected_player(client_id), Some(player_id));
+        let status = host.runtime_status();
+        assert_eq!(status.connected_clients, 1);
+        assert_eq!(status.mode, super::HostRuntimeMode::InProcessLocal);
+        assert!(status.join_in_progress_enabled);
+        assert!(status.reconnect_enabled);
+        assert!(!status.transport_selected);
+        assert!(status.has_capacity());
         assert!(matches!(
             join,
             ProtocolMessage::JoinAccepted {
