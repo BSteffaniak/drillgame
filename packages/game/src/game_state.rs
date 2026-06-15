@@ -5582,6 +5582,28 @@ mod tests {
     }
 
     #[test]
+    fn damage_and_repair_regression_restores_hull_for_credits() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.hull = 50.0;
+        game.player.credits = 500;
+        game.modal = Some(ModalScreen::RepairConfirm);
+        let initial_credits = game.player.credits;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert!(game.player.hull > 50.0);
+        assert!(game.player.credits < initial_credits);
+        assert!(game.message.contains("Hull repaired"));
+    }
+
+    #[test]
     fn ui_transition_regression_pauses_from_playing() {
         let mut game = GameState::new();
         game.run_mode = RunMode::Playing;
