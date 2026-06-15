@@ -81,8 +81,9 @@ pub fn run() {
         renderer.sync_delta(&mut raylib, &thread, session.game(), &world_delta);
 
         let mut draw = raylib.begin_drawing(&thread);
-        let client_views = session.client_views();
-        renderer.render_client_views(&mut draw, session.game(), &client_views);
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
+        let live_render_output = session.live_render_frame_output(&prediction_plan);
+        renderer.render_live_frame_output(&mut draw, session.game(), &live_render_output);
     }
 }
 
@@ -297,6 +298,8 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     });
     let _render_viewport_plans = render_frame_plan.viewport_plans(&prediction_presentation_plan);
     let live_render_output = session.live_render_frame_output(&prediction_presentation_plan);
+    let split_screen_readiness = live_render_output.split_screen_readiness_report();
+    let _split_screen_ready = split_screen_readiness.ready_for_live_render_path();
     let _live_render_counts = (
         live_render_output.clipped_viewport_count(),
         live_render_output.hud_count(),

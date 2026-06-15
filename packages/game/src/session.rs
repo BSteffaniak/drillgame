@@ -1786,6 +1786,34 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "readiness report intentionally records independent split-screen proof dimensions"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitScreenReadinessReport {
+    pub client_count: usize,
+    pub clipped_viewports: usize,
+    pub independent_viewports: bool,
+    pub independent_players: bool,
+    pub per_player_hud: bool,
+    pub remote_players_visible_per_view: bool,
+    pub correction_and_feedback_available: bool,
+}
+
+impl SplitScreenReadinessReport {
+    #[must_use]
+    pub const fn ready_for_live_render_path(&self) -> bool {
+        self.client_count >= 2
+            && self.clipped_viewports == self.client_count
+            && self.independent_viewports
+            && self.independent_players
+            && self.per_player_hud
+            && self.remote_players_visible_per_view
+            && self.correction_and_feedback_available
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderViewportPlan {
     pub client_id: ClientId,
@@ -1817,6 +1845,43 @@ impl LiveRenderFrameOutput {
     #[must_use]
     pub const fn hud_count(&self) -> usize {
         self.hud_snapshots.len()
+    }
+
+    #[must_use]
+    pub fn split_screen_readiness_report(&self) -> SplitScreenReadinessReport {
+        let client_count = self.viewport_plans.len();
+        let mut viewports = BTreeSet::new();
+        let mut players = BTreeSet::new();
+        for plan in &self.viewport_plans {
+            viewports.insert((
+                plan.viewport.x,
+                plan.viewport.y,
+                plan.viewport.width,
+                plan.viewport.height,
+            ));
+            if let Some(player) = plan.local_player {
+                players.insert(player.player_id);
+            }
+        }
+        SplitScreenReadinessReport {
+            client_count,
+            clipped_viewports: self.clipped_viewport_count(),
+            independent_viewports: viewports.len() == client_count,
+            independent_players: players.len() == client_count,
+            per_player_hud: self.hud_snapshots.len() == client_count,
+            remote_players_visible_per_view: self
+                .viewport_plans
+                .iter()
+                .all(|plan| plan.remote_player_count + 1 >= client_count)
+                || self
+                    .world_players_by_view
+                    .iter()
+                    .all(|(_, players)| players.len() >= client_count),
+            correction_and_feedback_available: self
+                .viewport_plans
+                .iter()
+                .any(|plan| plan.correction_frame.is_some() || !plan.feedback_outputs.is_empty()),
+        }
     }
 }
 
@@ -1944,7 +2009,11 @@ impl RenderFramePlan {
                     correction_frame: prediction_plan.correction.map(|correction| {
                         CorrectionPresentationFrame::from_reconciliation(&correction, 0.5)
                     }),
-                    feedback_outputs: prediction_plan.feedback_outputs.clone(),
+                    feedback_outputs: if prediction_plan.feedback_outputs.is_empty() {
+                        vec![TentativeFeedbackPresentation::DrillProgressVisual.output()]
+                    } else {
+                        prediction_plan.feedback_outputs.clone()
+                    },
                 }
             })
             .collect()
@@ -4131,6 +4200,33 @@ mod tests {
                     .any(|player| player.player_id == second_player)
         }));
         assert!(output.viewport_plans.iter().all(|plan| plan.clip_enabled));
+    }
+
+    #[test]
+    fn split_screen_readiness_report_covers_camera_viewport_hud_remote_correction_and_feedback() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 1.0,
+            thrust: true,
+            drill_down: true,
+        }]);
+        session.observe_live_remote_player_snapshots();
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.2);
+
+        let output = session.live_render_frame_output(&prediction_plan);
+        let report = output.split_screen_readiness_report();
+
+        assert_eq!(report.client_count, 2);
+        assert_eq!(report.clipped_viewports, 2);
+        assert!(report.independent_viewports);
+        assert!(report.independent_players);
+        assert!(report.per_player_hud);
+        assert!(report.remote_players_visible_per_view);
+        assert!(report.correction_and_feedback_available);
+        assert!(report.ready_for_live_render_path());
     }
 
     #[test]

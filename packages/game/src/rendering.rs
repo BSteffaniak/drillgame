@@ -26,7 +26,10 @@ use world::{
 
 use crate::{
     game_state::{GameState, RunMode},
-    session::{ClientView, SplitScreenLayout, WorldDelta, WorldEvent, split_screen_layout},
+    session::{
+        ClientView, LiveRenderFrameOutput, RenderViewportPlan, SplitScreenLayout, WorldDelta,
+        WorldEvent, split_screen_layout,
+    },
 };
 
 const SCREEN_WIDTH: i32 = 1280;
@@ -38,6 +41,10 @@ pub struct GameRenderer {
 
 impl GameRenderer {
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "legacy compatibility renderer path kept during live render output migration"
+    )]
     pub const fn split_screen_layout(client_count: usize) -> SplitScreenLayout {
         split_screen_layout(client_count)
     }
@@ -85,6 +92,10 @@ impl GameRenderer {
         self.terrain.sync(raylib, thread, game);
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy compatibility renderer path kept during live render output migration"
+    )]
     pub fn render_client_views(
         &self,
         draw: &mut RaylibDrawHandle<'_>,
@@ -98,6 +109,51 @@ impl GameRenderer {
                 ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
             }
             self.render_client_view(draw, game, view);
+            unsafe {
+                ffi::EndScissorMode();
+            }
+        }
+    }
+
+    pub fn render_live_frame_output(
+        &self,
+        draw: &mut RaylibDrawHandle<'_>,
+        game: &GameState,
+        output: &LiveRenderFrameOutput,
+    ) {
+        for plan in &output.viewport_plans {
+            self.render_viewport_plan(draw, game, plan);
+        }
+    }
+
+    pub fn render_viewport_plan(
+        &self,
+        draw: &mut RaylibDrawHandle<'_>,
+        game: &GameState,
+        plan: &RenderViewportPlan,
+    ) {
+        if plan.clip_enabled {
+            let viewport = plan.viewport;
+            unsafe {
+                ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
+            }
+        }
+        let view = ClientView {
+            client_id: plan.client_id,
+            controlled_player_id: plan
+                .local_player
+                .map_or(crate::multiplayer::LOCAL_PLAYER_ID, |player| {
+                    player.player_id
+                }),
+            camera: plan.local_player.map_or_else(
+                || world::render_camera(game),
+                |player| Vector2::new(player.x, player.y),
+            ),
+            viewport: plan.viewport,
+            run_mode: game.run_mode,
+        };
+        self.render_client_view(draw, game, &view);
+        if plan.clip_enabled {
             unsafe {
                 ffi::EndScissorMode();
             }
