@@ -12,8 +12,9 @@ use crate::{
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-        NetworkDeltaPayload, NetworkTerrainChunkRevision, PlayerCommand, PlayerId, ProtocolMessage,
-        SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
+        NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolMessage, SIMULATION_HZ,
+        SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -285,6 +286,36 @@ impl WorldSnapshot {
         Self {
             tick,
             players: world.player_snapshots(),
+        }
+    }
+
+    #[must_use]
+    pub fn network_snapshot(&self) -> NetworkWorldSnapshot {
+        NetworkWorldSnapshot {
+            tick: self.tick,
+            players: self
+                .players
+                .iter()
+                .map(|player| NetworkPlayerSnapshot {
+                    player_id: player.player_id,
+                    x: player.x,
+                    y: player.y,
+                    velocity_x: player.velocity_x,
+                    velocity_y: player.velocity_y,
+                    fuel: player.fuel,
+                    hull: player.hull,
+                    credits: player.credits,
+                    cargo_used: player.cargo_used,
+                    scanner_cooldown_seconds: player.scanner_cooldown_seconds,
+                })
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn keyframe_message(&self) -> ProtocolMessage {
+        ProtocolMessage::SnapshotKeyframe {
+            snapshot: self.network_snapshot(),
         }
     }
 }
@@ -2756,6 +2787,16 @@ mod tests {
         assert_eq!(snapshot.tick, session.current_tick());
         assert_eq!(snapshot.players.len(), 1);
         assert_eq!(snapshot.players[0].player_id, LOCAL_PLAYER_ID);
+        assert_eq!(
+            snapshot.network_snapshot().players[0].player_id,
+            LOCAL_PLAYER_ID
+        );
+        assert_eq!(
+            snapshot.keyframe_message(),
+            ProtocolMessage::SnapshotKeyframe {
+                snapshot: snapshot.network_snapshot()
+            }
+        );
     }
 
     #[test]

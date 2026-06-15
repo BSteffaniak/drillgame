@@ -419,9 +419,11 @@ impl ClientSessionRuntime {
             {
                 self.latest_authoritative_tick = acknowledgement.authoritative_tick;
             }
-            ProtocolMessage::WorldDelta { tick, .. }
-            | ProtocolMessage::SnapshotKeyframe { tick } => {
+            ProtocolMessage::WorldDelta { tick, .. } => {
                 self.latest_authoritative_tick = tick;
+            }
+            ProtocolMessage::SnapshotKeyframe { snapshot } => {
+                self.latest_authoritative_tick = snapshot.tick;
             }
             other => self.pending_messages.push(other),
         }
@@ -567,6 +569,26 @@ pub enum NetworkDeltaPayload {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NetworkPlayerSnapshot {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+    pub fuel: f32,
+    pub hull: f32,
+    pub credits: u32,
+    pub cargo_used: u32,
+    pub scanner_cooldown_seconds: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NetworkWorldSnapshot {
+    pub tick: SimulationTick,
+    pub players: Vec<NetworkPlayerSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum ProtocolMessage {
     JoinRequest {
         client_id: ClientId,
@@ -585,7 +607,7 @@ pub enum ProtocolMessage {
     CommandAcknowledgement(CommandAcknowledgement),
     CommandRejection(CommandRejection),
     SnapshotKeyframe {
-        tick: SimulationTick,
+        snapshot: NetworkWorldSnapshot,
     },
     WorldDelta {
         tick: SimulationTick,

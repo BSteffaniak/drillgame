@@ -165,6 +165,7 @@ fn observe_multiplayer_scaffolding(
         session.world().infrastructure().len(),
         session.world().service_transactions().len(),
     );
+    let _world_snapshot_keyframe = session.world_snapshot().keyframe_message();
     let _network_payload = session
         .drain_world_delta()
         .compact_network_delta()
