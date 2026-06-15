@@ -179,6 +179,10 @@ fn observe_multiplayer_scaffolding(
         .views
         .first()
         .and_then(|view| render_frame_plan.player_for_view(view));
+    let _save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
+        session.world(),
+        session.game(),
+    );
     let prediction = session.local_client().prediction();
     let _prediction_replay_len = prediction.replay_commands().len();
     let _prediction_buffer_len = prediction.unacknowledged_commands().len();

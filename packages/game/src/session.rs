@@ -757,6 +757,10 @@ impl WorldState {
         self.players.get(&player_id)
     }
 
+    pub fn player_ids(&self) -> impl Iterator<Item = PlayerId> + '_ {
+        self.players.keys().copied()
+    }
+
     pub fn player_mut(&mut self, player_id: PlayerId) -> Option<&mut Player> {
         self.players.get_mut(&player_id)
     }

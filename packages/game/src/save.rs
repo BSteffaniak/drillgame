@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     game_state::GameState,
     multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
+    session::WorldState,
 };
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -119,6 +120,19 @@ impl PersistentPlayerState {
             hull: game.player.hull,
         }
     }
+
+    #[must_use]
+    pub fn from_world_player(player_id: PlayerId, world: &WorldState) -> Option<Self> {
+        let player = world.player(player_id)?;
+        Some(Self {
+            player_id,
+            credits: player.credits,
+            cargo_used: player.cargo_used(),
+            cargo_capacity: player.cargo_capacity,
+            fuel: player.fuel,
+            hull: player.hull,
+        })
+    }
 }
 
 const fn default_persistent_players() -> Vec<PersistentPlayerState> {
@@ -137,6 +151,17 @@ impl PersistentSessionState {
         Self {
             simulation_tick: SimulationTick::default(),
             players: vec![PersistentPlayerState::local_from_game(game)],
+        }
+    }
+
+    #[must_use]
+    pub fn from_world(world: &WorldState) -> Self {
+        Self {
+            simulation_tick: world.simulation_tick(),
+            players: world
+                .player_ids()
+                .filter_map(|player_id| PersistentPlayerState::from_world_player(player_id, world))
+                .collect(),
         }
     }
 }
@@ -173,6 +198,22 @@ impl PersistentWorldSave {
             player_roster: default_player_roster(),
             default_player_id: LOCAL_PLAYER_ID,
             session: PersistentSessionState::local_from_game(game),
+            game: game.clone_for_save(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_world_and_legacy_game(world: &WorldState, game: &GameState) -> Self {
+        let mut player_roster = world.player_ids().collect::<Vec<_>>();
+        if player_roster.is_empty() {
+            player_roster = default_player_roster();
+        }
+        Self {
+            save_authority: SaveAuthority::HostOwnedSession,
+            session_kind: SaveSessionKind::HostOwned,
+            default_player_id: player_roster.first().copied().unwrap_or(LOCAL_PLAYER_ID),
+            player_roster,
+            session: PersistentSessionState::from_world(world),
             game: game.clone_for_save(),
         }
     }
@@ -400,6 +441,7 @@ mod tests {
         game_state::GameState,
         multiplayer::{LOCAL_PLAYER_ID, SimulationTick},
         save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
+        session::WorldState,
     };
 
     #[test]
@@ -461,6 +503,27 @@ mod tests {
             session.players[0].cargo_capacity,
             game.player.cargo_capacity
         );
+    }
+
+    #[test]
+    fn persistent_world_save_can_be_built_from_world_state() {
+        let mut game = GameState::new();
+        game.player.credits = 321;
+        let mut world = WorldState::from_legacy_game(&game);
+        world.set_simulation_tick(SimulationTick::new(42));
+        world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .fuel = 12.0;
+
+        let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
+
+        assert_eq!(save.save_authority, SaveAuthority::HostOwnedSession);
+        assert_eq!(save.session_kind, SaveSessionKind::HostOwned);
+        assert_eq!(save.player_roster, vec![LOCAL_PLAYER_ID]);
+        assert_eq!(save.session.simulation_tick, SimulationTick::new(42));
+        assert_eq!(save.session.players[0].credits, 321);
+        assert!((save.session.players[0].fuel - 12.0).abs() < f32::EPSILON);
     }
 
     #[test]
