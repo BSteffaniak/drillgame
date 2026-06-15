@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    economy::{refuel_amount, repair_amount, sell_cargo},
+    economy::{buy_upgrade, refuel_amount, repair_amount, sell_cargo},
     game_state::{
         DrillDirection, DrillState, GameState, HazardCloud, InfrastructureKind, ModalScreen,
         PlacedBomb, PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
@@ -1287,6 +1287,10 @@ pub enum PlayerTransactionKind {
     Repair,
     SellCargo,
     Rescue,
+    CompleteContract,
+    StartExpedition,
+    RepayDebt,
+    WinGame,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1534,10 +1538,6 @@ impl WorldState {
         self.terrain.blast_radius(center, radius)
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "bomb world positions intentionally convert to terrain tile coordinates"
-    )]
     pub fn age_and_detonate_bombs(
         &mut self,
         delta_seconds: f32,
@@ -1548,10 +1548,7 @@ impl WorldState {
         for mut bomb in bombs {
             bomb.timer_seconds -= delta_seconds;
             if bomb.timer_seconds <= 0.0 {
-                let center = TilePosition {
-                    x: (bomb.x / TILE_SIZE).floor() as i32,
-                    y: (bomb.y / TILE_SIZE).floor() as i32,
-                };
+                let center = bomb_tile_position(bomb);
                 results.push(self.detonate_bomb_at(center, 2));
             } else {
                 remaining.push(bomb);
@@ -1559,6 +1556,93 @@ impl WorldState {
         }
         self.bombs = remaining;
         results
+    }
+
+    pub fn apply_contract_reward(
+        &mut self,
+        player_id: PlayerId,
+        reward_credits: u32,
+    ) -> Option<PlayerServiceTransaction> {
+        let player = self.players.get_mut(&player_id)?;
+        let transaction = PlayerServiceTransaction {
+            player_id,
+            kind: PlayerTransactionKind::CompleteContract,
+            credits_before: player.credits,
+            credits_after: player.credits.saturating_add(reward_credits),
+            cargo_before: player.cargo_used(),
+            cargo_after: player.cargo_used(),
+        };
+        player.credits = transaction.credits_after;
+        self.service_transactions.push(transaction);
+        Some(transaction)
+    }
+
+    pub fn start_expedition(
+        &mut self,
+        player_id: PlayerId,
+        cost: u32,
+    ) -> Option<PlayerServiceTransaction> {
+        let player = self.players.get_mut(&player_id)?;
+        if player.credits < cost {
+            return None;
+        }
+        let transaction = PlayerServiceTransaction {
+            player_id,
+            kind: PlayerTransactionKind::StartExpedition,
+            credits_before: player.credits,
+            credits_after: player.credits - cost,
+            cargo_before: player.cargo_used(),
+            cargo_after: player.cargo_used(),
+        };
+        player.credits = transaction.credits_after;
+        self.service_transactions.push(transaction);
+        Some(transaction)
+    }
+
+    pub fn repay_debt(
+        &mut self,
+        player_id: PlayerId,
+        amount: u32,
+    ) -> Option<PlayerServiceTransaction> {
+        let player = self.players.get_mut(&player_id)?;
+        let payment = amount.min(player.credits).min(player.loan_debt);
+        let transaction = PlayerServiceTransaction {
+            player_id,
+            kind: PlayerTransactionKind::RepayDebt,
+            credits_before: player.credits,
+            credits_after: player.credits - payment,
+            cargo_before: player.loan_debt,
+            cargo_after: player.loan_debt - payment,
+        };
+        player.credits = transaction.credits_after;
+        player.loan_debt = transaction.cargo_after;
+        self.service_transactions.push(transaction);
+        Some(transaction)
+    }
+
+    pub fn award_victory(
+        &mut self,
+        player_id: PlayerId,
+        bonus_credits: u32,
+    ) -> Option<PlayerServiceTransaction> {
+        let player = self.players.get_mut(&player_id)?;
+        let transaction = PlayerServiceTransaction {
+            player_id,
+            kind: PlayerTransactionKind::WinGame,
+            credits_before: player.credits,
+            credits_after: player.credits.saturating_add(bonus_credits),
+            cargo_before: player.cargo_used(),
+            cargo_after: player.cargo_used(),
+        };
+        player.credits = transaction.credits_after;
+        self.authoritative_summary.won_game = true;
+        self.service_transactions.push(transaction);
+        Some(transaction)
+    }
+
+    #[must_use]
+    pub const fn won_game(&self) -> bool {
+        self.authoritative_summary.won_game
     }
 
     #[must_use]
@@ -1834,14 +1918,8 @@ impl WorldState {
             PlayerCommand::BuyUpgrade { index } => {
                 let credits_before = player.credits;
                 let cargo_before = player.cargo_used();
-                match index {
-                    0 => player.drill_strength = player.drill_strength.saturating_add(1),
-                    1 => player.engine_level = player.engine_level.saturating_add(1),
-                    2 => player.hull_level = player.hull_level.saturating_add(1),
-                    3 => player.cargo_bay_level = player.cargo_bay_level.saturating_add(1),
-                    4 => player.fuel_tank_level = player.fuel_tank_level.saturating_add(1),
-                    5 => player.scanner_level = player.scanner_level.saturating_add(1),
-                    _ => return PlayerScopedCommandOutcome::IgnoredUnavailable,
+                if buy_upgrade(player, index).is_err() {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
                 }
                 self.service_transactions.push(PlayerServiceTransaction {
                     player_id,
@@ -1969,6 +2047,18 @@ fn world_events_for_applied_command(command: &SequencedPlayerCommand) -> Vec<Wor
         | PlayerCommand::Confirm
         | PlayerCommand::SelectUpgrade { .. } => Vec::new(),
     }
+}
+
+const fn bomb_tile_position(bomb: PlacedBomb) -> TilePosition {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "bomb world positions intentionally convert to terrain tile coordinates"
+    )]
+    let position = TilePosition {
+        x: (bomb.x / TILE_SIZE).floor() as i32,
+        y: (bomb.y / TILE_SIZE).floor() as i32,
+    };
+    position
 }
 
 const fn infrastructure_kind_for_slot(slot: u8) -> Option<InfrastructureKind> {
@@ -6415,6 +6505,55 @@ mod tests {
                 .expect("tile exists")
                 .kind,
             TileKind::Air
+        );
+    }
+
+    #[test]
+    fn authoritative_world_handles_economy_progression_debt_and_victory_transactions() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
+        player.credits = 10_000;
+        player.loan_debt = 500;
+        let credits_before_upgrade = player.credits;
+
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::BuyUpgrade { index: 0 }),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        let upgraded_player = world.player(LOCAL_PLAYER_ID).expect("player exists");
+        assert!(upgraded_player.drill_strength > 1);
+        assert!(upgraded_player.credits < credits_before_upgrade);
+        assert!(world.apply_contract_reward(LOCAL_PLAYER_ID, 250).is_some());
+        assert!(world.start_expedition(LOCAL_PLAYER_ID, 100).is_some());
+        assert!(world.repay_debt(LOCAL_PLAYER_ID, 200).is_some());
+        assert!(world.award_victory(LOCAL_PLAYER_ID, 1_000).is_some());
+
+        let player = world.player(LOCAL_PLAYER_ID).expect("player exists");
+        assert_eq!(player.loan_debt, 300);
+        assert!(world.won_game());
+        assert!(
+            world
+                .service_transactions()
+                .iter()
+                .any(|transaction| transaction.kind
+                    == super::PlayerTransactionKind::CompleteContract)
+        );
+        assert!(
+            world.service_transactions().iter().any(
+                |transaction| transaction.kind == super::PlayerTransactionKind::StartExpedition
+            )
+        );
+        assert!(
+            world
+                .service_transactions()
+                .iter()
+                .any(|transaction| transaction.kind == super::PlayerTransactionKind::RepayDebt)
+        );
+        assert!(
+            world
+                .service_transactions()
+                .iter()
+                .any(|transaction| transaction.kind == super::PlayerTransactionKind::WinGame)
         );
     }
 

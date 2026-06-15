@@ -217,6 +217,15 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     );
     let mut bomb_probe = session.world().clone();
     let _bomb_probe_results = bomb_probe.age_and_detonate_bombs(0.0);
+    let mut economy_probe = session.world().clone();
+    let _economy_probe_contract =
+        economy_probe.apply_contract_reward(crate::multiplayer::LOCAL_PLAYER_ID, 0);
+    let _economy_probe_expedition =
+        economy_probe.start_expedition(crate::multiplayer::LOCAL_PLAYER_ID, 0);
+    let _economy_probe_debt = economy_probe.repay_debt(crate::multiplayer::LOCAL_PLAYER_ID, 0);
+    let _economy_probe_victory =
+        economy_probe.award_victory(crate::multiplayer::LOCAL_PLAYER_ID, 0);
+    let _economy_probe_won = economy_probe.won_game();
     let _world_snapshot_keyframe = session.world_snapshot().keyframe_message();
     let _live_snapshot_batch = session.live_snapshot_exchange_batch();
     session.apply_command_acknowledgement(&crate::multiplayer::CommandAcknowledgement {
