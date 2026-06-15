@@ -6,8 +6,8 @@ use std::{
 
 use crate::{
     game_state::{
-        DrillState, GameState, HazardCloud, ModalScreen, PlacedBomb, PlacedInfrastructure, RunMode,
-        SoundCue,
+        DrillDirection, DrillState, GameState, HazardCloud, ModalScreen, PlacedBomb,
+        PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
     },
     input::PlayerInput,
     multiplayer::{
@@ -709,11 +709,29 @@ impl WorldState {
             PlayerCommand::Movement {
                 horizontal,
                 thrust,
-                drill_down: _,
+                drill_down,
             } => {
                 player.velocity_x = horizontal;
                 if thrust {
                     player.velocity_y = -1.0;
+                }
+                if drill_down {
+                    let current_tile = player.tile_position(TILE_SIZE);
+                    let target = TilePosition {
+                        x: current_tile.x,
+                        y: current_tile.y + 1,
+                    };
+                    self.active_drills.entry(player_id).or_insert(DrillState {
+                        target,
+                        direction: DrillDirection::Down,
+                        progress: 0.0,
+                        initial_durability: 1,
+                        seconds_per_chip: FIXED_DELTA_SECONDS,
+                        sound_timer: 0.0,
+                        dust_timer: 0.0,
+                    });
+                } else {
+                    self.active_drills.remove(&player_id);
                 }
                 PlayerScopedCommandOutcome::Applied
             }
@@ -1922,6 +1940,34 @@ mod tests {
         assert_eq!(client.modal, Some(ModalScreen::Help));
         assert_eq!(client.local_message, "Client-local toast");
         assert_eq!(client.local_audio_cues.len(), 1);
+    }
+
+    #[test]
+    fn world_state_applies_player_scoped_drilling_intent() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+
+        let outcome = world.apply_player_command(
+            LOCAL_PLAYER_ID,
+            &PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+        );
+
+        assert_eq!(outcome, super::PlayerScopedCommandOutcome::Applied);
+        assert!(world.active_drill(LOCAL_PLAYER_ID).is_some());
+
+        world.apply_player_command(
+            LOCAL_PLAYER_ID,
+            &PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            },
+        );
+
+        assert!(world.active_drill(LOCAL_PLAYER_ID).is_none());
     }
 
     #[test]
