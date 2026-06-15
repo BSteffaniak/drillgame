@@ -1553,13 +1553,16 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderViewportPlan {
     pub client_id: ClientId,
     pub viewport: Viewport,
     pub clip_enabled: bool,
     pub local_player: Option<RenderPlayerPresentation>,
     pub remote_player_count: usize,
+    pub remote_players: Vec<RemotePlayerPresentation>,
+    pub correction_frame: Option<CorrectionPresentationFrame>,
+    pub feedback_outputs: Vec<TentativeFeedbackOutput>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1674,14 +1677,20 @@ impl RenderFramePlan {
     ) -> Vec<RenderViewportPlan> {
         self.views
             .iter()
-            .map(|view| RenderViewportPlan {
-                client_id: view.client_id,
-                viewport: view.viewport,
-                clip_enabled: true,
-                local_player: self.predicted_player_for_view(view, prediction_plan),
-                remote_player_count: self
-                    .remote_player_presentations(view, prediction_plan)
-                    .len(),
+            .map(|view| {
+                let remote_players = self.remote_player_presentations(view, prediction_plan);
+                RenderViewportPlan {
+                    client_id: view.client_id,
+                    viewport: view.viewport,
+                    clip_enabled: true,
+                    local_player: self.predicted_player_for_view(view, prediction_plan),
+                    remote_player_count: remote_players.len(),
+                    remote_players,
+                    correction_frame: prediction_plan.correction.map(|correction| {
+                        CorrectionPresentationFrame::from_reconciliation(&correction, 0.5)
+                    }),
+                    feedback_outputs: prediction_plan.feedback_outputs.clone(),
+                }
             })
             .collect()
     }
@@ -3729,7 +3738,63 @@ mod tests {
         assert!(viewport_plans[0].clip_enabled);
         assert_eq!(viewport_plans[0].client_id, LOCAL_CLIENT_ID);
         assert_eq!(viewport_plans[0].remote_player_count, 1);
+        assert_eq!(viewport_plans[0].remote_players.len(), 1);
         assert!(viewport_plans[0].local_player.is_some());
+    }
+
+    #[test]
+    fn render_viewport_plan_carries_correction_remote_and_tentative_feedback_outputs() {
+        let mut session = GameSession::new();
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 12.0,
+            thrust: false,
+            drill_down: false,
+        }]);
+        session
+            .local_client_mut()
+            .prediction
+            .push_feedback(super::LocalTentativeFeedback::DrillContact);
+        let remote_player = PlayerId::new(88);
+        session
+            .local_client_mut()
+            .prediction
+            .push_remote_snapshot(super::PlayerSnapshot {
+                player_id: remote_player,
+                x: 1.0,
+                y: 2.0,
+                velocity_x: 0.0,
+                velocity_y: 0.0,
+                fuel: 1.0,
+                hull: 1.0,
+                credits: 0,
+                cargo_used: 0,
+                scanner_cooldown_seconds: 0.0,
+            });
+        {
+            let player = session
+                .world
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("player exists");
+            player.x = 100.0;
+            player.y = 50.0;
+            player.velocity_x = 0.0;
+            player.velocity_y = 0.0;
+        }
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.0, 0.0);
+        let frame_plan = session.render_frame_plan();
+
+        let viewport_plan = frame_plan
+            .viewport_plans(&prediction_plan)
+            .into_iter()
+            .next()
+            .expect("viewport plan exists");
+
+        assert_eq!(viewport_plan.remote_players.len(), 1);
+        assert!(viewport_plan.correction_frame.is_some());
+        assert!(viewport_plan.feedback_outputs.iter().any(|output| {
+            output.presentation == super::TentativeFeedbackPresentation::DrillContactAudio
+                && output.channel == super::TentativeFeedbackChannel::Audio
+        }));
     }
 
     #[test]
