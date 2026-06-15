@@ -599,7 +599,6 @@ impl ClientSessionRuntime {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SelectedTransportBackend {
     InMemoryFaithfulAdapter,
-    QuicDatagramWithReliableControl,
     UdpLikeUnreliableSequenced,
     ReliableSocket,
 }
@@ -610,9 +609,6 @@ impl SelectedTransportBackend {
         match self {
             Self::InMemoryFaithfulAdapter => {
                 "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable before a real socket backend is required"
-            }
-            Self::QuicDatagramWithReliableControl => {
-                "production target: QUIC-style reliable streams plus unreliable datagrams can carry lobby/control and sequenced simulation packets through one encrypted connection"
             }
             Self::UdpLikeUnreliableSequenced => {
                 "future gameplay transport candidate for unreliable sequenced snapshots/deltas"
@@ -644,56 +640,6 @@ impl TransportReliabilityMapping {
                 self.unreliable_sequenced,
                 TransportChannel::UnreliableSequencedSimulation
             )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ProductionTransportSupportStatus {
-    Implemented,
-    DeferredNeedsDependency,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionTransportPlan {
-    pub backend: SelectedTransportBackend,
-    pub packet_io_status: ProductionTransportSupportStatus,
-    pub reliability_mapping: TransportReliabilityMapping,
-    pub serialization_version: u16,
-    pub timeout_retry_tests_required: bool,
-    pub recovery_tests_required: bool,
-    pub latency_soak_tests_required: bool,
-    pub unsupported_items: Vec<String>,
-}
-
-impl ProductionTransportPlan {
-    #[must_use]
-    pub fn documents_selection_and_remaining_work(&self) -> bool {
-        self.backend == SelectedTransportBackend::QuicDatagramWithReliableControl
-            && self.packet_io_status == ProductionTransportSupportStatus::DeferredNeedsDependency
-            && self.reliability_mapping.maps_protocol_classes()
-            && self.serialization_version > 0
-            && self.timeout_retry_tests_required
-            && self.recovery_tests_required
-            && self.latency_soak_tests_required
-            && !self.unsupported_items.is_empty()
-    }
-}
-
-#[must_use]
-pub fn production_transport_plan() -> ProductionTransportPlan {
-    ProductionTransportPlan {
-        backend: SelectedTransportBackend::QuicDatagramWithReliableControl,
-        packet_io_status: ProductionTransportSupportStatus::DeferredNeedsDependency,
-        reliability_mapping: transport_reliability_mapping(),
-        serialization_version: 1,
-        timeout_retry_tests_required: true,
-        recovery_tests_required: true,
-        latency_soak_tests_required: true,
-        unsupported_items: vec![
-            "no QUIC/socket dependency is in the workspace yet".to_string(),
-            "no platform relay/NAT traversal has been selected".to_string(),
-            "no production packet soak harness exists yet".to_string(),
-        ],
     }
 }
 
@@ -774,149 +720,6 @@ impl LobbySessionUxFlow {
                 .states
                 .iter()
                 .any(|state| matches!(state, LobbySessionUxState::Error(_)))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum OnlineSessionScreen {
-    MainMenu,
-    HostSetup,
-    JoinSetup,
-    Lobby,
-    Connecting,
-    Connected,
-    Reconnecting,
-    Error,
-    Shutdown,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum OnlineConnectionUiState {
-    Idle,
-    Hosting,
-    Joining,
-    WaitingForSnapshot,
-    Connected,
-    TimedOut,
-    Disconnected,
-    Reconnecting,
-    Failed,
-    ShuttingDown,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum HostOwnedSaveUxPolicy {
-    HostOwnsAuthoritativeSave,
-    ClientReceivesSnapshotOnly,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum PlatformOnlineFeatureDecision {
-    ImplementInProduct,
-    ExplicitlyDeferred,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PlatformOnlineFeaturePlan {
-    pub nat_traversal: PlatformOnlineFeatureDecision,
-    pub matchmaking: PlatformOnlineFeatureDecision,
-    pub platform_invites: PlatformOnlineFeatureDecision,
-    pub host_migration: PlatformOnlineFeatureDecision,
-}
-
-impl PlatformOnlineFeaturePlan {
-    #[must_use]
-    pub const fn all_explicitly_deferred(&self) -> bool {
-        matches!(
-            self.nat_traversal,
-            PlatformOnlineFeatureDecision::ExplicitlyDeferred
-        ) && matches!(
-            self.matchmaking,
-            PlatformOnlineFeatureDecision::ExplicitlyDeferred
-        ) && matches!(
-            self.platform_invites,
-            PlatformOnlineFeatureDecision::ExplicitlyDeferred
-        ) && matches!(
-            self.host_migration,
-            PlatformOnlineFeatureDecision::ExplicitlyDeferred
-        )
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct OnlineSessionUxPlan {
-    pub screens: Vec<OnlineSessionScreen>,
-    pub connection_states: Vec<OnlineConnectionUiState>,
-    pub save_policy: HostOwnedSaveUxPolicy,
-    pub player_slot_count: usize,
-    pub reconnect_runtime_covered: bool,
-    pub platform_features: PlatformOnlineFeaturePlan,
-}
-
-impl OnlineSessionUxPlan {
-    #[must_use]
-    pub fn covers_online_session_ux_requirements(&self) -> bool {
-        self.screens.contains(&OnlineSessionScreen::HostSetup)
-            && self.screens.contains(&OnlineSessionScreen::JoinSetup)
-            && self.screens.contains(&OnlineSessionScreen::Lobby)
-            && self
-                .connection_states
-                .contains(&OnlineConnectionUiState::TimedOut)
-            && self
-                .connection_states
-                .contains(&OnlineConnectionUiState::Disconnected)
-            && self
-                .connection_states
-                .contains(&OnlineConnectionUiState::Reconnecting)
-            && self
-                .connection_states
-                .contains(&OnlineConnectionUiState::Failed)
-            && self
-                .connection_states
-                .contains(&OnlineConnectionUiState::ShuttingDown)
-            && self.save_policy == HostOwnedSaveUxPolicy::HostOwnsAuthoritativeSave
-            && self.player_slot_count >= 2
-            && self.reconnect_runtime_covered
-            && self.platform_features.all_explicitly_deferred()
-    }
-}
-
-#[must_use]
-pub fn online_session_ux_plan() -> OnlineSessionUxPlan {
-    OnlineSessionUxPlan {
-        screens: vec![
-            OnlineSessionScreen::MainMenu,
-            OnlineSessionScreen::HostSetup,
-            OnlineSessionScreen::JoinSetup,
-            OnlineSessionScreen::Lobby,
-            OnlineSessionScreen::Connecting,
-            OnlineSessionScreen::Connected,
-            OnlineSessionScreen::Reconnecting,
-            OnlineSessionScreen::Error,
-            OnlineSessionScreen::Shutdown,
-        ],
-        connection_states: vec![
-            OnlineConnectionUiState::Idle,
-            OnlineConnectionUiState::Hosting,
-            OnlineConnectionUiState::Joining,
-            OnlineConnectionUiState::WaitingForSnapshot,
-            OnlineConnectionUiState::Connected,
-            OnlineConnectionUiState::TimedOut,
-            OnlineConnectionUiState::Disconnected,
-            OnlineConnectionUiState::Reconnecting,
-            OnlineConnectionUiState::Failed,
-            OnlineConnectionUiState::ShuttingDown,
-        ],
-        save_policy: HostOwnedSaveUxPolicy::HostOwnsAuthoritativeSave,
-        player_slot_count: 4,
-        reconnect_runtime_covered: connection_lifecycle_summary()
-            .covers_host_join_disconnect_reconnect_shutdown(),
-        platform_features: PlatformOnlineFeaturePlan {
-            nat_traversal: PlatformOnlineFeatureDecision::ExplicitlyDeferred,
-            matchmaking: PlatformOnlineFeatureDecision::ExplicitlyDeferred,
-            platform_invites: PlatformOnlineFeatureDecision::ExplicitlyDeferred,
-            host_migration: PlatformOnlineFeatureDecision::ExplicitlyDeferred,
-        },
     }
 }
 
@@ -2113,12 +1916,11 @@ mod tests {
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        online_session_ux_plan, packet_recovery_action, per_client_ui_policy,
-        production_transport_plan, pump_in_memory_runtime_packets, recovery_coverage_summary,
-        scaffolded_edge_case_proof, selected_transport_backend, session_continuity_decision,
-        session_shutdown_decision, terrain_recovery_decision, transport_fault_coverage_summary,
-        transport_implementation_decision, transport_integration_status,
-        transport_reliability_mapping,
+        packet_recovery_action, per_client_ui_policy, pump_in_memory_runtime_packets,
+        recovery_coverage_summary, scaffolded_edge_case_proof, selected_transport_backend,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        transport_fault_coverage_summary, transport_implementation_decision,
+        transport_integration_status, transport_reliability_mapping,
     };
 
     #[test]
@@ -2179,22 +1981,6 @@ mod tests {
     }
 
     #[test]
-    fn production_transport_plan_selects_quic_style_backend_and_documents_remaining_work() {
-        let plan = production_transport_plan();
-
-        assert_eq!(
-            plan.backend,
-            super::SelectedTransportBackend::QuicDatagramWithReliableControl
-        );
-        assert_eq!(
-            plan.packet_io_status,
-            super::ProductionTransportSupportStatus::DeferredNeedsDependency
-        );
-        assert!(plan.documents_selection_and_remaining_work());
-        assert!(plan.backend.rationale().contains("QUIC"));
-    }
-
-    #[test]
     fn selected_transport_maps_protocol_reliability_to_adapter_channels() {
         assert_eq!(
             selected_transport_backend(),
@@ -2216,16 +2002,6 @@ mod tests {
         assert!(lifecycle.covers_host_join_disconnect_reconnect_shutdown());
         assert_eq!(lifecycle.final_host_clients, 1);
         assert!(ux.covers_host_join_reconnect_error());
-    }
-
-    #[test]
-    fn online_session_ux_plan_covers_lobby_connection_save_slots_reconnect_and_platform_deferrals()
-    {
-        let plan = online_session_ux_plan();
-
-        assert!(plan.covers_online_session_ux_requirements());
-        assert_eq!(plan.player_slot_count, 4);
-        assert!(plan.platform_features.all_explicitly_deferred());
     }
 
     #[test]
