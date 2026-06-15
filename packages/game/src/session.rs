@@ -573,6 +573,7 @@ impl WorldDelta {
                 | WorldEvent::DrillProgressed { player_id }
                 | WorldEvent::PurchaseCompleted { player_id }
                 | WorldEvent::RescueTriggered { player_id }
+                | WorldEvent::PlayerSurvivalChanged { player_id }
                 | WorldEvent::BombPlaced { player_id } => {
                     players.insert(*player_id);
                 }
@@ -780,6 +781,9 @@ pub enum WorldEvent {
     RescueTriggered {
         player_id: PlayerId,
     },
+    PlayerSurvivalChanged {
+        player_id: PlayerId,
+    },
     BombPlaced {
         player_id: PlayerId,
     },
@@ -921,6 +925,15 @@ impl PlayerMovementIntent {
         input.drill_down = self.drill_down;
         input
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerSurvivalSnapshot {
+    pub player_id: PlayerId,
+    pub fuel: f32,
+    pub hull: f32,
+    pub disabled: bool,
+    pub stranded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1096,6 +1109,17 @@ impl WorldState {
     pub fn player_inventory_summary(&self, player_id: PlayerId) -> Option<PlayerInventorySummary> {
         self.player(player_id)
             .map(PlayerInventorySummary::from_player)
+    }
+
+    #[must_use]
+    pub fn player_survival_snapshot(&self, player_id: PlayerId) -> Option<PlayerSurvivalSnapshot> {
+        self.player(player_id).map(|player| PlayerSurvivalSnapshot {
+            player_id,
+            fuel: player.fuel,
+            hull: player.hull,
+            disabled: player.hull <= 0.0,
+            stranded: player.fuel <= 0.0,
+        })
     }
 
     pub fn sync_active_drill_to_legacy_game(&self, player_id: PlayerId, game: &mut GameState) {
@@ -1347,7 +1371,10 @@ fn world_events_for_applied_command(command: &SequencedPlayerCommand) -> Vec<Wor
         PlayerCommand::PlaceInfrastructure { .. } | PlayerCommand::UseScanner => {
             vec![WorldEvent::ImportantEffectTriggered]
         }
-        PlayerCommand::Rescue => vec![WorldEvent::RescueTriggered { player_id }],
+        PlayerCommand::Rescue => vec![
+            WorldEvent::RescueTriggered { player_id },
+            WorldEvent::PlayerSurvivalChanged { player_id },
+        ],
         PlayerCommand::Movement { .. }
         | PlayerCommand::Interact
         | PlayerCommand::Cancel
@@ -1645,6 +1672,20 @@ impl RenderFramePlan {
                         hud,
                         viewport: view.viewport,
                     })
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn survival_snapshots(&self) -> Vec<PlayerSurvivalSnapshot> {
+        self.players
+            .iter()
+            .map(|player| PlayerSurvivalSnapshot {
+                player_id: player.player_id,
+                fuel: player.fuel,
+                hull: player.hull,
+                disabled: player.hull <= 0.0,
+                stranded: player.fuel <= 0.0,
             })
             .collect()
     }
@@ -2556,6 +2597,9 @@ impl GameSession {
                 player_id: LOCAL_PLAYER_ID,
             },
             WorldEvent::RescueTriggered {
+                player_id: LOCAL_PLAYER_ID,
+            },
+            WorldEvent::PlayerSurvivalChanged {
                 player_id: LOCAL_PLAYER_ID,
             },
             WorldEvent::BombPlaced {
@@ -4590,6 +4634,49 @@ mod tests {
         assert!(session.drain_events().iter().any(|event| matches!(
             event,
             super::WorldEvent::PurchaseCompleted {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+    }
+
+    #[test]
+    fn authoritative_rescue_updates_player_survival_state() {
+        let mut session = GameSession::new();
+        session.game.player.fuel = 0.0;
+        session.game.player.hull = 0.0;
+        session.game.player.velocity_x = 25.0;
+        session
+            .world
+            .sync_from_legacy_game(session.current_tick(), &session.game.clone());
+        let before = session
+            .world()
+            .player_survival_snapshot(LOCAL_PLAYER_ID)
+            .expect("survival snapshot exists");
+        assert!(before.disabled);
+        assert!(before.stranded);
+        let tick = session.current_tick();
+
+        session.route_local_player_commands(vec![PlayerCommand::Rescue]);
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+        let after = session
+            .world()
+            .player_survival_snapshot(LOCAL_PLAYER_ID)
+            .expect("survival snapshot exists");
+        assert!(!after.disabled);
+        assert!(!after.stranded);
+        assert!(after.hull > 0.0);
+        assert!(after.fuel > 0.0);
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        assert!(session.game().player.hull > 0.0);
+        assert!(session.game().player.fuel > 0.0);
+        let frame_survival = session.render_frame_plan().survival_snapshots();
+        assert_eq!(frame_survival.len(), 1);
+        assert!(!frame_survival[0].disabled);
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::PlayerSurvivalChanged {
                 player_id: LOCAL_PLAYER_ID
             }
         )));

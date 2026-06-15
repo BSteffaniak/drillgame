@@ -115,6 +115,8 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _active_drill = world_probe.active_drill(crate::multiplayer::LOCAL_PLAYER_ID);
     let _inventory_summary =
         world_probe.player_inventory_summary(crate::multiplayer::LOCAL_PLAYER_ID);
+    let _survival_summary =
+        world_probe.player_survival_snapshot(crate::multiplayer::LOCAL_PLAYER_ID);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _compact_delta =
@@ -238,6 +240,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         .map(|view| render_frame_plan.world_player_presentations_for_view(view));
     let _render_hud_snapshots = render_frame_plan.hud_snapshots();
     let _client_presentation_snapshots = render_frame_plan.client_presentation_snapshots();
+    let _survival_snapshots = render_frame_plan.survival_snapshots();
     let _feedback_output_count = prediction_presentation_plan.feedback_outputs.len();
     let save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
         session.world(),

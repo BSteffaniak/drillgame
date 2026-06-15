@@ -74,6 +74,7 @@ impl GameRenderer {
                 | WorldEvent::DrillProgressed { .. }
                 | WorldEvent::PurchaseCompleted { .. }
                 | WorldEvent::RescueTriggered { .. }
+                | WorldEvent::PlayerSurvivalChanged { .. }
                 | WorldEvent::BombPlaced { .. }
                 | WorldEvent::HazardChanged
                 | WorldEvent::ImportantEffectTriggered
