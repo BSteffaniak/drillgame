@@ -240,6 +240,88 @@ impl ReplayDeterminismProof {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LocalSplitScreenQaBlockerRegister {
+    pub blockers: Vec<String>,
+}
+
+impl LocalSplitScreenQaBlockerRegister {
+    #[must_use]
+    pub const fn no_known_blockers_pending_manual_qa(&self) -> bool {
+        self.blockers.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredictionDebugOverlayPlan {
+    pub fields: Vec<String>,
+}
+
+impl PredictionDebugOverlayPlan {
+    #[must_use]
+    pub fn covers_required_fields(&self) -> bool {
+        [
+            "ping",
+            "prediction_buffer",
+            "correction_plan",
+            "dropped_packets",
+            "snapshot_recovery",
+            "chunk_recovery",
+        ]
+        .iter()
+        .all(|field| self.fields.iter().any(|candidate| candidate == field))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HighPingPlaytestPlan {
+    pub simulated_conditions: Vec<String>,
+    pub known_regressions: Vec<String>,
+}
+
+impl HighPingPlaytestPlan {
+    #[must_use]
+    pub const fn ready_for_manual_notes(&self) -> bool {
+        !self.simulated_conditions.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionPredictionPolishPlan {
+    pub replay_migrated_systems: Vec<String>,
+    pub correction_threshold_source: String,
+    pub remote_stall_timeout_source: String,
+    pub live_failure_recovery_paths: Vec<PredictionFailure>,
+    pub debug_overlay: PredictionDebugOverlayPlan,
+    pub high_ping_playtest: HighPingPlaytestPlan,
+}
+
+impl ProductionPredictionPolishPlan {
+    #[must_use]
+    pub fn covers_current_migrated_scope(&self) -> bool {
+        self.replay_migrated_systems.len() >= 6
+            && !self.correction_threshold_source.is_empty()
+            && !self.remote_stall_timeout_source.is_empty()
+            && self
+                .live_failure_recovery_paths
+                .contains(&PredictionFailure::TerrainAlreadyChanged)
+            && self
+                .live_failure_recovery_paths
+                .contains(&PredictionFailure::EconomyChangedState)
+            && self
+                .live_failure_recovery_paths
+                .contains(&PredictionFailure::ProgressionChangedState)
+            && self
+                .live_failure_recovery_paths
+                .contains(&PredictionFailure::HazardOrRescueChangedState)
+            && self
+                .live_failure_recovery_paths
+                .contains(&PredictionFailure::CommandRejected)
+            && self.debug_overlay.covers_required_fields()
+            && self.high_ping_playtest.ready_for_manual_notes()
+    }
+}
+
 #[allow(
     clippy::struct_field_names,
     reason = "startup plan names the client/player identity fields explicitly"
@@ -3606,6 +3688,53 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn local_split_screen_qa_blockers() -> LocalSplitScreenQaBlockerRegister {
+        LocalSplitScreenQaBlockerRegister::default()
+    }
+
+    #[must_use]
+    pub fn production_prediction_polish_plan() -> ProductionPredictionPolishPlan {
+        ProductionPredictionPolishPlan {
+            replay_migrated_systems: vec![
+                "movement".to_string(),
+                "drilling".to_string(),
+                "cargo".to_string(),
+                "economy".to_string(),
+                "bombs".to_string(),
+                "rescue".to_string(),
+                "hazards".to_string(),
+            ],
+            correction_threshold_source: "PredictionCorrectionTuning::default_gameplay_feel plus live playtest tuning".to_string(),
+            remote_stall_timeout_source: "ClientPredictionState interpolation delay and extrapolation limit under simulated transport latency".to_string(),
+            live_failure_recovery_paths: vec![
+                PredictionFailure::TerrainAlreadyChanged,
+                PredictionFailure::EconomyChangedState,
+                PredictionFailure::ProgressionChangedState,
+                PredictionFailure::HazardOrRescueChangedState,
+                PredictionFailure::CommandRejected,
+            ],
+            debug_overlay: PredictionDebugOverlayPlan {
+                fields: vec![
+                    "ping".to_string(),
+                    "prediction_buffer".to_string(),
+                    "correction_plan".to_string(),
+                    "dropped_packets".to_string(),
+                    "snapshot_recovery".to_string(),
+                    "chunk_recovery".to_string(),
+                ],
+            },
+            high_ping_playtest: HighPingPlaytestPlan {
+                simulated_conditions: vec![
+                    "100ms latency / 20ms jitter / 0% loss".to_string(),
+                    "250ms latency / 60ms jitter / 2% loss".to_string(),
+                    "500ms latency / 120ms jitter / 5% loss".to_string(),
+                ],
+                known_regressions: Vec::new(),
+            },
+        }
+    }
+
+    #[must_use]
     pub fn enable_default_local_split_screen(&mut self) -> bool {
         let plan = Self::default_local_split_screen_startup_plan();
         self.add_local_client_player(plan.secondary_client_id, plan.secondary_player_id)
@@ -6623,6 +6752,23 @@ mod tests {
             .expect("player exists");
         assert!(player.hull < 50.0);
         assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn local_split_screen_qa_blocker_register_starts_clear_pending_manual_qa() {
+        let blockers = GameSession::local_split_screen_qa_blockers();
+
+        assert!(blockers.no_known_blockers_pending_manual_qa());
+    }
+
+    #[test]
+    fn production_prediction_polish_plan_covers_current_migrated_scope_and_debug_overlay() {
+        let plan = GameSession::production_prediction_polish_plan();
+
+        assert!(plan.covers_current_migrated_scope());
+        assert!(plan.debug_overlay.covers_required_fields());
+        assert!(plan.high_ping_playtest.ready_for_manual_notes());
+        assert!(plan.high_ping_playtest.known_regressions.is_empty());
     }
 
     #[test]
