@@ -183,6 +183,10 @@ fn observe_multiplayer_scaffolding(
         .compact_network_delta()
         .network_payload();
     let _network_delta_tick = session.drain_world_delta().compact_network_delta().tick();
+    let _network_delta_summary = session
+        .drain_world_delta()
+        .compact_network_delta()
+        .summary();
     let _network_protocol_message = session
         .drain_world_delta()
         .compact_network_delta()

@@ -402,6 +402,21 @@ impl WorldSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompactDeltaKind {
+    Noop,
+    TerrainChunks,
+    Players,
+    KeyframeRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompactDeltaSummary {
+    pub kind: CompactDeltaKind,
+    pub tick: SimulationTick,
+    pub item_count: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompactWorldDelta {
     Noop {
@@ -457,6 +472,30 @@ impl CompactWorldDelta {
             | Self::TerrainChunks { tick, .. }
             | Self::Players { tick, .. }
             | Self::KeyframeRequired { tick } => *tick,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> CompactDeltaKind {
+        match self {
+            Self::Noop { .. } => CompactDeltaKind::Noop,
+            Self::TerrainChunks { .. } => CompactDeltaKind::TerrainChunks,
+            Self::Players { .. } => CompactDeltaKind::Players,
+            Self::KeyframeRequired { .. } => CompactDeltaKind::KeyframeRequired,
+        }
+    }
+
+    #[must_use]
+    pub const fn summary(&self) -> CompactDeltaSummary {
+        let item_count = match self {
+            Self::Noop { .. } | Self::KeyframeRequired { .. } => 0,
+            Self::TerrainChunks { revisions, .. } => revisions.len(),
+            Self::Players { players, .. } => players.len(),
+        };
+        CompactDeltaSummary {
+            kind: self.kind(),
+            tick: self.tick(),
+            item_count,
         }
     }
 }
@@ -3324,6 +3363,14 @@ mod tests {
         );
 
         let compact_delta = delta.compact_network_delta();
+        assert_eq!(
+            compact_delta.summary(),
+            super::CompactDeltaSummary {
+                kind: super::CompactDeltaKind::Players,
+                tick: SimulationTick::new(8),
+                item_count: 1,
+            }
+        );
         let payload = compact_delta.network_payload();
         assert_eq!(
             payload,
