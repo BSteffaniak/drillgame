@@ -1787,6 +1787,29 @@ pub struct ReplayedPrediction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplayedReconciliation {
+    pub replayed: ReplayedPrediction,
+    pub reconciliation: ReconciledMovement,
+}
+
+impl ReplayedReconciliation {
+    #[must_use]
+    pub fn from_authoritative_snapshot(
+        authoritative: &PlayerSnapshot,
+        commands: &[SequencedPlayerCommand],
+    ) -> Self {
+        let replayed =
+            ClientPredictionState::replay_unacknowledged_movement(authoritative, commands);
+        let reconciliation =
+            ClientPredictionState::reconcile_movement(replayed.predicted, authoritative);
+        Self {
+            replayed,
+            reconciliation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RemotePlayerPresentation {
     pub player_id: PlayerId,
     pub x: f32,
@@ -3961,6 +3984,24 @@ mod tests {
         );
         assert_eq!(replayed.replayed_command_count, 1);
         assert!((replayed.predicted.x - 13.0).abs() < f32::EPSILON);
+        let replayed_reconciliation = super::ReplayedReconciliation::from_authoritative_snapshot(
+            &previous,
+            &[SequencedPlayerCommand {
+                player_id: LOCAL_PLAYER_ID,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::Movement {
+                    horizontal: 3.0,
+                    thrust: true,
+                    drill_down: false,
+                },
+            }],
+        );
+        assert_eq!(replayed_reconciliation.replayed.replayed_command_count, 1);
+        assert_eq!(
+            replayed_reconciliation.reconciliation.correction_plan,
+            super::CorrectionPlan::Smooth
+        );
 
         let reconciled = super::ClientPredictionState::reconcile_movement(predicted, &next);
         assert_eq!(reconciled.correction_plan, super::CorrectionPlan::Smooth);
