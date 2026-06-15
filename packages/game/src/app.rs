@@ -171,6 +171,13 @@ fn observe_multiplayer_scaffolding(
         acknowledged_sequence: crate::multiplayer::InputSequence::new(0),
         authoritative_tick: session.current_tick(),
     });
+    session.apply_command_rejection(&crate::multiplayer::CommandRejection {
+        client_id: crate::multiplayer::LOCAL_CLIENT_ID,
+        player_id: crate::multiplayer::LOCAL_PLAYER_ID,
+        sequence: crate::multiplayer::InputSequence::new(0),
+        reason: crate::multiplayer::CommandAcceptance::Duplicate,
+        authoritative_tick: session.current_tick(),
+    });
     let _network_payload = session
         .drain_world_delta()
         .compact_network_delta()

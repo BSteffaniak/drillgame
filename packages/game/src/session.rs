@@ -11,10 +11,10 @@ use crate::{
     },
     input::PlayerInput,
     multiplayer::{
-        ClientId, CommandAcknowledgement, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID,
-        LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
-        NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolMessage, SIMULATION_HZ,
-        SequencedPlayerCommand, SimulationTick,
+        ClientId, CommandAcknowledgement, CommandRejection, FIXED_DELTA_SECONDS, InputSequence,
+        LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot,
+        NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand, PlayerId,
+        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -1224,6 +1224,7 @@ pub enum PredictionFailure {
     HazardOrRescueChangedState,
     EconomyChangedState,
     ProgressionChangedState,
+    CommandRejected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1461,7 +1462,8 @@ impl ClientPredictionState {
                 PredictionFailure::TerrainAlreadyChanged => {
                     PredictionFailureResolution::RequestTerrainChunk
                 }
-                PredictionFailure::HazardOrRescueChangedState => {
+                PredictionFailure::HazardOrRescueChangedState
+                | PredictionFailure::CommandRejected => {
                     PredictionFailureResolution::RequestAuthoritativeSnapshot
                 }
                 PredictionFailure::EconomyChangedState => {
@@ -1493,7 +1495,8 @@ impl ClientPredictionState {
                         known_revision,
                     ))
                 }
-                PredictionFailure::HazardOrRescueChangedState => {
+                PredictionFailure::HazardOrRescueChangedState
+                | PredictionFailure::CommandRejected => {
                     PredictionRecoveryAction::RequestAuthoritativeSnapshot { player_id }
                 }
                 PredictionFailure::EconomyChangedState => {
@@ -2139,6 +2142,14 @@ impl GameSession {
         );
     }
 
+    pub fn apply_command_rejection(&mut self, rejection: &CommandRejection) {
+        if let Some(client) = self.clients.get_mut(&rejection.client_id) {
+            client
+                .prediction
+                .note_prediction_failure(PredictionFailure::CommandRejected);
+        }
+    }
+
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
@@ -2209,8 +2220,9 @@ mod tests {
     use crate::{
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
         multiplayer::{
-            CommandAcknowledgement, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
-            PlayerCommand, PlayerId, ProtocolMessage, SimulationTick,
+            CommandAcknowledgement, CommandRejection, InputSequence, LOCAL_CLIENT_ID,
+            LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolMessage,
+            SimulationTick,
         },
     };
 
@@ -2874,6 +2886,31 @@ mod tests {
                 .prediction()
                 .unacknowledged_commands()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn command_rejection_message_records_prediction_failure() {
+        let mut session = GameSession::new();
+
+        session.apply_command_rejection(&CommandRejection {
+            client_id: LOCAL_CLIENT_ID,
+            player_id: LOCAL_PLAYER_ID,
+            sequence: InputSequence::new(0),
+            reason: crate::multiplayer::CommandAcceptance::Duplicate,
+            authoritative_tick: SimulationTick::new(2),
+        });
+
+        assert_eq!(
+            session.local_client().prediction().prediction_failures(),
+            &[super::PredictionFailure::CommandRejected]
+        );
+        assert_eq!(
+            session
+                .local_client()
+                .prediction()
+                .prediction_failure_resolutions(),
+            vec![super::PredictionFailureResolution::RequestAuthoritativeSnapshot]
         );
     }
 
