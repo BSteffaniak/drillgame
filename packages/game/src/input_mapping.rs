@@ -113,6 +113,11 @@ fn map_client_actions(input: PlayerInput) -> Vec<ClientAction> {
     );
     push_if(
         &mut actions,
+        input.local_multiplayer_toggle,
+        ClientAction::ToggleLocalMultiplayer,
+    );
+    push_if(
+        &mut actions,
         input.exit_requested,
         ClientAction::ExitRequested,
     );
@@ -175,6 +180,7 @@ mod tests {
         let input = PlayerInput {
             pause: true,
             fullscreen: true,
+            local_multiplayer_toggle: true,
             bomb: true,
             ..PlayerInput::default()
         };
@@ -186,6 +192,11 @@ mod tests {
             mapped
                 .client_actions
                 .contains(&ClientAction::ToggleFullscreen)
+        );
+        assert!(
+            mapped
+                .client_actions
+                .contains(&ClientAction::ToggleLocalMultiplayer)
         );
         assert!(mapped.player_commands.contains(&PlayerCommand::PlaceBomb));
     }

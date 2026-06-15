@@ -55,6 +55,12 @@ pub fn run() {
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
         let mapped_input = map_local_input(input);
+        if mapped_input
+            .client_actions
+            .contains(&crate::multiplayer::ClientAction::ToggleLocalMultiplayer)
+        {
+            let _enabled_split_screen = session.enable_default_local_split_screen();
+        }
         session.route_local_player_commands(mapped_input.player_commands.clone());
         observe_multiplayer_scaffolding(&mut session, delta_seconds);
 
@@ -308,6 +314,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let live_render_output = session.live_render_frame_output(&prediction_presentation_plan);
     let split_screen_readiness = live_render_output.split_screen_readiness_report();
     let _split_screen_ready = split_screen_readiness.ready_for_live_render_path();
+    let _local_split_screen_productization =
+        GameSession::local_split_screen_productization_report().ready_for_manual_live_qa();
+    let _local_split_screen_live_verification_complete =
+        crate::session::LocalSplitScreenLiveVerification::default().complete();
     let _live_render_counts = (
         live_render_output.clipped_viewport_count(),
         live_render_output.hud_count(),

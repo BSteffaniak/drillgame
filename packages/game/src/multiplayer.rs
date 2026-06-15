@@ -123,6 +123,7 @@ pub enum ClientAction {
     VolumeUp,
     VolumeDown,
     ToggleFullscreen,
+    ToggleLocalMultiplayer,
     ExitRequested,
 }
 

@@ -26,6 +26,7 @@ pub struct PlayerInput {
     pub volume_up: bool,
     pub volume_down: bool,
     pub fullscreen: bool,
+    pub local_multiplayer_toggle: bool,
     pub bomb: bool,
     pub scan: bool,
     pub place_relay: bool,
@@ -76,6 +77,7 @@ pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
         volume_down: raylib.is_key_pressed(KeyboardKey::KEY_MINUS)
             || raylib.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
         fullscreen: raylib.is_key_pressed(KeyboardKey::KEY_F11),
+        local_multiplayer_toggle: raylib.is_key_pressed(KeyboardKey::KEY_F2),
         bomb: raylib.is_key_pressed(KeyboardKey::KEY_B),
         scan: raylib.is_key_pressed(KeyboardKey::KEY_C),
         place_relay: raylib.is_key_pressed(KeyboardKey::KEY_R),

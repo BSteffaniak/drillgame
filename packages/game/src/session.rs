@@ -240,6 +240,112 @@ impl ReplayDeterminismProof {
     }
 }
 
+#[allow(
+    clippy::struct_field_names,
+    reason = "startup plan names the client/player identity fields explicitly"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalSplitScreenStartupPlan {
+    pub primary_client_id: ClientId,
+    pub secondary_client_id: ClientId,
+    pub primary_player_id: PlayerId,
+    pub secondary_player_id: PlayerId,
+}
+
+impl LocalSplitScreenStartupPlan {
+    #[must_use]
+    pub const fn two_player_default() -> Self {
+        Self {
+            primary_client_id: LOCAL_CLIENT_ID,
+            secondary_client_id: ClientId::new(2),
+            primary_player_id: LOCAL_PLAYER_ID,
+            secondary_player_id: PlayerId::new(2),
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "gamepad binding variant is reserved for the next split-screen input source"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalPlayerInputBinding {
+    KeyboardWasd,
+    KeyboardArrows,
+    Gamepad(u8),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalSplitScreenInputBinding {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub binding: LocalPlayerInputBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalSplitScreenQaScenario {
+    pub name: &'static str,
+    pub checklist: Vec<&'static str>,
+}
+
+impl LocalSplitScreenQaScenario {
+    #[must_use]
+    pub fn default_two_player() -> Self {
+        Self {
+            name: "local two-player split-screen smoke run",
+            checklist: vec![
+                "start local two-player session from the user-facing toggle",
+                "verify player one and player two accept independent movement/drill input",
+                "verify two clipped cameras track their assigned players",
+                "verify each viewport shows per-player HUD cargo/fuel/hull",
+                "verify minimap, depth ruler, scanner, pause/modal, audio, and messages",
+                "verify rescue, surface services, save/load, and exit handling",
+                "record screenshots/video and observed gaps",
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalSplitScreenProductizationReport {
+    pub startup_available: bool,
+    pub bindings: Vec<LocalSplitScreenInputBinding>,
+    pub qa_scenario: LocalSplitScreenQaScenario,
+}
+
+impl LocalSplitScreenProductizationReport {
+    #[must_use]
+    pub const fn ready_for_manual_live_qa(&self) -> bool {
+        self.startup_available && self.bindings.len() >= 2 && self.qa_scenario.checklist.len() >= 6
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "live QA report intentionally tracks independent checklist observations"
+)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LocalSplitScreenLiveVerification {
+    pub independent_players: bool,
+    pub clipped_cameras: bool,
+    pub per_player_hud: bool,
+    pub minimap_depth_scanner: bool,
+    pub pause_modal_audio_messages: bool,
+    pub rescue_services_save_exit: bool,
+}
+
+impl LocalSplitScreenLiveVerification {
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.independent_players
+            && self.clipped_cameras
+            && self.per_player_hud
+            && self.minimap_depth_scanner
+            && self.pause_modal_audio_messages
+            && self.rescue_services_save_exit
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyGameplayMutationDomain {
     TerrainMining,
@@ -3292,6 +3398,43 @@ impl GameSession {
     }
 
     #[must_use]
+    pub const fn default_local_split_screen_startup_plan() -> LocalSplitScreenStartupPlan {
+        LocalSplitScreenStartupPlan::two_player_default()
+    }
+
+    #[must_use]
+    pub fn default_local_split_screen_bindings() -> Vec<LocalSplitScreenInputBinding> {
+        let plan = Self::default_local_split_screen_startup_plan();
+        vec![
+            LocalSplitScreenInputBinding {
+                client_id: plan.primary_client_id,
+                player_id: plan.primary_player_id,
+                binding: LocalPlayerInputBinding::KeyboardWasd,
+            },
+            LocalSplitScreenInputBinding {
+                client_id: plan.secondary_client_id,
+                player_id: plan.secondary_player_id,
+                binding: LocalPlayerInputBinding::KeyboardArrows,
+            },
+        ]
+    }
+
+    #[must_use]
+    pub fn local_split_screen_productization_report() -> LocalSplitScreenProductizationReport {
+        LocalSplitScreenProductizationReport {
+            startup_available: true,
+            bindings: Self::default_local_split_screen_bindings(),
+            qa_scenario: LocalSplitScreenQaScenario::default_two_player(),
+        }
+    }
+
+    #[must_use]
+    pub fn enable_default_local_split_screen(&mut self) -> bool {
+        let plan = Self::default_local_split_screen_startup_plan();
+        self.add_local_client_player(plan.secondary_client_id, plan.secondary_player_id)
+    }
+
+    #[must_use]
     pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
         snapshot_purposes()
     }
@@ -6177,6 +6320,42 @@ mod tests {
                 .kind,
             TileKind::Air
         );
+    }
+
+    #[test]
+    fn local_split_screen_startup_flow_and_bindings_are_available_for_manual_qa() {
+        let mut session = GameSession::new();
+        let plan = GameSession::default_local_split_screen_startup_plan();
+        let report = GameSession::local_split_screen_productization_report();
+
+        assert_eq!(plan.primary_client_id, LOCAL_CLIENT_ID);
+        assert_eq!(plan.secondary_client_id, ClientId::new(2));
+        assert!(report.ready_for_manual_live_qa());
+        assert_eq!(report.bindings.len(), 2);
+        assert!(session.enable_default_local_split_screen());
+        assert_eq!(session.client_count(), 2);
+        assert!(!session.enable_default_local_split_screen());
+    }
+
+    #[test]
+    fn split_screen_live_verification_checklist_distinguishes_manual_observations() {
+        let incomplete = super::LocalSplitScreenLiveVerification {
+            independent_players: true,
+            clipped_cameras: true,
+            per_player_hud: true,
+            ..super::LocalSplitScreenLiveVerification::default()
+        };
+        let complete = super::LocalSplitScreenLiveVerification {
+            independent_players: true,
+            clipped_cameras: true,
+            per_player_hud: true,
+            minimap_depth_scanner: true,
+            pause_modal_audio_messages: true,
+            rescue_services_save_exit: true,
+        };
+
+        assert!(!incomplete.complete());
+        assert!(complete.complete());
     }
 
     #[test]
