@@ -1287,6 +1287,36 @@ impl WorldState {
     }
 }
 
+const fn apply_authoritative_command_to_legacy_input(
+    mut input: PlayerInput,
+    command: &PlayerCommand,
+) -> PlayerInput {
+    match command {
+        PlayerCommand::UseScanner => input.scan = true,
+        PlayerCommand::PlaceBomb => input.bomb = true,
+        PlayerCommand::PlaceInfrastructure { slot } => match slot {
+            0 => input.place_relay = true,
+            1 => input.place_drone = true,
+            2 => input.place_lift = true,
+            3 => input.place_support = true,
+            4 => input.place_pump = true,
+            5 => input.place_processor = true,
+            _ => {}
+        },
+        PlayerCommand::SelectUpgrade { index } => input.selected_upgrade = Some(*index),
+        PlayerCommand::Interact => input.interact = true,
+        PlayerCommand::Cancel => input.cancel = true,
+        PlayerCommand::Confirm => input.confirm = true,
+        PlayerCommand::Movement { .. }
+        | PlayerCommand::BuyUpgrade { .. }
+        | PlayerCommand::Refuel
+        | PlayerCommand::Repair
+        | PlayerCommand::SellCargo
+        | PlayerCommand::Rescue => {}
+    }
+    input
+}
+
 fn world_events_for_applied_command(command: &SequencedPlayerCommand) -> Vec<WorldEvent> {
     let player_id = command.player_id;
     match command.command {
@@ -2404,6 +2434,7 @@ pub struct GameSession {
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
     pending_events: Vec<WorldEvent>,
     latest_local_movement_intent: Option<PlayerMovementIntent>,
+    latest_local_authoritative_commands: Vec<PlayerCommand>,
 }
 
 impl GameSession {
@@ -2504,6 +2535,7 @@ impl GameSession {
             pending_commands: BTreeMap::new(),
             pending_events: Vec::new(),
             latest_local_movement_intent: None,
+            latest_local_authoritative_commands: Vec::new(),
         }
     }
 
@@ -2813,6 +2845,8 @@ impl GameSession {
             .iter()
             .rev()
             .find_map(PlayerMovementIntent::from_command);
+        self.latest_local_authoritative_commands
+            .clone_from(&commands);
         self.sequence_local_commands(commands)
     }
 
@@ -2820,8 +2854,12 @@ impl GameSession {
         &self,
         input: PlayerInput,
     ) -> PlayerInput {
-        self.latest_local_movement_intent
-            .map_or(input, |intent| intent.apply_to_input(input))
+        let input = self
+            .latest_local_movement_intent
+            .map_or(input, |intent| intent.apply_to_input(input));
+        self.latest_local_authoritative_commands
+            .iter()
+            .fold(input, apply_authoritative_command_to_legacy_input)
     }
 
     pub fn sequence_client_commands(
@@ -4341,6 +4379,24 @@ mod tests {
             .expect("world player exists");
         assert!(world_player.velocity_x.abs() < f32::EPSILON);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn authoritative_commands_restore_legacy_action_input() {
+        let mut session = GameSession::new();
+        session.route_local_player_commands(vec![
+            PlayerCommand::UseScanner,
+            PlayerCommand::PlaceBomb,
+            PlayerCommand::PlaceInfrastructure { slot: 2 },
+            PlayerCommand::Interact,
+        ]);
+
+        let input = session.update_legacy_input_from_authoritative_commands(PlayerInput::default());
+
+        assert!(input.scan);
+        assert!(input.bomb);
+        assert!(input.place_lift);
+        assert!(input.interact);
     }
 
     #[test]
