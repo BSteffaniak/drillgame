@@ -12,10 +12,10 @@ use crate::{
     },
     input::PlayerInput,
     multiplayer::{
-        ClientId, CommandAcknowledgement, CommandRejection, FIXED_DELTA_SECONDS, InputSequence,
-        LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot,
-        NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand, PlayerId,
-        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        ClientId, CommandAcknowledgement, CommandRejection, CommandSource, FIXED_DELTA_SECONDS,
+        InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
+        NetworkPlayerSnapshot, NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand,
+        PlayerId, ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -1881,6 +1881,21 @@ pub const fn client_presentation_fields() -> [ClientPresentationField; 11] {
     ]
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceSequencingPolicy {
+    pub source: CommandSource,
+    pub authoritative_path: bool,
+    pub predicted_locally: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SequencedCommandBatch {
+    pub client_id: ClientId,
+    pub source: CommandSource,
+    pub commands: Vec<SequencedPlayerCommand>,
+    pub predicted_locally: bool,
+}
+
 /// Local client state that is intentionally separate from authoritative gameplay state.
 #[derive(Clone, Debug)]
 pub struct ClientState {
@@ -2354,13 +2369,46 @@ impl GameSession {
         client_id: ClientId,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
+        self.sequence_client_commands_from_source(client_id, CommandSource::Keyboard, commands)
+            .commands
+    }
+
+    pub fn sequence_client_commands_from_source(
+        &mut self,
+        client_id: ClientId,
+        source: CommandSource,
+        commands: Vec<PlayerCommand>,
+    ) -> SequencedCommandBatch {
         let sequenced = self.sequence_commands_for_client(client_id, commands);
-        self.clients
-            .get_mut(&client_id)
-            .expect("client exists in game session")
-            .remember_predicted_commands(&sequenced);
+        let predicted_locally = matches!(
+            source,
+            CommandSource::Keyboard | CommandSource::Gamepad | CommandSource::SplitScreenClient
+        );
+        if predicted_locally {
+            self.clients
+                .get_mut(&client_id)
+                .expect("client exists in game session")
+                .remember_predicted_commands(&sequenced);
+        }
         self.buffer_commands(sequenced.clone());
-        sequenced
+        SequencedCommandBatch {
+            client_id,
+            source,
+            commands: sequenced,
+            predicted_locally,
+        }
+    }
+
+    #[must_use]
+    pub const fn command_source_policy(source: CommandSource) -> SourceSequencingPolicy {
+        SourceSequencingPolicy {
+            source,
+            authoritative_path: source.uses_authoritative_command_path(),
+            predicted_locally: matches!(
+                source,
+                CommandSource::Keyboard | CommandSource::Gamepad | CommandSource::SplitScreenClient
+            ),
+        }
     }
 
     fn sequence_commands_for_client(
@@ -2540,9 +2588,9 @@ mod tests {
     use crate::{
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
         multiplayer::{
-            CommandAcknowledgement, CommandRejection, InputSequence, LOCAL_CLIENT_ID,
-            LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolMessage,
-            SequencedPlayerCommand, SimulationTick,
+            CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
+            LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
+            ProtocolMessage, SequencedPlayerCommand, SimulationTick,
         },
     };
 
@@ -3268,6 +3316,42 @@ mod tests {
                 .unacknowledged_commands()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn command_sources_sequence_through_authoritative_path_with_prediction_policy() {
+        let mut session = GameSession::new();
+        let local = session.sequence_client_commands_from_source(
+            LOCAL_CLIENT_ID,
+            CommandSource::Gamepad,
+            vec![PlayerCommand::Interact],
+        );
+        let replay = session.sequence_client_commands_from_source(
+            LOCAL_CLIENT_ID,
+            CommandSource::Replay,
+            vec![PlayerCommand::Confirm],
+        );
+
+        assert_eq!(local.commands.len(), 1);
+        assert!(local.predicted_locally);
+        assert!(!replay.predicted_locally);
+        assert_eq!(session.pending_command_count(session.current_tick()), 2);
+        assert_eq!(
+            session
+                .local_client()
+                .prediction()
+                .unacknowledged_commands()
+                .len(),
+            1
+        );
+        assert_eq!(
+            GameSession::command_source_policy(CommandSource::OnlineClient),
+            super::SourceSequencingPolicy {
+                source: CommandSource::OnlineClient,
+                authoritative_path: true,
+                predicted_locally: false,
+            }
         );
     }
 

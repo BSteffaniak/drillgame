@@ -195,6 +195,8 @@ fn observe_multiplayer_scaffolding(
     let client_ownership = session.local_client().ownership_summary();
     let _world_fully_split = world_ownership.fully_split();
     let _client_fully_split = client_ownership.fully_split();
+    let _keyboard_command_policy =
+        GameSession::command_source_policy(crate::multiplayer::CommandSource::Keyboard);
     let _render_view_count = render_frame_plan.view_count();
     let _render_player_for_view = render_frame_plan
         .views
