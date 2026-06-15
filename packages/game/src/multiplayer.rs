@@ -327,6 +327,63 @@ pub const fn default_local_client_runtime() -> ClientRuntimeConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ClientSessionRuntime {
+    pub config: ClientRuntimeConfig,
+    pub session_token: Option<SessionToken>,
+    pub assigned_player_id: Option<PlayerId>,
+    pub latest_authoritative_tick: SimulationTick,
+    pub pending_messages: Vec<ProtocolMessage>,
+}
+
+impl ClientSessionRuntime {
+    #[must_use]
+    pub const fn new(config: ClientRuntimeConfig) -> Self {
+        Self {
+            assigned_player_id: config.player_id,
+            config,
+            session_token: None,
+            latest_authoritative_tick: SimulationTick::new(0),
+            pending_messages: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn connect_request(&self) -> ProtocolMessage {
+        ProtocolMessage::JoinRequest {
+            client_id: self.config.client_id,
+            session_token: self.session_token,
+        }
+    }
+
+    pub const fn set_session_token(&mut self, session_token: SessionToken) {
+        self.session_token = Some(session_token);
+    }
+
+    pub fn handle_message(&mut self, message: ProtocolMessage) {
+        match message {
+            ProtocolMessage::JoinAccepted {
+                client_id,
+                player_id,
+                snapshot_tick,
+            } if client_id == self.config.client_id => {
+                self.assigned_player_id = Some(player_id);
+                self.latest_authoritative_tick = snapshot_tick;
+            }
+            ProtocolMessage::CommandAcknowledgement(acknowledgement)
+                if acknowledgement.client_id == self.config.client_id =>
+            {
+                self.latest_authoritative_tick = acknowledgement.authoritative_tick;
+            }
+            ProtocolMessage::WorldDelta { tick, .. }
+            | ProtocolMessage::SnapshotKeyframe { tick } => {
+                self.latest_authoritative_tick = tick;
+            }
+            other => self.pending_messages.push(other),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TransportIntegrationStatus {
     Deferred,
@@ -977,12 +1034,13 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientId, CommandAcceptance, CommandNetworkSession, CommandPacket, CommandSequenceTracker,
-        CommandSource, HostSessionRuntime, InputSequence, NetworkDeltaPayload, NetworkRuntimePlan,
-        PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
-        SessionToken, SimulationTick, client_authority_allowed, command_conflicts,
-        default_local_client_runtime, disconnect_reservation_policy, host_save_decision,
-        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
+        ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
+        CommandSequenceTracker, CommandSource, HostSessionRuntime, InputSequence,
+        NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage,
+        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        client_authority_allowed, command_conflicts, default_local_client_runtime,
+        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
         per_client_ui_policy, scaffolded_edge_case_proof, session_continuity_decision,
         session_shutdown_decision, terrain_recovery_decision, transport_integration_status,
@@ -1077,6 +1135,38 @@ mod tests {
             host.apply_command_packet(&packet).as_slice(),
             [ProtocolMessage::CommandAcknowledgement(_)]
         ));
+    }
+
+    #[test]
+    fn client_session_runtime_tracks_join_acknowledgement_and_delta_messages() {
+        let mut client = ClientSessionRuntime::new(super::ClientRuntimeConfig {
+            mode: super::ClientRuntimeMode::RemoteNetwork,
+            client_id: ClientId::new(12),
+            player_id: None,
+        });
+        client.set_session_token(SessionToken::new(77));
+
+        assert_eq!(
+            client.connect_request(),
+            ProtocolMessage::JoinRequest {
+                client_id: ClientId::new(12),
+                session_token: Some(SessionToken::new(77)),
+            }
+        );
+
+        client.handle_message(ProtocolMessage::JoinAccepted {
+            client_id: ClientId::new(12),
+            player_id: PlayerId::new(13),
+            snapshot_tick: SimulationTick::new(20),
+        });
+        assert_eq!(client.assigned_player_id, Some(PlayerId::new(13)));
+        assert_eq!(client.latest_authoritative_tick, SimulationTick::new(20));
+
+        client.handle_message(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(21),
+            payload: NetworkDeltaPayload::Noop,
+        });
+        assert_eq!(client.latest_authoritative_tick, SimulationTick::new(21));
     }
 
     #[test]
