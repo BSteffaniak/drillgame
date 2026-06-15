@@ -1129,6 +1129,15 @@ pub struct ClientView {
     pub run_mode: RunMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderPlayerPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub predicted: bool,
+    pub correction_plan: CorrectionPlan,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderFramePlan {
     pub world_summary: AuthoritativeWorldSummary,
@@ -1159,6 +1168,38 @@ impl RenderFramePlan {
         self.players
             .iter()
             .find(|player| player.player_id == view.controlled_player_id)
+    }
+
+    #[must_use]
+    pub fn predicted_player_for_view(
+        &self,
+        view: &ClientView,
+        prediction_plan: &PredictionPresentationPlan,
+    ) -> Option<RenderPlayerPresentation> {
+        let player = self.player_for_view(view)?;
+        let Some(predicted) = prediction_plan
+            .local_movement
+            .filter(|movement| movement.player_id == view.controlled_player_id)
+        else {
+            return Some(RenderPlayerPresentation {
+                player_id: player.player_id,
+                x: player.x,
+                y: player.y,
+                predicted: false,
+                correction_plan: CorrectionPlan::None,
+            });
+        };
+        Some(RenderPlayerPresentation {
+            player_id: predicted.player_id,
+            x: predicted.x,
+            y: predicted.y,
+            predicted: true,
+            correction_plan: prediction_plan
+                .correction
+                .map_or(CorrectionPlan::None, |correction| {
+                    correction.correction_plan
+                }),
+        })
     }
 }
 
@@ -2310,6 +2351,26 @@ mod tests {
         assert_eq!(player.player_id, LOCAL_PLAYER_ID);
         assert_eq!(player.cargo_used, session.game().player.cargo_used());
         assert!((player.scanner_cooldown_seconds - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn render_frame_plan_uses_predicted_local_player_presentation() {
+        let mut session = GameSession::new();
+        session
+            .world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .velocity_x = 10.0;
+        let plan = session.render_frame_plan();
+        let prediction_plan = session.prediction_presentation_plan(None, 0.5, 0.5, 0.0);
+
+        let player = plan
+            .predicted_player_for_view(&plan.views[0], &prediction_plan)
+            .expect("predicted local player presentation exists");
+
+        assert_eq!(player.player_id, LOCAL_PLAYER_ID);
+        assert!(player.predicted);
+        assert!((player.x - (session.game().player.x + 5.0)).abs() < f32::EPSILON);
     }
 
     #[test]

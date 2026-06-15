@@ -196,13 +196,16 @@ fn observe_multiplayer_scaffolding(
         .views
         .first()
         .and_then(|view| render_frame_plan.player_for_view(view));
+    let _predicted_session_movement = session.predicted_local_movement(delta_seconds);
+    let prediction_presentation_plan =
+        session.prediction_presentation_plan(None, delta_seconds, 0.5, 0.0);
+    let _render_predicted_player_for_view = render_frame_plan.views.first().and_then(|view| {
+        render_frame_plan.predicted_player_for_view(view, &prediction_presentation_plan)
+    });
     let _save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
         session.world(),
         session.game(),
     );
-    let _predicted_session_movement = session.predicted_local_movement(delta_seconds);
-    let _prediction_presentation_plan =
-        session.prediction_presentation_plan(None, delta_seconds, 0.5, 0.0);
     let _prediction_recovery_actions =
         session.prediction_recovery_actions(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let prediction = session.local_client().prediction();
