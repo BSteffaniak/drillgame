@@ -368,7 +368,15 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     prediction_probe.note_prediction_failure(PredictionFailure::HazardOrRescueChangedState);
     prediction_probe.note_prediction_failure(PredictionFailure::EconomyChangedState);
     prediction_probe.note_prediction_failure(PredictionFailure::ProgressionChangedState);
+    prediction_probe.note_prediction_failure(PredictionFailure::CommandRejected);
     let _prediction_failure_resolutions = prediction_probe.prediction_failure_resolutions();
+    let prediction_polish = prediction_probe.prediction_polish_coverage_summary(
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        session.terrain_revisions(),
+        session.current_tick(),
+        crate::session::TerrainChunkPosition { x: 0, y: 0 },
+    );
+    let _prediction_polish_complete = prediction_polish.complete();
     prediction_probe.clear_prediction_failures();
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::MovementIntent);
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::DrillContact);

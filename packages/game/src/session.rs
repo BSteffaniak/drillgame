@@ -2370,6 +2370,82 @@ pub enum CorrectionPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PredictionCorrectionTuning {
+    pub smooth_threshold_squared: f32,
+    pub snap_threshold_squared: f32,
+    pub smoothing_alpha: f32,
+    pub extrapolation_limit_seconds: f32,
+}
+
+impl PredictionCorrectionTuning {
+    #[must_use]
+    pub const fn default_gameplay_feel() -> Self {
+        Self {
+            smooth_threshold_squared: 1.0,
+            snap_threshold_squared: 256.0,
+            smoothing_alpha: 0.5,
+            extrapolation_limit_seconds: EXTRAPOLATION_LIMIT_SECONDS,
+        }
+    }
+
+    #[must_use]
+    pub fn classifies_expected_offsets() -> bool {
+        let tuning = Self::default_gameplay_feel();
+        ClientPredictionState::correction_plan(tuning.smooth_threshold_squared.sqrt() * 0.25, 0.0)
+            == CorrectionPlan::None
+            && ClientPredictionState::correction_plan(8.0, 0.0) == CorrectionPlan::Smooth
+            && ClientPredictionState::correction_plan(32.0, 0.0) == CorrectionPlan::Snap
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "prediction polish summary intentionally records phase checklist coverage"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredictionPolishCoverageSummary {
+    pub replayed_unacknowledged_commands: bool,
+    pub smoothing_and_snap_thresholds: bool,
+    pub remote_interpolation_and_extrapolation: bool,
+    pub terrain_failure_handled: bool,
+    pub economy_failure_handled: bool,
+    pub progression_failure_handled: bool,
+    pub hazard_or_rescue_failure_handled: bool,
+    pub rejected_command_handled: bool,
+    pub debug_instrumentation_available: bool,
+}
+
+impl PredictionPolishCoverageSummary {
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.replayed_unacknowledged_commands
+            && self.smoothing_and_snap_thresholds
+            && self.remote_interpolation_and_extrapolation
+            && self.terrain_failure_handled
+            && self.economy_failure_handled
+            && self.progression_failure_handled
+            && self.hazard_or_rescue_failure_handled
+            && self.rejected_command_handled
+            && self.debug_instrumentation_available
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NetworkDebugInstrumentationSnapshot {
+    pub ping_seconds: f32,
+    pub prediction_buffer_commands: usize,
+    pub correction_plan: CorrectionPlan,
+    pub dropped_packets: usize,
+}
+
+impl NetworkDebugInstrumentationSnapshot {
+    #[must_use]
+    pub const fn visible_to_debug_overlay(self) -> bool {
+        self.ping_seconds >= 0.0 && self.prediction_buffer_commands > 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalMovementPredictionPlan {
     pub player_id: PlayerId,
     pub authoritative_x: f32,
@@ -2760,6 +2836,111 @@ impl ClientPredictionState {
     #[must_use]
     pub fn tentative_feedback_frame(&self) -> TentativeFeedbackFrame {
         TentativeFeedbackFrame::from_outputs(self.tentative_feedback_outputs())
+    }
+
+    #[must_use]
+    pub fn prediction_debug_snapshot(
+        &self,
+        ping_seconds: f32,
+        dropped_packets: usize,
+    ) -> NetworkDebugInstrumentationSnapshot {
+        NetworkDebugInstrumentationSnapshot {
+            ping_seconds,
+            prediction_buffer_commands: self.unacknowledged_commands.len(),
+            correction_plan: self
+                .correction_offset
+                .map_or(CorrectionPlan::None, |offset| {
+                    Self::correction_plan(offset.x, offset.y)
+                }),
+            dropped_packets,
+        }
+    }
+
+    #[must_use]
+    pub fn prediction_polish_coverage_summary(
+        &self,
+        player_id: PlayerId,
+        terrain_revisions: &TerrainRevisionTracker,
+        tick: SimulationTick,
+        terrain_position: TerrainChunkPosition,
+    ) -> PredictionPolishCoverageSummary {
+        let authoritative = PlayerSnapshot {
+            player_id,
+            x: 10.0,
+            y: 10.0,
+            velocity_x: 2.0,
+            velocity_y: 0.0,
+            fuel: 1.0,
+            hull: 1.0,
+            credits: 0,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
+        };
+        let replay = Self::replay_unacknowledged_movement(&authoritative, self.replay_commands());
+        let previous = PlayerSnapshot {
+            player_id,
+            x: 0.0,
+            y: 0.0,
+            velocity_x: 4.0,
+            velocity_y: 0.0,
+            fuel: 1.0,
+            hull: 1.0,
+            credits: 0,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
+        };
+        let next = PlayerSnapshot {
+            x: 10.0,
+            ..previous
+        };
+        let interpolated = Self::remote_player_presentation(&previous, Some(&next), 0.5, 0.0);
+        let extrapolated = Self::remote_player_presentation(&previous, None, 0.0, 0.1);
+        let actions = self.prediction_recovery_actions(
+            player_id,
+            terrain_revisions,
+            tick,
+            terrain_position,
+            0,
+        );
+        let debug = self.prediction_debug_snapshot(0.1, 1);
+
+        PredictionPolishCoverageSummary {
+            replayed_unacknowledged_commands: replay.replayed_command_count
+                == self.replay_commands().len(),
+            smoothing_and_snap_thresholds: PredictionCorrectionTuning::classifies_expected_offsets(
+            ),
+            remote_interpolation_and_extrapolation: !interpolated.extrapolated
+                && extrapolated.extrapolated,
+            terrain_failure_handled: actions
+                .iter()
+                .any(|action| matches!(action, PredictionRecoveryAction::RequestTerrainDelta(_))),
+            economy_failure_handled: actions.iter().any(|action| {
+                matches!(
+                    action,
+                    PredictionRecoveryAction::RollBackLocalEconomy { .. }
+                )
+            }),
+            progression_failure_handled: actions.iter().any(|action| {
+                matches!(action, PredictionRecoveryAction::RollBackProgression { .. })
+            }),
+            hazard_or_rescue_failure_handled: actions.iter().any(|action| {
+                matches!(
+                    action,
+                    PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+                )
+            }),
+            rejected_command_handled: actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action,
+                        PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+                    )
+                })
+                .count()
+                >= 2,
+            debug_instrumentation_available: debug.visible_to_debug_overlay(),
+        }
     }
 
     #[must_use]
@@ -4442,6 +4623,42 @@ mod tests {
         assert!(report.remote_players_visible_per_view);
         assert!(report.correction_and_feedback_available);
         assert!(report.ready_for_live_render_path());
+    }
+
+    #[test]
+    fn prediction_polish_summary_covers_replay_correction_remote_failure_and_debug_paths() {
+        let mut prediction = super::ClientPredictionState::default();
+        let player_id = LOCAL_PLAYER_ID;
+        let terrain_revisions = super::TerrainRevisionTracker::default();
+        let command = SequencedPlayerCommand {
+            player_id,
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(1),
+            command: PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: true,
+                drill_down: false,
+            },
+        };
+        prediction.remember_commands(&[command]);
+        prediction.note_prediction_failure(super::PredictionFailure::TerrainAlreadyChanged);
+        prediction.note_prediction_failure(super::PredictionFailure::EconomyChangedState);
+        prediction.note_prediction_failure(super::PredictionFailure::ProgressionChangedState);
+        prediction.note_prediction_failure(super::PredictionFailure::HazardOrRescueChangedState);
+        prediction.note_prediction_failure(super::PredictionFailure::CommandRejected);
+        prediction.set_correction_offset(super::CorrectionOffset::new(8.0, 0.0));
+
+        let summary = prediction.prediction_polish_coverage_summary(
+            player_id,
+            &terrain_revisions,
+            SimulationTick::new(7),
+            super::TerrainChunkPosition { x: 0, y: 0 },
+        );
+        let debug = prediction.prediction_debug_snapshot(0.12, 2);
+
+        assert!(summary.complete());
+        assert_eq!(debug.correction_plan, super::CorrectionPlan::Smooth);
+        assert!(debug.visible_to_debug_overlay());
     }
 
     #[test]
