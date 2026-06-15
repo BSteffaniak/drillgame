@@ -207,7 +207,16 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         session.world().bombs().len(),
         session.world().infrastructure().len(),
         session.world().service_transactions().len(),
+        session
+            .world()
+            .discovered_tile_count(crate::multiplayer::LOCAL_PLAYER_ID),
+        session
+            .world()
+            .failure_state(crate::multiplayer::LOCAL_PLAYER_ID)
+            .is_some(),
     );
+    let mut bomb_probe = session.world().clone();
+    let _bomb_probe_results = bomb_probe.age_and_detonate_bombs(0.0);
     let _world_snapshot_keyframe = session.world_snapshot().keyframe_message();
     let _live_snapshot_batch = session.live_snapshot_exchange_batch();
     session.apply_command_acknowledgement(&crate::multiplayer::CommandAcknowledgement {

@@ -1321,6 +1321,7 @@ pub struct WorldState {
     infrastructure: Vec<PlacedInfrastructure>,
     active_drills: BTreeMap<PlayerId, DrillState>,
     scanner_cooldowns: BTreeMap<PlayerId, f32>,
+    discovered_tiles: BTreeMap<PlayerId, BTreeSet<TilePosition>>,
     service_transactions: Vec<PlayerServiceTransaction>,
 }
 
@@ -1344,6 +1345,7 @@ impl WorldState {
                 .map(|drill| BTreeMap::from([(LOCAL_PLAYER_ID, drill)]))
                 .unwrap_or_default(),
             scanner_cooldowns: BTreeMap::from([(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds)]),
+            discovered_tiles: BTreeMap::new(),
             service_transactions: Vec::new(),
         }
     }
@@ -1474,6 +1476,89 @@ impl WorldState {
 
     pub fn set_scanner_cooldown_seconds(&mut self, player_id: PlayerId, seconds: f32) {
         self.scanner_cooldowns.insert(player_id, seconds.max(0.0));
+    }
+
+    #[must_use]
+    pub fn discovered_tile_count(&self, player_id: PlayerId) -> usize {
+        self.discovered_tiles
+            .get(&player_id)
+            .map_or(0, BTreeSet::len)
+    }
+
+    pub fn reveal_scanner_area(
+        &mut self,
+        player_id: PlayerId,
+        center: TilePosition,
+        radius: i32,
+    ) -> usize {
+        let discovered = self.discovered_tiles.entry(player_id).or_default();
+        let before = discovered.len();
+        let radius = radius.max(0);
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if (x - center.x).abs() + (y - center.y).abs() <= radius {
+                    discovered.insert(TilePosition { x, y });
+                }
+            }
+        }
+        discovered.len() - before
+    }
+
+    pub fn apply_hazard_damage(
+        &mut self,
+        player_id: PlayerId,
+        damage: f32,
+    ) -> Option<PlayerSurvivalSnapshot> {
+        let player = self.players.get_mut(&player_id)?;
+        player.hull = (player.hull - damage.max(0.0)).max(0.0);
+        Some(PlayerSurvivalSnapshot {
+            player_id,
+            fuel: player.fuel,
+            hull: player.hull,
+            disabled: player.hull <= 0.0,
+            stranded: player.fuel <= 0.0,
+        })
+    }
+
+    #[must_use]
+    pub fn failure_state(&self, player_id: PlayerId) -> Option<PlayerSurvivalSnapshot> {
+        self.player_survival_snapshot(player_id)
+            .filter(|snapshot| snapshot.disabled || snapshot.stranded)
+    }
+
+    pub fn detonate_bomb_at(
+        &mut self,
+        center: TilePosition,
+        radius: i32,
+    ) -> crate::terrain::BlastResult {
+        self.terrain.blast_radius(center, radius)
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "bomb world positions intentionally convert to terrain tile coordinates"
+    )]
+    pub fn age_and_detonate_bombs(
+        &mut self,
+        delta_seconds: f32,
+    ) -> Vec<crate::terrain::BlastResult> {
+        let mut results = Vec::new();
+        let mut remaining = Vec::new();
+        let bombs = mem::take(&mut self.bombs);
+        for mut bomb in bombs {
+            bomb.timer_seconds -= delta_seconds;
+            if bomb.timer_seconds <= 0.0 {
+                let center = TilePosition {
+                    x: (bomb.x / TILE_SIZE).floor() as i32,
+                    y: (bomb.y / TILE_SIZE).floor() as i32,
+                };
+                results.push(self.detonate_bomb_at(center, 2));
+            } else {
+                remaining.push(bomb);
+            }
+        }
+        self.bombs = remaining;
+        results
     }
 
     #[must_use]
@@ -1715,6 +1800,8 @@ impl WorldState {
             }
             PlayerCommand::UseScanner => {
                 self.scanner_cooldowns.insert(player_id, 1.0);
+                let center = player.tile_position(TILE_SIZE);
+                let _revealed = self.reveal_scanner_area(player_id, center, 4);
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::PlaceBomb => {
@@ -3514,6 +3601,14 @@ impl GameSession {
         &self.world
     }
 
+    #[allow(
+        dead_code,
+        reason = "mutable world accessor is used by integration-style tests and future authoring tools"
+    )]
+    pub const fn world_mut(&mut self) -> &mut WorldState {
+        &mut self.world
+    }
+
     #[must_use]
     pub fn world_snapshot(&self) -> WorldSnapshot {
         WorldSnapshot::from_world(self.world.simulation_tick(), &self.world)
@@ -4331,6 +4426,7 @@ impl GameSession {
                     self.push_event(WorldEvent::CargoChanged { player_id });
                 }
                 MineResult::TooDangerous => {
+                    let _snapshot = self.world.apply_hazard_damage(player_id, 8.0);
                     self.push_event(WorldEvent::PlayerDamaged { player_id });
                 }
                 MineResult::Blocked
@@ -4517,14 +4613,14 @@ mod tests {
     use crate::{
         game_state::{
             DrillDirection, DrillState, GameState, InfrastructureKind, ModalScreen, RunMode,
-            SoundCue,
+            SoundCue, TILE_SIZE,
         },
         input::PlayerInput,
         multiplayer::{
             ClientId, CommandAcknowledgement, CommandPacket, CommandRejection, CommandSource,
-            InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand,
-            PlayerId, ProtocolExchangeKind, ProtocolMessage, SequencedPlayerCommand, SessionToken,
-            SimulationTick,
+            FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
+            NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolExchangeKind, ProtocolMessage,
+            SequencedPlayerCommand, SessionToken, SimulationTick,
         },
         terrain::{MineResult, TileKind, TilePosition},
     };
@@ -6320,6 +6416,74 @@ mod tests {
                 .kind,
             TileKind::Air
         );
+    }
+
+    #[test]
+    fn authoritative_world_handles_hazard_damage_failure_scanner_and_bomb_effects() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
+        player.hull = 5.0;
+        player.fuel = 0.0;
+        player.bombs = 1;
+        let scanner_target = player.tile_position(TILE_SIZE);
+        let bomb_target = TilePosition { x: 3, y: 6 };
+        assert!(world.terrain.set_kind(bomb_target, TileKind::Dirt));
+
+        let survival = world
+            .apply_hazard_damage(LOCAL_PLAYER_ID, 6.0)
+            .expect("survival snapshot");
+        assert!(survival.disabled);
+        assert!(survival.stranded);
+        assert!(world.failure_state(LOCAL_PLAYER_ID).is_some());
+        assert_eq!(world.discovered_tile_count(LOCAL_PLAYER_ID), 0);
+        assert!(world.reveal_scanner_area(LOCAL_PLAYER_ID, scanner_target, 2) > 0);
+        assert!(world.discovered_tile_count(LOCAL_PLAYER_ID) > 0);
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::PlaceBomb),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(world.bomb_count(), 1);
+        let blast = world.detonate_bomb_at(bomb_target, 1);
+        assert!(blast.cleared > 0);
+        assert_eq!(
+            world.terrain().tile(bomb_target).expect("tile").kind,
+            TileKind::Air
+        );
+    }
+
+    #[test]
+    fn session_drill_too_dangerous_damages_authoritative_player() {
+        let mut session = GameSession::new();
+        let player = session
+            .world_mut()
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("player exists");
+        player.x = 3.0 * TILE_SIZE;
+        player.y = 5.0 * TILE_SIZE;
+        player.hull = 50.0;
+        let target = TilePosition { x: 3, y: 6 };
+        assert!(session.world_mut().terrain.set_kind(target, TileKind::Lava));
+        session.world_mut().set_active_drill(
+            LOCAL_PLAYER_ID,
+            Some(DrillState {
+                target,
+                direction: DrillDirection::Down,
+                progress: 0.0,
+                initial_durability: 1,
+                seconds_per_chip: FIXED_DELTA_SECONDS,
+                sound_timer: 0.0,
+                dust_timer: 0.0,
+            }),
+        );
+
+        session.process_authoritative_drill_progress();
+
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists");
+        assert!(player.hull < 50.0);
+        assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_none());
     }
 
     #[test]
