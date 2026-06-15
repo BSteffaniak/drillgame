@@ -5596,4 +5596,43 @@ mod tests {
 
         assert_eq!(game.run_mode, RunMode::Paused);
     }
+
+    #[test]
+    fn scanner_regression_pulses_and_enters_cooldown() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.scanner_level = 1;
+
+        game.update(
+            PlayerInput {
+                scan: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert!(game.scanner_pulse_seconds > 0.0);
+        assert!(game.scanner_cooldown_seconds > 0.0);
+        assert!(game.message.contains("Scanner pulse"));
+    }
+
+    #[test]
+    fn infrastructure_regression_places_signal_relay() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.y = 12.0 * TILE_SIZE;
+        game.player.signal_relay_kits = 1;
+
+        game.update(
+            PlayerInput {
+                place_relay: true,
+                ..PlayerInput::default()
+            },
+            0.1,
+        );
+
+        assert_eq!(game.infrastructure.len(), 1);
+        assert_eq!(game.infrastructure[0].kind, InfrastructureKind::SignalRelay);
+        assert_eq!(game.player.signal_relay_kits, 0);
+    }
 }

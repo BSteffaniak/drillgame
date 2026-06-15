@@ -527,6 +527,24 @@ mod tests {
     }
 
     #[test]
+    fn save_file_regression_round_trips_versioned_world_envelope() {
+        let mut game = GameState::new();
+        game.player.credits = 777;
+        game.player.fuel = 42.0;
+        let save = SaveFile {
+            version: 2,
+            world: PersistentWorldSave::from_legacy_game(&game),
+        };
+
+        let json = serde_json::to_string(&save).expect("serialize save");
+        let loaded: SaveFile = serde_json::from_str(&json).expect("deserialize save");
+
+        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.world.session.players[0].credits, 777);
+        assert!((loaded.world.game.player.fuel - 42.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn save_authority_maps_to_session_kind() {
         assert_eq!(
             SaveSessionKind::from(SaveAuthority::LocalSinglePlayer),
