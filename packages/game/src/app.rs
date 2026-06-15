@@ -217,6 +217,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
                 client_id: crate::multiplayer::ClientId::new(2),
                 commands: Vec::new(),
             });
+        local_multiplayer_probe.observe_live_remote_player_snapshots();
     }
     let render_frame_plan = session.render_frame_plan();
     let world_ownership = session.world().ownership_summary();
@@ -238,6 +239,8 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _predicted_session_movement = session.predicted_local_movement(delta_seconds);
     let _local_movement_prediction_plan = session.local_movement_prediction_plan(delta_seconds);
     let prediction_presentation_plan =
+        session.live_prediction_presentation_plan(delta_seconds, 0.5, 0.0);
+    let _legacy_prediction_presentation_plan =
         session.prediction_presentation_plan(None, delta_seconds, 0.5, 0.0);
     let _render_predicted_player_for_view = render_frame_plan.views.first().and_then(|view| {
         render_frame_plan.predicted_player_for_view(view, &prediction_presentation_plan)

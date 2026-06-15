@@ -2779,6 +2779,49 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn live_prediction_presentation_plan(
+        &self,
+        delta_seconds: f32,
+        remote_alpha: f32,
+        remote_stall_seconds: f32,
+    ) -> PredictionPresentationPlan {
+        let authoritative_snapshot = self
+            .world
+            .player(self.local_client().controlled_player_id)
+            .map(|player| {
+                PlayerSnapshot::from_world_player(
+                    self.local_client().controlled_player_id,
+                    player,
+                    &self.world,
+                )
+            });
+        self.prediction_presentation_plan(
+            authoritative_snapshot.as_ref(),
+            delta_seconds,
+            remote_alpha,
+            remote_stall_seconds,
+        )
+    }
+
+    pub fn observe_live_remote_player_snapshots(&mut self) {
+        let local_player_id = self.local_client().controlled_player_id;
+        let remote_snapshots: Vec<PlayerSnapshot> = self
+            .world
+            .player_ids()
+            .filter(|player_id| *player_id != local_player_id)
+            .filter_map(|player_id| {
+                self.world
+                    .player(player_id)
+                    .map(|player| PlayerSnapshot::from_world_player(player_id, player, &self.world))
+            })
+            .collect();
+        let local_client = self.local_client_mut();
+        for snapshot in remote_snapshots {
+            local_client.prediction.push_remote_snapshot(snapshot);
+        }
+    }
+
+    #[must_use]
     pub fn prediction_recovery_actions(
         &self,
         terrain_position: TerrainChunkPosition,
@@ -4971,6 +5014,64 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn live_prediction_plan_replays_corrections_and_remote_presentations() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 12.0,
+            thrust: false,
+            drill_down: false,
+        }]);
+        {
+            let player = session
+                .world
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.x = 100.0;
+            player.y = 50.0;
+            player.velocity_x = 0.0;
+            player.velocity_y = 0.0;
+        }
+        {
+            let player = session
+                .world
+                .player_mut(second_player)
+                .expect("second player exists");
+            player.x = 20.0;
+            player.y = 30.0;
+            player.velocity_x = 4.0;
+        }
+        session.observe_live_remote_player_snapshots();
+        {
+            let player = session
+                .world
+                .player_mut(second_player)
+                .expect("second player exists");
+            player.x = 24.0;
+            player.y = 30.0;
+        }
+        session.observe_live_remote_player_snapshots();
+
+        let plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
+
+        assert!(plan.local_movement.is_some());
+        let correction = plan.correction.expect("correction exists");
+        assert_eq!(correction.correction_plan, super::CorrectionPlan::Smooth);
+        let corrected = plan
+            .corrected_local_presentation
+            .expect("corrected presentation exists");
+        assert_eq!(corrected.correction_plan, super::CorrectionPlan::Smooth);
+        assert!(
+            plan.remote_players
+                .iter()
+                .any(|remote| remote.player_id == second_player
+                    && (remote.x - 22.0).abs() < f32::EPSILON)
+        );
     }
 
     #[test]
