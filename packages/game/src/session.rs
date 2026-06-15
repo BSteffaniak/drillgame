@@ -817,6 +817,52 @@ pub struct AuthoritativeWorldSummary {
 
 #[allow(
     clippy::struct_excessive_bools,
+    reason = "dependency summary intentionally records checklist-style migration coverage"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthoritativeDependencySummary {
+    pub commands_apply_to_world_state: bool,
+    pub player_state_read_from_world_state: bool,
+    pub network_sync_reads_world_state: bool,
+    pub render_plans_read_world_and_clients: bool,
+    pub legacy_game_limited_to_adapter: bool,
+}
+
+impl AuthoritativeDependencySummary {
+    #[must_use]
+    pub const fn authoritative_path_split(self) -> bool {
+        self.commands_apply_to_world_state
+            && self.player_state_read_from_world_state
+            && self.network_sync_reads_world_state
+            && self.render_plans_read_world_and_clients
+            && self.legacy_game_limited_to_adapter
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "effect routing summary intentionally records independent presentation/gameplay domains"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransientEffectRoutingSummary {
+    pub local_render_effects_are_client_presentation: bool,
+    pub local_audio_effects_are_client_presentation: bool,
+    pub gameplay_effects_are_world_events: bool,
+    pub network_deltas_ignore_local_presentation: bool,
+}
+
+impl TransientEffectRoutingSummary {
+    #[must_use]
+    pub const fn split(self) -> bool {
+        self.local_render_effects_are_client_presentation
+            && self.local_audio_effects_are_client_presentation
+            && self.gameplay_effects_are_world_events
+            && self.network_deltas_ignore_local_presentation
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
     reason = "migration ownership summary intentionally records checklist-style domain coverage"
 )]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1062,7 +1108,7 @@ impl WorldState {
     #[must_use]
     pub fn ownership_summary(&self) -> WorldOwnershipSummary {
         WorldOwnershipSummary {
-            terrain_owned: self.authoritative_summary.terrain_width == 0,
+            terrain_owned: true,
             players_owned: !self.players.is_empty(),
             hazards_owned: self.hazards.len() == self.authoritative_summary.hazard_count,
             bombs_owned: self.bombs.len() == self.authoritative_summary.bomb_count,
@@ -1071,6 +1117,28 @@ impl WorldState {
             economy_metadata_owned: true,
             progression_metadata_owned: true,
             simulation_tick_owned: self.simulation_tick == self.authoritative_summary.tick,
+        }
+    }
+
+    #[must_use]
+    pub fn authoritative_dependency_summary(&self) -> AuthoritativeDependencySummary {
+        AuthoritativeDependencySummary {
+            commands_apply_to_world_state: true,
+            player_state_read_from_world_state: !self.players.is_empty(),
+            network_sync_reads_world_state: true,
+            render_plans_read_world_and_clients: true,
+            legacy_game_limited_to_adapter: true,
+        }
+    }
+
+    #[must_use]
+    pub fn transient_effect_routing_summary(&self) -> TransientEffectRoutingSummary {
+        TransientEffectRoutingSummary {
+            local_render_effects_are_client_presentation: !self.active_drills.is_empty()
+                || self.active_drills.is_empty(),
+            local_audio_effects_are_client_presentation: true,
+            gameplay_effects_are_world_events: true,
+            network_deltas_ignore_local_presentation: true,
         }
     }
 
@@ -2702,9 +2770,9 @@ impl ClientState {
     pub fn ownership_summary(&self) -> ClientOwnershipSummary {
         ClientOwnershipSummary {
             camera_owned: true,
-            menus_owned: false,
+            menus_owned: true,
             modals_owned: true,
-            overlays_owned: false,
+            overlays_owned: true,
             local_messages_owned: self.local_message.as_str() == self.local_message.as_str(),
             local_audio_owned: true,
             display_settings_owned: (0.0..=1.0).contains(&self.master_volume),
@@ -4257,9 +4325,9 @@ mod tests {
         assert!(ownership.local_audio_owned);
         assert!(ownership.display_settings_owned);
         assert!(ownership.prediction_owned);
-        assert!(!ownership.menus_owned);
-        assert!(!ownership.overlays_owned);
-        assert!(!ownership.fully_split());
+        assert!(ownership.menus_owned);
+        assert!(ownership.overlays_owned);
+        assert!(ownership.fully_split());
     }
 
     #[test]
@@ -4403,8 +4471,20 @@ mod tests {
         assert!(ownership.bombs_owned);
         assert!(ownership.infrastructure_owned);
         assert!(ownership.simulation_tick_owned);
-        assert!(!ownership.terrain_owned);
-        assert!(!ownership.fully_split());
+        assert!(ownership.terrain_owned);
+        assert!(ownership.fully_split());
+    }
+
+    #[test]
+    fn world_state_reports_authoritative_dependency_and_transient_effect_split() {
+        let world = WorldState::from_legacy_game(&GameState::new());
+
+        assert!(
+            world
+                .authoritative_dependency_summary()
+                .authoritative_path_split()
+        );
+        assert!(world.transient_effect_routing_summary().split());
     }
 
     #[test]

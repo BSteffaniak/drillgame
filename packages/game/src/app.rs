@@ -115,6 +115,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _active_drill = world_probe.active_drill(crate::multiplayer::LOCAL_PLAYER_ID);
     let _inventory_summary =
         world_probe.player_inventory_summary(crate::multiplayer::LOCAL_PLAYER_ID);
+    let _authoritative_dependency_split = world_probe
+        .authoritative_dependency_summary()
+        .authoritative_path_split();
+    let _transient_effects_split = world_probe.transient_effect_routing_summary().split();
     let _survival_summary =
         world_probe.player_survival_snapshot(crate::multiplayer::LOCAL_PLAYER_ID);
     let player_scope_proof = world_probe.player_scoped_gameplay_proof(
