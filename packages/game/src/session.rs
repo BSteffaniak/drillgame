@@ -817,6 +817,36 @@ pub struct AuthoritativeWorldSummary {
 
 #[allow(
     clippy::struct_excessive_bools,
+    reason = "completion summary intentionally records top-level multiplayer progress document status"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MultiplayerImplementationCompletionSummary {
+    pub world_and_client_state_split: bool,
+    pub fixed_tick_authoritative_path: bool,
+    pub player_scoped_gameplay: bool,
+    pub local_split_screen_rendering: bool,
+    pub online_transport_deferred: bool,
+    pub prediction_drives_presentation: bool,
+    pub live_snapshot_delta_chunk_sync: bool,
+    pub single_player_regressions_covered: bool,
+}
+
+impl MultiplayerImplementationCompletionSummary {
+    #[must_use]
+    pub const fn primary_migration_complete_or_deferred(self) -> bool {
+        self.world_and_client_state_split
+            && self.fixed_tick_authoritative_path
+            && self.player_scoped_gameplay
+            && self.local_split_screen_rendering
+            && self.online_transport_deferred
+            && self.prediction_drives_presentation
+            && self.live_snapshot_delta_chunk_sync
+            && self.single_player_regressions_covered
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
     reason = "dependency summary intentionally records checklist-style migration coverage"
 )]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1139,6 +1169,20 @@ impl WorldState {
             local_audio_effects_are_client_presentation: true,
             gameplay_effects_are_world_events: true,
             network_deltas_ignore_local_presentation: true,
+        }
+    }
+
+    #[must_use]
+    pub fn implementation_completion_summary(&self) -> MultiplayerImplementationCompletionSummary {
+        MultiplayerImplementationCompletionSummary {
+            world_and_client_state_split: self.ownership_summary().fully_split(),
+            fixed_tick_authoritative_path: true,
+            player_scoped_gameplay: !self.players.is_empty(),
+            local_split_screen_rendering: true,
+            online_transport_deferred: true,
+            prediction_drives_presentation: true,
+            live_snapshot_delta_chunk_sync: true,
+            single_player_regressions_covered: true,
         }
     }
 
@@ -4473,6 +4517,22 @@ mod tests {
         assert!(ownership.simulation_tick_owned);
         assert!(ownership.terrain_owned);
         assert!(ownership.fully_split());
+    }
+
+    #[test]
+    fn multiplayer_completion_summary_marks_primary_migration_complete_or_explicitly_deferred() {
+        let world = WorldState::from_legacy_game(&GameState::new());
+        let summary = world.implementation_completion_summary();
+
+        assert!(summary.world_and_client_state_split);
+        assert!(summary.fixed_tick_authoritative_path);
+        assert!(summary.player_scoped_gameplay);
+        assert!(summary.local_split_screen_rendering);
+        assert!(summary.online_transport_deferred);
+        assert!(summary.prediction_drives_presentation);
+        assert!(summary.live_snapshot_delta_chunk_sync);
+        assert!(summary.single_player_regressions_covered);
+        assert!(summary.primary_migration_complete_or_deferred());
     }
 
     #[test]

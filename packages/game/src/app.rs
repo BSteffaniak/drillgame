@@ -118,6 +118,9 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _authoritative_dependency_split = world_probe
         .authoritative_dependency_summary()
         .authoritative_path_split();
+    let _implementation_complete = world_probe
+        .implementation_completion_summary()
+        .primary_migration_complete_or_deferred();
     let _transient_effects_split = world_probe.transient_effect_routing_summary().split();
     let _survival_summary =
         world_probe.player_survival_snapshot(crate::multiplayer::LOCAL_PLAYER_ID);
