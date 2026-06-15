@@ -1331,6 +1331,40 @@ pub struct ReconciledMovement {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CorrectedMovementPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub correction_plan: CorrectionPlan,
+}
+
+impl ReconciledMovement {
+    #[must_use]
+    pub fn corrected_presentation(&self, smoothing_alpha: f32) -> CorrectedMovementPresentation {
+        let (x, y) = self.correction_offset.map_or(
+            (self.predicted.x, self.predicted.y),
+            |offset| match self.correction_plan {
+                CorrectionPlan::None => (self.predicted.x, self.predicted.y),
+                CorrectionPlan::Smooth => {
+                    let alpha = smoothing_alpha.clamp(0.0, 1.0);
+                    (
+                        offset.x.mul_add(alpha, self.predicted.x),
+                        offset.y.mul_add(alpha, self.predicted.y),
+                    )
+                }
+                CorrectionPlan::Snap => (self.predicted.x + offset.x, self.predicted.y + offset.y),
+            },
+        );
+        CorrectedMovementPresentation {
+            player_id: self.predicted.player_id,
+            x,
+            y,
+            correction_plan: self.correction_plan,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReplayedPrediction {
     pub predicted: PredictedMovement,
     pub replayed_command_count: usize,
@@ -1348,6 +1382,7 @@ pub struct RemotePlayerPresentation {
 pub struct PredictionPresentationPlan {
     pub local_movement: Option<PredictedMovement>,
     pub correction: Option<ReconciledMovement>,
+    pub corrected_local_presentation: Option<CorrectedMovementPresentation>,
     pub tentative_feedback: Vec<TentativeFeedbackPresentation>,
     pub remote_players: Vec<RemotePlayerPresentation>,
     pub failure_resolutions: Vec<PredictionFailureResolution>,
@@ -1978,6 +2013,8 @@ impl GameSession {
         PredictionPresentationPlan {
             local_movement,
             correction,
+            corrected_local_presentation: correction
+                .map(|correction| correction.corrected_presentation(0.5)),
             tentative_feedback: prediction.tentative_feedback_presentations(),
             remote_players: prediction.remote_presentations(remote_alpha, remote_stall_seconds),
             failure_resolutions: prediction.prediction_failure_resolutions(),
@@ -2483,6 +2520,7 @@ mod tests {
 
         assert!(plan.local_movement.is_some());
         assert!(plan.correction.is_some());
+        assert!(plan.corrected_local_presentation.is_some());
         assert_eq!(
             plan.tentative_feedback,
             vec![super::TentativeFeedbackPresentation::DrillContactAudio]
@@ -3171,6 +3209,9 @@ mod tests {
         let reconciled = super::ClientPredictionState::reconcile_movement(predicted, &next);
         assert_eq!(reconciled.correction_plan, super::CorrectionPlan::Smooth);
         assert!(reconciled.correction_offset.is_some());
+        let smoothed = reconciled.corrected_presentation(0.5);
+        assert_eq!(smoothed.correction_plan, super::CorrectionPlan::Smooth);
+        assert!((smoothed.x - 16.0).abs() < f32::EPSILON);
 
         let interpolated = super::ClientPredictionState::remote_player_presentation(
             &previous,
