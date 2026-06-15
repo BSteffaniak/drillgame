@@ -117,6 +117,12 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         world_probe.player_inventory_summary(crate::multiplayer::LOCAL_PLAYER_ID);
     let _survival_summary =
         world_probe.player_survival_snapshot(crate::multiplayer::LOCAL_PLAYER_ID);
+    let player_scope_proof = world_probe.player_scoped_gameplay_proof(
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        crate::multiplayer::LOCAL_PLAYER_ID,
+    );
+    let _player_scope_proof_complete =
+        player_scope_proof.map(crate::session::PlayerScopedGameplayProof::complete);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
     let _live_keyframe_message = session.live_snapshot_keyframe_message();

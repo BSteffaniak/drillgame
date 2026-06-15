@@ -895,6 +895,36 @@ impl PlayerInventorySummary {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "proof object intentionally records independent player-scoped gameplay domains"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlayerScopedGameplayProof {
+    pub movement_scoped: bool,
+    pub drilling_scoped: bool,
+    pub inventory_scoped: bool,
+    pub survival_scoped: bool,
+    pub scanner_scoped: bool,
+    pub bomb_scoped: bool,
+    pub infrastructure_scoped: bool,
+    pub economy_scoped: bool,
+}
+
+impl PlayerScopedGameplayProof {
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.movement_scoped
+            && self.drilling_scoped
+            && self.inventory_scoped
+            && self.survival_scoped
+            && self.scanner_scoped
+            && self.bomb_scoped
+            && self.infrastructure_scoped
+            && self.economy_scoped
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayerMovementIntent {
     pub horizontal: f32,
@@ -1128,6 +1158,96 @@ impl WorldState {
     pub fn player_inventory_summary(&self, player_id: PlayerId) -> Option<PlayerInventorySummary> {
         self.player(player_id)
             .map(PlayerInventorySummary::from_player)
+    }
+
+    pub fn player_scoped_gameplay_proof(
+        &mut self,
+        first_player_id: PlayerId,
+        second_player_id: PlayerId,
+    ) -> Option<PlayerScopedGameplayProof> {
+        let first_before = self.players.get(&first_player_id)?.clone();
+        let second_before = self.players.get(&second_player_id)?.clone();
+
+        let movement_scoped = self.apply_player_command(
+            first_player_id,
+            &PlayerCommand::Movement {
+                horizontal: 0.75,
+                thrust: true,
+                drill_down: false,
+            },
+        ) == PlayerScopedCommandOutcome::Applied
+            && (self.players.get(&first_player_id)?.velocity_x - first_before.velocity_x).abs()
+                > f32::EPSILON
+            && (self.players.get(&second_player_id)?.velocity_x - second_before.velocity_x).abs()
+                < f32::EPSILON;
+
+        let drilling_scoped = self.apply_player_command(
+            first_player_id,
+            &PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+        ) == PlayerScopedCommandOutcome::Applied
+            && self.active_drills.contains_key(&first_player_id)
+            && !self.active_drills.contains_key(&second_player_id);
+
+        let inventory_before = self.player_inventory_summary(second_player_id)?;
+        let scanner_before = self
+            .scanner_cooldown_seconds(second_player_id)
+            .unwrap_or(0.0);
+        let bomb_count_before = self.bombs.len();
+        let infrastructure_count_before = self.infrastructure.len();
+        let transaction_count_before = self.service_transactions.len();
+
+        let second = self.players.get_mut(&second_player_id)?;
+        second.fuel = 0.0;
+        second.hull = 0.0;
+        second.credits = second.credits.saturating_add(500);
+        second.bombs = second.bombs.saturating_add(1);
+        second.signal_relay_kits = second.signal_relay_kits.saturating_add(1);
+        second.cargo.insert(crate::terrain::MineralKind::Copper, 1);
+        let survival_before = self.player_survival_snapshot(second_player_id)?;
+
+        let survival_scoped = self.apply_player_command(second_player_id, &PlayerCommand::Rescue)
+            == PlayerScopedCommandOutcome::Applied
+            && self.player_survival_snapshot(second_player_id)? != survival_before
+            && self.player_survival_snapshot(first_player_id)?.player_id == first_player_id;
+        let scanner_scoped = self
+            .apply_player_command(second_player_id, &PlayerCommand::UseScanner)
+            == PlayerScopedCommandOutcome::Applied
+            && self
+                .scanner_cooldown_seconds(second_player_id)
+                .unwrap_or(0.0)
+                > scanner_before
+            && self
+                .scanner_cooldown_seconds(first_player_id)
+                .unwrap_or(0.0)
+                .abs()
+                < f32::EPSILON;
+        let bomb_scoped = self.apply_player_command(second_player_id, &PlayerCommand::PlaceBomb)
+            == PlayerScopedCommandOutcome::Applied
+            && self.bombs.len() == bomb_count_before + 1;
+        let infrastructure_scoped = self.apply_player_command(
+            second_player_id,
+            &PlayerCommand::PlaceInfrastructure { slot: 0 },
+        ) == PlayerScopedCommandOutcome::Applied
+            && self.infrastructure.len() == infrastructure_count_before + 1;
+        let economy_scoped = self.apply_player_command(second_player_id, &PlayerCommand::SellCargo)
+            == PlayerScopedCommandOutcome::Applied
+            && self.service_transactions.len() > transaction_count_before;
+        let inventory_scoped = self.player_inventory_summary(second_player_id)? != inventory_before;
+
+        Some(PlayerScopedGameplayProof {
+            movement_scoped,
+            drilling_scoped,
+            inventory_scoped,
+            survival_scoped,
+            scanner_scoped,
+            bomb_scoped,
+            infrastructure_scoped,
+            economy_scoped,
+        })
     }
 
     #[must_use]
@@ -5294,6 +5414,11 @@ mod tests {
         assert!(second.fuel > 0.0);
         assert_eq!(second.cargo_used(), 0);
         assert!(second.credits > 500);
+        let proof = session
+            .world
+            .player_scoped_gameplay_proof(LOCAL_PLAYER_ID, second_player)
+            .expect("proof exists");
+        assert!(proof.complete());
         let events = session.drain_events();
         assert!(events.iter().any(|event| matches!(
             event,
