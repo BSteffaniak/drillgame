@@ -128,6 +128,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _compact_delta =
         crate::session::WorldDelta::new(session.current_tick(), Vec::new()).compact_network_delta();
     let _sequenced_commands = session.sequence_local_commands(Vec::new());
+    let _producer_batches = session.route_command_producers(
+        crate::multiplayer::LOCAL_CLIENT_ID,
+        [replay_commands(Vec::new()), ai_commands(Vec::new())],
+    );
     let _pending_command_count = session.pending_command_count(current_tick);
     let _processed_command_count =
         session.process_authoritative_commands_for_tick(SimulationTick::new(u64::MAX));

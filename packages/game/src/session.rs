@@ -11,6 +11,7 @@ use crate::{
         PlacedBomb, PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
     },
     input::PlayerInput,
+    input_mapping::CommandProducer,
     multiplayer::{
         ClientId, CommandAcknowledgement, CommandApplicationResponse, CommandNetworkSession,
         CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS, InputSequence,
@@ -3308,6 +3309,28 @@ impl GameSession {
         self.route_client_player_commands(client_id, CommandSource::SplitScreenClient, commands)
     }
 
+    pub fn route_command_producer(
+        &mut self,
+        client_id: ClientId,
+        producer: CommandProducer,
+    ) -> SequencedCommandBatch {
+        self.route_client_player_commands(client_id, producer.source, producer.commands)
+    }
+
+    pub fn route_command_producers<I>(
+        &mut self,
+        client_id: ClientId,
+        producers: I,
+    ) -> Vec<SequencedCommandBatch>
+    where
+        I: IntoIterator<Item = CommandProducer>,
+    {
+        producers
+            .into_iter()
+            .map(|producer| self.route_command_producer(client_id, producer))
+            .collect()
+    }
+
     pub fn update_legacy_input_from_authoritative_commands(
         &self,
         input: PlayerInput,
@@ -5181,6 +5204,43 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn command_producers_route_replay_ai_gamepad_split_screen_online_and_keyboard_to_authoritative_buffer()
+     {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        let producers = vec![
+            crate::input_mapping::replay_commands(vec![PlayerCommand::Interact]),
+            crate::input_mapping::ai_commands(vec![PlayerCommand::UseScanner]),
+            crate::input_mapping::gamepad_commands(vec![PlayerCommand::PlaceBomb]),
+            crate::input_mapping::split_screen_commands(vec![PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: false,
+                drill_down: false,
+            }]),
+            crate::input_mapping::online_commands(vec![PlayerCommand::Repair]),
+            crate::input_mapping::local_keyboard_commands(PlayerInput {
+                horizontal: -1.0,
+                thrust: true,
+                ..PlayerInput::default()
+            }),
+        ];
+
+        let batches = session.route_command_producers(second_client, producers);
+
+        assert_eq!(batches.len(), 6);
+        assert!(batches.iter().all(|batch| batch.client_id == second_client));
+        assert!(batches.iter().all(|batch| {
+            batch
+                .commands
+                .iter()
+                .all(|command| command.player_id == second_player)
+        }));
+        assert_eq!(session.pending_command_count(session.current_tick()), 6);
     }
 
     #[test]
