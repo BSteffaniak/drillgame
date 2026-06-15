@@ -6610,6 +6610,58 @@ mod tests {
     }
 
     #[test]
+    fn local_split_screen_frame_updates_players_cameras_hud_and_remote_visibility() {
+        let mut session = GameSession::new();
+        let _enabled = session.enable_default_local_split_screen();
+        let secondary_client_id = session.secondary_local_client_id();
+        for local_input in crate::input_mapping::local_split_screen_inputs(
+            LOCAL_CLIENT_ID,
+            PlayerInput {
+                horizontal: -1.0,
+                thrust: false,
+                drill_down: false,
+                ..PlayerInput::default()
+            },
+            secondary_client_id,
+            Some(PlayerInput {
+                horizontal: 1.0,
+                thrust: false,
+                drill_down: false,
+                ..PlayerInput::default()
+            }),
+        ) {
+            let _batch =
+                session.route_command_producer(local_input.client_id, local_input.producer);
+        }
+        session.update_legacy(PlayerInput::default(), FIXED_DELTA_SECONDS);
+        session.observe_live_remote_player_snapshots();
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
+        let output = session.live_render_frame_output(&prediction_plan);
+
+        assert_eq!(session.client_count(), 2);
+        assert_eq!(output.viewport_plans.len(), 2);
+        assert_eq!(output.hud_snapshots.len(), 2);
+        assert!(output.viewport_plans.iter().all(|plan| plan.clip_enabled));
+        assert!(
+            output
+                .viewport_plans
+                .iter()
+                .all(|plan| plan.local_player.is_some())
+        );
+        assert!(
+            output
+                .world_players_by_view
+                .iter()
+                .all(|(_, players)| players.len() == 2)
+        );
+        assert!(
+            output
+                .split_screen_readiness_report()
+                .ready_for_live_render_path()
+        );
+    }
+
+    #[test]
     fn local_split_screen_authoritative_movement_moves_secondary_player_independently() {
         let mut session = GameSession::new();
         let secondary_client = ClientId::new(2);

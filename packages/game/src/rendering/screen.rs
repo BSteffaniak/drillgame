@@ -12,7 +12,7 @@ use crate::{
         TitleOption,
     },
     save::{latest_save_summary, save_slot_count, save_slot_exists, save_slot_metadata},
-    session::ClientView,
+    session::{ClientView, PerPlayerHudSnapshot},
     surface::SURFACE_BUILDINGS,
     terrain::{
         ArtifactKind, DeepStratum, MineralKind, StrategicResourceKind, TileKind, TilePosition,
@@ -71,6 +71,55 @@ pub(super) fn draw_hud_for_view(
         18,
         Color::LIGHTGRAY,
     );
+}
+
+pub(super) fn draw_hud_snapshot_for_view(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    view: &ClientView,
+    hud: PerPlayerHudSnapshot,
+) {
+    draw_hud(draw, game);
+    let x = view.viewport.x + 18;
+    let y = view.viewport.y + 42;
+    draw.draw_rectangle(x - 8, y - 8, 230, 96, Color::new(20, 24, 32, 190));
+    draw.draw_text(
+        &format!("P{}", hud.player_id.get()),
+        x,
+        y,
+        20,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &format!("Credits {}", hud.credits),
+        x,
+        y + 22,
+        16,
+        Color::GOLD,
+    );
+    draw.draw_text(
+        &format!("Cargo {}", hud.cargo_used),
+        x,
+        y + 40,
+        16,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &format!("Fuel {:.0} Hull {:.0}", hud.fuel, hud.hull),
+        x,
+        y + 58,
+        16,
+        Color::LIGHTGRAY,
+    );
+    if hud.scanner_cooldown_seconds > 0.0 {
+        draw.draw_text(
+            &format!("Scan {:.1}s", hud.scanner_cooldown_seconds),
+            x,
+            y + 76,
+            16,
+            Color::SKYBLUE,
+        );
+    }
 }
 
 pub(super) fn draw_minimap_for_view(

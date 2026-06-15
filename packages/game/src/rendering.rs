@@ -16,7 +16,7 @@ mod world;
 use interior::draw_interior;
 use screen::{
     draw_depth_ruler_for_view, draw_ending, draw_game_over, draw_heat_warning, draw_hud_for_view,
-    draw_minimap_for_view, draw_modal, draw_pause, draw_title,
+    draw_hud_snapshot_for_view, draw_minimap_for_view, draw_modal, draw_pause, draw_title,
 };
 use terrain::TerrainRenderer;
 pub use world::render_camera;
@@ -108,7 +108,7 @@ impl GameRenderer {
             unsafe {
                 ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
             }
-            self.render_client_view(draw, game, view, &[]);
+            self.render_client_view(draw, game, view, &[], None);
             unsafe {
                 ffi::EndScissorMode();
             }
@@ -129,7 +129,15 @@ impl GameRenderer {
                     (*client_id == plan.client_id).then_some(players.as_slice())
                 })
                 .unwrap_or(&[]);
-            self.render_viewport_plan(draw, game, plan, world_players);
+            let hud = output
+                .hud_snapshots
+                .iter()
+                .find(|hud| {
+                    plan.local_player
+                        .is_some_and(|player| player.player_id == hud.player_id)
+                })
+                .copied();
+            self.render_viewport_plan(draw, game, plan, world_players, hud);
         }
     }
 
@@ -139,6 +147,7 @@ impl GameRenderer {
         game: &GameState,
         plan: &RenderViewportPlan,
         world_players: &[crate::session::RenderWorldPlayerPresentation],
+        hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
         if plan.clip_enabled {
             let viewport = plan.viewport;
@@ -160,7 +169,7 @@ impl GameRenderer {
             viewport: plan.viewport,
             run_mode: game.run_mode,
         };
-        self.render_client_view(draw, game, &view, world_players);
+        self.render_client_view(draw, game, &view, world_players, hud);
         if plan.clip_enabled {
             unsafe {
                 ffi::EndScissorMode();
@@ -174,6 +183,7 @@ impl GameRenderer {
         game: &GameState,
         view: &ClientView,
         world_players: &[crate::session::RenderWorldPlayerPresentation],
+        hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
         draw.clear_background(Color::new(105, 190, 235, 255));
 
@@ -215,7 +225,11 @@ impl GameRenderer {
         if view.run_mode != RunMode::Interior {
             draw_heat_warning(draw, game);
         }
-        draw_hud_for_view(draw, game, view);
+        if let Some(hud) = hud {
+            draw_hud_snapshot_for_view(draw, game, view, hud);
+        } else {
+            draw_hud_for_view(draw, game, view);
+        }
         if view.run_mode != RunMode::Interior {
             draw_depth_ruler_for_view(draw, game, view);
             draw_minimap_for_view(draw, game, view);
