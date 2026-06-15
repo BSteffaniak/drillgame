@@ -269,6 +269,8 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         session.game(),
     );
     let save_restore_summary = save_from_world.restore_summary();
+    let mut save_restore_world_probe = session.world().clone();
+    save_from_world.restore_into_world(&mut save_restore_world_probe);
     let _save_roster_matches_players = save_restore_summary.roster_matches_persistent_players();
     let _prediction_recovery_actions =
         session.prediction_recovery_actions(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);

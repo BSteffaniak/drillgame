@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     game_state::GameState,
     multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
+    player::Player,
     session::WorldState,
 };
 
@@ -124,14 +125,26 @@ impl PersistentPlayerState {
     #[must_use]
     pub fn from_world_player(player_id: PlayerId, world: &WorldState) -> Option<Self> {
         let player = world.player(player_id)?;
-        Some(Self {
+        Some(Self::from_player(player_id, player))
+    }
+
+    #[must_use]
+    pub fn from_player(player_id: PlayerId, player: &Player) -> Self {
+        Self {
             player_id,
             credits: player.credits,
             cargo_used: player.cargo_used(),
             cargo_capacity: player.cargo_capacity,
             fuel: player.fuel,
             hull: player.hull,
-        })
+        }
+    }
+
+    pub const fn apply_to_player(&self, player: &mut Player) {
+        player.credits = self.credits;
+        player.cargo_capacity = self.cargo_capacity;
+        player.fuel = self.fuel;
+        player.hull = self.hull;
     }
 }
 
@@ -246,6 +259,15 @@ impl PersistentWorldSave {
     #[must_use]
     pub fn into_legacy_game(self) -> GameState {
         self.game
+    }
+
+    pub fn restore_into_world(&self, world: &mut WorldState) {
+        world.set_simulation_tick(self.session.simulation_tick);
+        for player_state in &self.session.players {
+            if let Some(player) = world.player_mut(player_state.player_id) {
+                player_state.apply_to_player(player);
+            }
+        }
     }
 
     #[must_use]
@@ -554,6 +576,34 @@ mod tests {
         assert_eq!(save.session.simulation_tick, SimulationTick::new(42));
         assert_eq!(save.session.players[0].credits, 321);
         assert!((save.session.players[0].fuel - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn persistent_world_save_restores_authoritative_world_player_state() {
+        let mut game = GameState::new();
+        game.player.credits = 111;
+        let mut world = WorldState::from_legacy_game(&game);
+        world.set_simulation_tick(SimulationTick::new(13));
+        {
+            let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
+            player.credits = 222;
+            player.fuel = 33.0;
+            player.hull = 44.0;
+            player.cargo_capacity = 55;
+        }
+        let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
+        let mut restored_world = WorldState::from_legacy_game(&GameState::new());
+
+        save.restore_into_world(&mut restored_world);
+
+        let restored_player = restored_world
+            .player(LOCAL_PLAYER_ID)
+            .expect("restored player exists");
+        assert_eq!(restored_world.simulation_tick(), SimulationTick::new(13));
+        assert_eq!(restored_player.credits, 222);
+        assert!((restored_player.fuel - 33.0).abs() < f32::EPSILON);
+        assert!((restored_player.hull - 44.0).abs() < f32::EPSILON);
+        assert_eq!(restored_player.cargo_capacity, 55);
     }
 
     #[test]
