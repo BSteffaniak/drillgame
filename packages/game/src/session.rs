@@ -365,6 +365,14 @@ pub struct PerPlayerHudSnapshot {
     pub scanner_cooldown_seconds: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PerClientPresentationSnapshot {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub hud: PerPlayerHudSnapshot,
+    pub viewport: Viewport,
+}
+
 impl PerPlayerHudSnapshot {
     #[must_use]
     pub const fn from_player_snapshot(snapshot: &PlayerSnapshot) -> Self {
@@ -1622,6 +1630,22 @@ impl RenderFramePlan {
         self.views
             .iter()
             .filter_map(|view| self.hud_snapshot_for_view(view))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn client_presentation_snapshots(&self) -> Vec<PerClientPresentationSnapshot> {
+        self.views
+            .iter()
+            .filter_map(|view| {
+                self.hud_snapshot_for_view(view)
+                    .map(|hud| PerClientPresentationSnapshot {
+                        client_id: view.client_id,
+                        player_id: view.controlled_player_id,
+                        hud,
+                        viewport: view.viewport,
+                    })
+            })
             .collect()
     }
 }
@@ -4484,6 +4508,13 @@ mod tests {
                 .iter()
                 .any(|player| { player.player_id == second_player && player.local_to_view })
         );
+        let client_presentations = frame_plan.client_presentation_snapshots();
+        assert_eq!(client_presentations.len(), 2);
+        assert!(client_presentations.iter().any(|presentation| {
+            presentation.client_id == second_client
+                && presentation.player_id == second_player
+                && presentation.hud.player_id == second_player
+        }));
         assert!(!session.add_local_client_player(second_client, PlayerId::new(3)));
         assert!(!session.add_local_client_player(ClientId::new(3), second_player));
     }
