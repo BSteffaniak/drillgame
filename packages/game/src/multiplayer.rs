@@ -441,6 +441,7 @@ pub struct HostSessionRuntime {
     pub config: HostRuntimeConfig,
     pub command_session: CommandNetworkSession,
     connected_clients: BTreeMap<ClientId, PlayerId>,
+    reconnect_tokens: BTreeMap<SessionToken, (ClientId, PlayerId)>,
 }
 
 impl HostSessionRuntime {
@@ -450,6 +451,7 @@ impl HostSessionRuntime {
             config,
             command_session: CommandNetworkSession::new(current_tick, 2),
             connected_clients: BTreeMap::new(),
+            reconnect_tokens: BTreeMap::new(),
         }
     }
 
@@ -462,6 +464,34 @@ impl HostSessionRuntime {
         if self.connected_clients.len() >= usize::from(self.config.max_clients) {
             return None;
         }
+        self.connected_clients.insert(client_id, player_id);
+        Some(ProtocolMessage::JoinAccepted {
+            client_id,
+            player_id,
+            snapshot_tick,
+        })
+    }
+
+    pub fn reserve_reconnect_token(
+        &mut self,
+        session_token: SessionToken,
+        client_id: ClientId,
+        player_id: PlayerId,
+    ) {
+        self.reconnect_tokens
+            .insert(session_token, (client_id, player_id));
+    }
+
+    pub fn reconnect_client(
+        &mut self,
+        client_id: ClientId,
+        session_token: SessionToken,
+        snapshot_tick: SimulationTick,
+    ) -> Option<ProtocolMessage> {
+        if !self.config.allow_reconnect {
+            return None;
+        }
+        let (_reserved_client, player_id) = self.reconnect_tokens.get(&session_token).copied()?;
         self.connected_clients.insert(client_id, player_id);
         Some(ProtocolMessage::JoinAccepted {
             client_id,
@@ -1233,6 +1263,33 @@ mod tests {
             payload: NetworkDeltaPayload::Noop,
         });
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(21));
+    }
+
+    #[test]
+    fn host_session_runtime_reconnects_reserved_clients() {
+        let mut host =
+            HostSessionRuntime::new(super::HostRuntimeConfig::default(), SimulationTick::new(5));
+        let token = SessionToken::new(77);
+        host.reserve_reconnect_token(token, ClientId::new(1), PlayerId::new(9));
+
+        let accepted = host
+            .reconnect_client(ClientId::new(12), token, SimulationTick::new(30))
+            .expect("reconnect accepted");
+
+        assert_eq!(
+            host.connected_player(ClientId::new(12)),
+            Some(PlayerId::new(9))
+        );
+        assert!(matches!(
+            accepted,
+            ProtocolMessage::JoinAccepted {
+                client_id,
+                player_id,
+                snapshot_tick,
+            } if client_id == ClientId::new(12)
+                && player_id == PlayerId::new(9)
+                && snapshot_tick == SimulationTick::new(30)
+        ));
     }
 
     #[test]
