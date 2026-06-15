@@ -1075,6 +1075,11 @@ impl WorldState {
         self.players.keys().copied()
     }
 
+    pub fn insert_player(&mut self, player_id: PlayerId, player: Player) {
+        self.players.insert(player_id, player);
+        self.authoritative_summary.player_count = self.players.len();
+    }
+
     pub fn player_mut(&mut self, player_id: PlayerId) -> Option<&mut Player> {
         self.players.get_mut(&player_id)
     }
@@ -2393,6 +2398,8 @@ impl ClientState {
 
     pub fn sync_presentation_from_legacy_game(&mut self, game: &GameState) {
         self.view = ClientView::from_legacy_game(game);
+        self.view.client_id = self.client_id;
+        self.view.controlled_player_id = self.controlled_player_id;
         self.master_volume = game.master_volume;
         self.fullscreen = game.fullscreen;
         self.settings_dirty = game.settings_dirty;
@@ -2692,6 +2699,29 @@ impl GameSession {
     #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
+    }
+
+    pub fn add_local_client_player(&mut self, client_id: ClientId, player_id: PlayerId) -> bool {
+        if self.clients.contains_key(&client_id) || self.world.player(player_id).is_some() {
+            return false;
+        }
+
+        let mut player = self.game.player.clone();
+        player.x += TILE_SIZE;
+        player.velocity_x = 0.0;
+        player.velocity_y = 0.0;
+        self.world.insert_player(player_id, player);
+        let mut client = ClientState::new(client_id, player_id);
+        client.sync_presentation_from_legacy_game(&self.game);
+        client.view.viewport = split_screen_viewports(self.clients.len() + 1)
+            .pop()
+            .expect("split screen layout returns viewport for added client");
+        self.clients.insert(client_id, client);
+        let viewports = split_screen_viewports(self.clients.len());
+        for (client, viewport) in self.clients.values_mut().zip(viewports) {
+            client.view.viewport = viewport;
+        }
+        true
     }
 
     #[must_use]
@@ -3129,7 +3159,7 @@ mod tests {
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, RunMode, SoundCue},
         input::PlayerInput,
         multiplayer::{
-            CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
+            ClientId, CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
             LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
             ProtocolMessage, SequencedPlayerCommand, SimulationTick,
         },
@@ -4379,6 +4409,21 @@ mod tests {
             .expect("world player exists");
         assert!(world_player.velocity_x.abs() < f32::EPSILON);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn session_adds_second_local_client_player_for_in_process_host() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+
+        assert!(session.add_local_client_player(second_client, second_player));
+        assert_eq!(session.client_count(), 2);
+        assert!(session.world().player(second_player).is_some());
+        assert_eq!(session.render_frame_plan().view_count(), 2);
+        assert_eq!(session.client_views().len(), 2);
+        assert!(!session.add_local_client_player(second_client, PlayerId::new(3)));
+        assert!(!session.add_local_client_player(ClientId::new(3), second_player));
     }
 
     #[test]

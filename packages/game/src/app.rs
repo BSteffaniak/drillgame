@@ -195,6 +195,11 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
+    let mut local_multiplayer_probe = session.clone();
+    let _added_local_client = local_multiplayer_probe.add_local_client_player(
+        crate::multiplayer::ClientId::new(2),
+        crate::multiplayer::PlayerId::new(2),
+    );
     let render_frame_plan = session.render_frame_plan();
     let world_ownership = session.world().ownership_summary();
     let client_ownership = session.local_client().ownership_summary();
