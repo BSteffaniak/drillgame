@@ -4382,6 +4382,37 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_service_commands_sync_player_economy_to_legacy_adapter() {
+        let mut session = GameSession::new();
+        session.game.player.fuel = 10.0;
+        session.game.player.credits = 500;
+        session
+            .world
+            .sync_from_legacy_game(session.current_tick(), &session.game.clone());
+        let tick = session.current_tick();
+
+        session.route_local_player_commands(vec![PlayerCommand::Refuel]);
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let world_player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("world player exists");
+        assert!(world_player.fuel > 10.0);
+        assert!(world_player.credits < 500);
+        assert!((session.game().player.fuel - world_player.fuel).abs() < f32::EPSILON);
+        assert_eq!(session.game().player.credits, world_player.credits);
+        assert!(session.drain_events().iter().any(|event| matches!(
+            event,
+            super::WorldEvent::PurchaseCompleted {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+    }
+
+    #[test]
     fn authoritative_commands_restore_legacy_action_input() {
         let mut session = GameSession::new();
         session.route_local_player_commands(vec![
