@@ -599,6 +599,7 @@ impl ClientSessionRuntime {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SelectedTransportBackend {
     InMemoryFaithfulAdapter,
+    QuicDatagramWithReliableControl,
     UdpLikeUnreliableSequenced,
     ReliableSocket,
 }
@@ -609,6 +610,9 @@ impl SelectedTransportBackend {
         match self {
             Self::InMemoryFaithfulAdapter => {
                 "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable before a real socket backend is required"
+            }
+            Self::QuicDatagramWithReliableControl => {
+                "production target: QUIC-style reliable streams plus unreliable datagrams can carry lobby/control and sequenced simulation packets through one encrypted connection"
             }
             Self::UdpLikeUnreliableSequenced => {
                 "future gameplay transport candidate for unreliable sequenced snapshots/deltas"
@@ -626,7 +630,7 @@ pub enum TransportChannel {
     UnreliableSequencedSimulation,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransportReliabilityMapping {
     pub reliable: TransportChannel,
     pub unreliable_sequenced: TransportChannel,
@@ -640,6 +644,56 @@ impl TransportReliabilityMapping {
                 self.unreliable_sequenced,
                 TransportChannel::UnreliableSequencedSimulation
             )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ProductionTransportSupportStatus {
+    Implemented,
+    DeferredNeedsDependency,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionTransportPlan {
+    pub backend: SelectedTransportBackend,
+    pub packet_io_status: ProductionTransportSupportStatus,
+    pub reliability_mapping: TransportReliabilityMapping,
+    pub serialization_version: u16,
+    pub timeout_retry_tests_required: bool,
+    pub recovery_tests_required: bool,
+    pub latency_soak_tests_required: bool,
+    pub unsupported_items: Vec<String>,
+}
+
+impl ProductionTransportPlan {
+    #[must_use]
+    pub fn documents_selection_and_remaining_work(&self) -> bool {
+        self.backend == SelectedTransportBackend::QuicDatagramWithReliableControl
+            && self.packet_io_status == ProductionTransportSupportStatus::DeferredNeedsDependency
+            && self.reliability_mapping.maps_protocol_classes()
+            && self.serialization_version > 0
+            && self.timeout_retry_tests_required
+            && self.recovery_tests_required
+            && self.latency_soak_tests_required
+            && !self.unsupported_items.is_empty()
+    }
+}
+
+#[must_use]
+pub fn production_transport_plan() -> ProductionTransportPlan {
+    ProductionTransportPlan {
+        backend: SelectedTransportBackend::QuicDatagramWithReliableControl,
+        packet_io_status: ProductionTransportSupportStatus::DeferredNeedsDependency,
+        reliability_mapping: transport_reliability_mapping(),
+        serialization_version: 1,
+        timeout_retry_tests_required: true,
+        recovery_tests_required: true,
+        latency_soak_tests_required: true,
+        unsupported_items: vec![
+            "no QUIC/socket dependency is in the workspace yet".to_string(),
+            "no platform relay/NAT traversal has been selected".to_string(),
+            "no production packet soak harness exists yet".to_string(),
+        ],
     }
 }
 
@@ -1916,11 +1970,12 @@ mod tests {
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        packet_recovery_action, per_client_ui_policy, pump_in_memory_runtime_packets,
-        recovery_coverage_summary, scaffolded_edge_case_proof, selected_transport_backend,
-        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
-        transport_fault_coverage_summary, transport_implementation_decision,
-        transport_integration_status, transport_reliability_mapping,
+        packet_recovery_action, per_client_ui_policy, production_transport_plan,
+        pump_in_memory_runtime_packets, recovery_coverage_summary, scaffolded_edge_case_proof,
+        selected_transport_backend, session_continuity_decision, session_shutdown_decision,
+        terrain_recovery_decision, transport_fault_coverage_summary,
+        transport_implementation_decision, transport_integration_status,
+        transport_reliability_mapping,
     };
 
     #[test]
@@ -1978,6 +2033,22 @@ mod tests {
         assert_eq!(plan.local_client, local_client);
         assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
         assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
+    }
+
+    #[test]
+    fn production_transport_plan_selects_quic_style_backend_and_documents_remaining_work() {
+        let plan = production_transport_plan();
+
+        assert_eq!(
+            plan.backend,
+            super::SelectedTransportBackend::QuicDatagramWithReliableControl
+        );
+        assert_eq!(
+            plan.packet_io_status,
+            super::ProductionTransportSupportStatus::DeferredNeedsDependency
+        );
+        assert!(plan.documents_selection_and_remaining_work());
+        assert!(plan.backend.rationale().contains("QUIC"));
     }
 
     #[test]
