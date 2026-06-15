@@ -2755,6 +2755,13 @@ impl GameSession {
         self.sequence_client_commands(self.local_client_id, commands)
     }
 
+    pub fn route_local_player_commands(
+        &mut self,
+        commands: Vec<PlayerCommand>,
+    ) -> Vec<SequencedPlayerCommand> {
+        self.sequence_local_commands(commands)
+    }
+
     pub fn sequence_client_commands(
         &mut self,
         client_id: ClientId,
@@ -4178,7 +4185,7 @@ mod tests {
         let mut session = GameSession::new();
         let tick = session.current_tick();
 
-        session.sequence_local_commands(vec![PlayerCommand::Movement {
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
             horizontal: 0.5,
             thrust: false,
             drill_down: false,

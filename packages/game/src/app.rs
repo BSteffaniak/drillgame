@@ -55,7 +55,8 @@ pub fn run() {
         let exit_requested = raylib.window_should_close();
         let input = read_input(&raylib, exit_requested);
         let mapped_input = map_local_input(input);
-        observe_multiplayer_scaffolding(&mut session, mapped_input.player_commands, delta_seconds);
+        session.route_local_player_commands(mapped_input.player_commands.clone());
+        observe_multiplayer_scaffolding(&mut session, delta_seconds);
 
         session.update_legacy(input, delta_seconds);
         let world_delta = session.drain_world_delta();
@@ -88,11 +89,7 @@ pub fn run() {
     clippy::too_many_lines,
     reason = "temporary compatibility observer intentionally references multiplayer scaffolding until systems are fully integrated"
 )]
-fn observe_multiplayer_scaffolding(
-    session: &mut GameSession,
-    player_commands: Vec<PlayerCommand>,
-    delta_seconds: f32,
-) {
+fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32) {
     let _local_client_id = session.local_client().client_id;
     let current_tick = session.current_tick();
     let _local_player = session
@@ -121,7 +118,7 @@ fn observe_multiplayer_scaffolding(
     let _world_snapshot = session.world_snapshot();
     let _compact_delta =
         crate::session::WorldDelta::new(session.current_tick(), Vec::new()).compact_network_delta();
-    let _sequenced_commands = session.sequence_local_commands(player_commands);
+    let _sequenced_commands = session.sequence_local_commands(Vec::new());
     let _pending_command_count = session.pending_command_count(current_tick);
     let _processed_command_count =
         session.process_authoritative_commands_for_tick(SimulationTick::new(u64::MAX));
