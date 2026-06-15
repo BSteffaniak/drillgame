@@ -163,6 +163,7 @@ fn observe_multiplayer_scaffolding(
         session.world().hazards().len(),
         session.world().bombs().len(),
         session.world().infrastructure().len(),
+        session.world().service_transactions().len(),
     );
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();

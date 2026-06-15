@@ -578,6 +578,24 @@ pub enum PlayerScopedCommandOutcome {
     UnknownPlayer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerTransactionKind {
+    BuyUpgrade,
+    Refuel,
+    Repair,
+    SellCargo,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlayerServiceTransaction {
+    pub player_id: PlayerId,
+    pub kind: PlayerTransactionKind,
+    pub credits_before: u32,
+    pub credits_after: u32,
+    pub cargo_before: u32,
+    pub cargo_after: u32,
+}
+
 /// Compatibility world wrapper used to introduce explicit player identity before the legacy
 /// monolithic `GameState` is fully split into authoritative world state and local client state.
 #[derive(Clone, Debug)]
@@ -590,6 +608,7 @@ pub struct WorldState {
     infrastructure: Vec<PlacedInfrastructure>,
     active_drills: BTreeMap<PlayerId, DrillState>,
     scanner_cooldowns: BTreeMap<PlayerId, f32>,
+    service_transactions: Vec<PlayerServiceTransaction>,
 }
 
 impl WorldState {
@@ -611,6 +630,7 @@ impl WorldState {
                 .map(|drill| BTreeMap::from([(LOCAL_PLAYER_ID, drill)]))
                 .unwrap_or_default(),
             scanner_cooldowns: BTreeMap::from([(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds)]),
+            service_transactions: Vec::new(),
         }
     }
 
@@ -660,6 +680,11 @@ impl WorldState {
     }
 
     #[must_use]
+    pub fn service_transactions(&self) -> &[PlayerServiceTransaction] {
+        &self.service_transactions
+    }
+
+    #[must_use]
     pub fn active_drill(&self, player_id: PlayerId) -> Option<&DrillState> {
         self.active_drills.get(&player_id)
     }
@@ -696,6 +721,10 @@ impl WorldState {
             .map(PlayerInventorySummary::from_player)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "compatibility command bridge covers all player-scoped intents until real systems split out"
+    )]
     pub fn apply_player_command(
         &mut self,
         player_id: PlayerId,
@@ -736,16 +765,43 @@ impl WorldState {
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::Refuel => {
+                let transaction = PlayerServiceTransaction {
+                    player_id,
+                    kind: PlayerTransactionKind::Refuel,
+                    credits_before: player.credits,
+                    credits_after: player.credits,
+                    cargo_before: player.cargo_used(),
+                    cargo_after: player.cargo_used(),
+                };
                 player.fuel = player.fuel_capacity;
+                self.service_transactions.push(transaction);
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::Repair => {
+                let transaction = PlayerServiceTransaction {
+                    player_id,
+                    kind: PlayerTransactionKind::Repair,
+                    credits_before: player.credits,
+                    credits_after: player.credits,
+                    cargo_before: player.cargo_used(),
+                    cargo_after: player.cargo_used(),
+                };
                 player.hull = player.max_hull();
+                self.service_transactions.push(transaction);
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::SellCargo => {
+                let transaction = PlayerServiceTransaction {
+                    player_id,
+                    kind: PlayerTransactionKind::SellCargo,
+                    credits_before: player.credits,
+                    credits_after: player.credits,
+                    cargo_before: player.cargo_used(),
+                    cargo_after: 0,
+                };
                 player.cargo.clear();
                 player.artifacts.clear();
+                self.service_transactions.push(transaction);
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::UseScanner => {
@@ -780,6 +836,8 @@ impl WorldState {
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::BuyUpgrade { index } => {
+                let credits_before = player.credits;
+                let cargo_before = player.cargo_used();
                 match index {
                     0 => player.drill_strength = player.drill_strength.saturating_add(1),
                     1 => player.engine_level = player.engine_level.saturating_add(1),
@@ -789,6 +847,14 @@ impl WorldState {
                     5 => player.scanner_level = player.scanner_level.saturating_add(1),
                     _ => return PlayerScopedCommandOutcome::IgnoredUnavailable,
                 }
+                self.service_transactions.push(PlayerServiceTransaction {
+                    player_id,
+                    kind: PlayerTransactionKind::BuyUpgrade,
+                    credits_before,
+                    credits_after: player.credits,
+                    cargo_before,
+                    cargo_after: player.cargo_used(),
+                });
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::Interact
@@ -2052,6 +2118,43 @@ mod tests {
                 .signal_relay_kits,
             0
         );
+    }
+
+    #[test]
+    fn world_state_records_player_scoped_service_transactions() {
+        let mut game = GameState::new();
+        game.player.fuel = 1.0;
+        game.player.hull = 1.0;
+        game.player.add_cargo(crate::terrain::MineralKind::Copper);
+        let mut world = WorldState::from_legacy_game(&game);
+
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::Refuel),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::Repair),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::SellCargo),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::BuyUpgrade { index: 0 }),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+
+        assert_eq!(world.service_transactions().len(), 4);
+        assert_eq!(
+            world.service_transactions()[0].kind,
+            super::PlayerTransactionKind::Refuel
+        );
+        assert_eq!(
+            world.service_transactions()[2].kind,
+            super::PlayerTransactionKind::SellCargo
+        );
+        assert_eq!(world.service_transactions()[2].cargo_after, 0);
     }
 
     #[test]
