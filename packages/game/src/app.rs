@@ -277,6 +277,11 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         render_frame_plan.remote_player_presentations(view, &prediction_presentation_plan)
     });
     let _render_viewport_plans = render_frame_plan.viewport_plans(&prediction_presentation_plan);
+    let live_render_output = session.live_render_frame_output(&prediction_presentation_plan);
+    let _live_render_counts = (
+        live_render_output.clipped_viewport_count(),
+        live_render_output.hud_count(),
+    );
     let _world_player_presentations = render_frame_plan
         .views
         .first()

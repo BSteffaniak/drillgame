@@ -1566,6 +1566,28 @@ pub struct RenderViewportPlan {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct LiveRenderFrameOutput {
+    pub viewport_plans: Vec<RenderViewportPlan>,
+    pub hud_snapshots: Vec<PerPlayerHudSnapshot>,
+    pub world_players_by_view: Vec<(ClientId, Vec<RenderWorldPlayerPresentation>)>,
+}
+
+impl LiveRenderFrameOutput {
+    #[must_use]
+    pub fn clipped_viewport_count(&self) -> usize {
+        self.viewport_plans
+            .iter()
+            .filter(|plan| plan.clip_enabled)
+            .count()
+    }
+
+    #[must_use]
+    pub const fn hud_count(&self) -> usize {
+        self.hud_snapshots.len()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderFramePlan {
     pub world_summary: AuthoritativeWorldSummary,
     pub views: Vec<ClientView>,
@@ -2773,6 +2795,29 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn live_render_frame_output(
+        &self,
+        prediction_plan: &PredictionPresentationPlan,
+    ) -> LiveRenderFrameOutput {
+        let frame_plan = self.render_frame_plan();
+        let world_players_by_view = frame_plan
+            .views
+            .iter()
+            .map(|view| {
+                (
+                    view.client_id,
+                    frame_plan.world_player_presentations_for_view(view),
+                )
+            })
+            .collect();
+        LiveRenderFrameOutput {
+            viewport_plans: frame_plan.viewport_plans(prediction_plan),
+            hud_snapshots: frame_plan.hud_snapshots(),
+            world_players_by_view,
+        }
+    }
+
+    #[must_use]
     pub fn predicted_local_movement(&self, delta_seconds: f32) -> Option<PredictedMovement> {
         self.local_movement_prediction_plan(delta_seconds)
             .map(LocalMovementPredictionPlan::predicted_movement)
@@ -3785,6 +3830,52 @@ mod tests {
         assert_eq!(viewport_plans[0].remote_player_count, 1);
         assert_eq!(viewport_plans[0].remote_players.len(), 1);
         assert!(viewport_plans[0].local_player.is_some());
+    }
+
+    #[test]
+    fn live_render_frame_output_uses_world_players_client_views_and_per_player_hud() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        session
+            .world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .credits = 111;
+        session
+            .world
+            .player_mut(second_player)
+            .expect("second player exists")
+            .credits = 222;
+        session
+            .world
+            .set_scanner_cooldown_seconds(second_player, 3.0);
+        session.observe_live_remote_player_snapshots();
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
+
+        let output = session.live_render_frame_output(&prediction_plan);
+
+        assert_eq!(output.viewport_plans.len(), 2);
+        assert_eq!(output.clipped_viewport_count(), 2);
+        assert_eq!(output.hud_count(), 2);
+        assert!(
+            output
+                .hud_snapshots
+                .iter()
+                .any(|hud| hud.player_id == second_player
+                    && hud.credits == 222
+                    && (hud.scanner_cooldown_seconds - 3.0).abs() < f32::EPSILON)
+        );
+        assert!(output.world_players_by_view.iter().all(|(_, players)| {
+            players
+                .iter()
+                .any(|player| player.player_id == LOCAL_PLAYER_ID)
+                && players
+                    .iter()
+                    .any(|player| player.player_id == second_player)
+        }));
+        assert!(output.viewport_plans.iter().all(|plan| plan.clip_enabled));
     }
 
     #[test]
