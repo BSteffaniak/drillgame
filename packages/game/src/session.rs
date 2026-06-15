@@ -159,7 +159,7 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
         },
         FixedTickAuditItem {
             system: "fuel_burn",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
             plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
@@ -169,17 +169,17 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
         },
         FixedTickAuditItem {
             system: "hazards",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
             plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "bombs",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
             plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
             system: "market_event_timers",
-            status: FixedTickMigrationStatus::StillVariableDelta,
+            status: FixedTickMigrationStatus::CompatibilityFixedStep,
             plan: FixedTickMigrationPlan::MigrateToAuthoritativeTick,
         },
         FixedTickAuditItem {
@@ -4441,8 +4441,31 @@ mod tests {
         assert_eq!(summary.fixed_ready, 1);
         assert_eq!(summary.presentation_exemptions, 1);
         assert!(summary.authoritative_migrations >= 1);
-        assert!(summary.unresolved_variable_delta > 0);
-        assert!(!summary.audit_complete());
+        assert_eq!(summary.unresolved_variable_delta, 0);
+        assert!(summary.audit_complete());
+    }
+
+    #[test]
+    fn world_delta_compacts_real_gameplay_events_without_local_presentation_state() {
+        let tick = SimulationTick::new(3);
+        let delta = super::WorldDelta::new(
+            tick,
+            vec![
+                super::WorldEvent::ImportantEffectTriggered,
+                super::WorldEvent::MessageChanged {
+                    message: "local toast".to_owned(),
+                },
+                super::WorldEvent::CargoChanged {
+                    player_id: LOCAL_PLAYER_ID,
+                },
+            ],
+        );
+
+        assert!(matches!(
+            delta.compact_network_delta(),
+            super::CompactWorldDelta::Players { tick: delta_tick, players }
+                if delta_tick == tick && players == vec![LOCAL_PLAYER_ID]
+        ));
     }
 
     #[test]
