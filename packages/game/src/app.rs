@@ -218,6 +218,13 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
                 commands: Vec::new(),
             });
         local_multiplayer_probe.observe_live_remote_player_snapshots();
+        let _live_network_integration_plan = local_multiplayer_probe.live_network_integration_plan(
+            crate::multiplayer::ClientId::new(3),
+            crate::multiplayer::PlayerId::new(3),
+            crate::multiplayer::SessionToken::new(7),
+            crate::session::TerrainChunkPosition { x: 0, y: 0 },
+            0,
+        );
     }
     let render_frame_plan = session.render_frame_plan();
     let world_ownership = session.world().ownership_summary();

@@ -16,7 +16,8 @@ use crate::{
         CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS, InputSequence,
         LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot,
         NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand, PlayerId,
-        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, SIMULATION_HZ,
+        SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -961,6 +962,15 @@ pub struct PlayerServiceTransaction {
     pub credits_after: u32,
     pub cargo_before: u32,
     pub cargo_after: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveNetworkIntegrationPlan {
+    pub join_in_progress: ProtocolExchangeBatch,
+    pub reconnect: ProtocolExchangeBatch,
+    pub command_responses: Vec<ProtocolMessage>,
+    pub terrain_recovery: SnapshotChunkRecoveryPlan,
+    pub high_latency_prediction: PredictionPresentationPlan,
 }
 
 /// Compatibility world wrapper used to introduce explicit player identity before the legacy
@@ -2963,6 +2973,71 @@ impl GameSession {
         Self::live_world_delta_message(&delta)
     }
 
+    pub fn live_network_integration_plan(
+        &mut self,
+        remote_client_id: ClientId,
+        remote_player_id: PlayerId,
+        reconnect_token: SessionToken,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> LiveNetworkIntegrationPlan {
+        let _added = self.add_local_client_player(remote_client_id, remote_player_id);
+        let join_in_progress = ProtocolExchangeBatch {
+            kind: ProtocolExchangeKind::JoinHandshake,
+            messages: vec![
+                ProtocolMessage::JoinRequest {
+                    client_id: remote_client_id,
+                    session_token: None,
+                },
+                ProtocolMessage::JoinAccepted {
+                    client_id: remote_client_id,
+                    player_id: remote_player_id,
+                    snapshot_tick: self.world.simulation_tick(),
+                },
+                self.live_snapshot_keyframe_message(),
+            ],
+        };
+        let reconnect = ProtocolExchangeBatch {
+            kind: ProtocolExchangeKind::JoinHandshake,
+            messages: vec![
+                ProtocolMessage::ReconnectRequest {
+                    client_id: remote_client_id,
+                    session_token: reconnect_token,
+                },
+                ProtocolMessage::JoinAccepted {
+                    client_id: remote_client_id,
+                    player_id: remote_player_id,
+                    snapshot_tick: self.world.simulation_tick(),
+                },
+                self.live_snapshot_keyframe_message(),
+            ],
+        };
+        let command_packet = CommandPacket {
+            client_id: remote_client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id: remote_player_id,
+                sequence: InputSequence::new(0),
+                target_tick: self.current_tick,
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: false,
+                },
+            }],
+        };
+        let command_responses = self.apply_live_command_packet(&command_packet);
+        let terrain_recovery = self.snapshot_chunk_recovery_plan(terrain_position, known_revision);
+        self.observe_live_remote_player_snapshots();
+        let high_latency_prediction = self.live_prediction_presentation_plan(0.0, 1.0, 0.12);
+        LiveNetworkIntegrationPlan {
+            join_in_progress,
+            reconnect,
+            command_responses,
+            terrain_recovery,
+            high_latency_prediction,
+        }
+    }
+
     fn push_event(&mut self, event: WorldEvent) {
         self.pending_events.push(event);
     }
@@ -3445,7 +3520,8 @@ mod tests {
         multiplayer::{
             ClientId, CommandAcknowledgement, CommandPacket, CommandRejection, CommandSource,
             InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand,
-            PlayerId, ProtocolMessage, SequencedPlayerCommand, SimulationTick,
+            PlayerId, ProtocolExchangeKind, ProtocolMessage, SequencedPlayerCommand, SessionToken,
+            SimulationTick,
         },
         terrain::{MineResult, TileKind, TilePosition},
     };
@@ -5014,6 +5090,54 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn live_network_integration_plan_covers_join_reconnect_rejection_recovery_and_latency() {
+        let mut session = GameSession::new();
+        let remote_client = ClientId::new(9);
+        let remote_player = PlayerId::new(9);
+        let terrain_position = super::TerrainChunkPosition { x: 0, y: 0 };
+        session
+            .terrain_revisions
+            .mark_tiles_changed([TilePosition { x: 1, y: 1 }]);
+
+        let plan = session.live_network_integration_plan(
+            remote_client,
+            remote_player,
+            SessionToken::new(99),
+            terrain_position,
+            0,
+        );
+
+        assert_eq!(
+            plan.join_in_progress.kind,
+            ProtocolExchangeKind::JoinHandshake
+        );
+        assert!(
+            plan.join_in_progress
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    ProtocolMessage::SnapshotKeyframe { snapshot }
+                        if snapshot.players.iter().any(|player| player.player_id == remote_player)
+                ))
+        );
+        assert!(plan.reconnect.messages.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::ReconnectRequest {
+                client_id,
+                session_token,
+            } if *client_id == remote_client && *session_token == SessionToken::new(99)
+        )));
+        assert!(plan.command_responses.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::CommandAcknowledgement(CommandAcknowledgement { client_id, .. })
+                if *client_id == remote_client
+        )));
+        assert!(plan.terrain_recovery.recovered_revision().is_some());
+        assert!(!plan.high_latency_prediction.remote_players.is_empty());
     }
 
     #[test]
