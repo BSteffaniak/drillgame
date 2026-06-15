@@ -170,6 +170,10 @@ fn observe_multiplayer_scaffolding(
         .compact_network_delta()
         .network_payload();
     let _network_delta_tick = session.drain_world_delta().compact_network_delta().tick();
+    let _network_protocol_message = session
+        .drain_world_delta()
+        .compact_network_delta()
+        .protocol_message();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();

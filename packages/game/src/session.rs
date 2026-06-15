@@ -12,8 +12,8 @@ use crate::{
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-        NetworkDeltaPayload, NetworkTerrainChunkRevision, PlayerCommand, PlayerId, SIMULATION_HZ,
-        SequencedPlayerCommand, SimulationTick,
+        NetworkDeltaPayload, NetworkTerrainChunkRevision, PlayerCommand, PlayerId, ProtocolMessage,
+        SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -326,6 +326,14 @@ impl CompactWorldDelta {
                 players: players.clone(),
             },
             Self::KeyframeRequired { .. } => NetworkDeltaPayload::KeyframeRequired,
+        }
+    }
+
+    #[must_use]
+    pub fn protocol_message(&self) -> ProtocolMessage {
+        ProtocolMessage::WorldDelta {
+            tick: self.tick(),
+            payload: self.network_payload(),
         }
     }
 
@@ -2038,7 +2046,7 @@ mod tests {
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
         multiplayer::{
             LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
-            SimulationTick,
+            ProtocolMessage, SimulationTick,
         },
     };
 
@@ -2521,11 +2529,19 @@ mod tests {
             }
         );
 
-        let payload = delta.compact_network_delta().network_payload();
+        let compact_delta = delta.compact_network_delta();
+        let payload = compact_delta.network_payload();
         assert_eq!(
             payload,
             NetworkDeltaPayload::Players {
                 players: vec![LOCAL_PLAYER_ID]
+            }
+        );
+        assert_eq!(
+            compact_delta.protocol_message(),
+            ProtocolMessage::WorldDelta {
+                tick: SimulationTick::new(8),
+                payload
             }
         );
 
