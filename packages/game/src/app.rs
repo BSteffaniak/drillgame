@@ -6,7 +6,8 @@ use crate::{
         replay_commands, split_screen_commands,
     },
     multiplayer::{
-        FIXED_DELTA_SECONDS, HostRuntimeConfig, HostSessionRuntime, PlayerCommand, SimulationTick,
+        ClientRuntimeConfig, ClientRuntimeMode, ClientSessionRuntime, FIXED_DELTA_SECONDS,
+        HostRuntimeConfig, HostSessionRuntime, PlayerCommand, SimulationTick,
     },
     rendering::GameRenderer,
     save::{load_settings, save_settings},
@@ -278,4 +279,11 @@ fn observe_multiplayer_scaffolding(
         HostSessionRuntime::new(HostRuntimeConfig::default(), SimulationTick::default());
     let host_runtime_status = host_runtime_probe.runtime_status();
     let _host_has_capacity = host_runtime_status.has_capacity();
+    let client_runtime_probe = ClientSessionRuntime::new(ClientRuntimeConfig {
+        mode: ClientRuntimeMode::RemoteNetwork,
+        client_id: crate::multiplayer::LOCAL_CLIENT_ID,
+        player_id: None,
+    });
+    let client_runtime_status = client_runtime_probe.runtime_status();
+    let _client_joined = client_runtime_status.joined();
 }

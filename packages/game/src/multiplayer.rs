@@ -371,6 +371,23 @@ impl InMemoryTransportQueues {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientRuntimeStatus {
+    pub mode: ClientRuntimeMode,
+    pub client_id: ClientId,
+    pub assigned_player_id: Option<PlayerId>,
+    pub has_session_token: bool,
+    pub latest_authoritative_tick: SimulationTick,
+    pub pending_message_count: usize,
+}
+
+impl ClientRuntimeStatus {
+    #[must_use]
+    pub const fn joined(&self) -> bool {
+        self.assigned_player_id.is_some()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ClientSessionRuntime {
     pub config: ClientRuntimeConfig,
@@ -426,6 +443,18 @@ impl ClientSessionRuntime {
                 self.latest_authoritative_tick = snapshot.tick;
             }
             other => self.pending_messages.push(other),
+        }
+    }
+
+    #[must_use]
+    pub fn runtime_status(&self) -> ClientRuntimeStatus {
+        ClientRuntimeStatus {
+            mode: self.config.mode.clone(),
+            client_id: self.config.client_id,
+            assigned_player_id: self.assigned_player_id,
+            has_session_token: self.session_token.is_some(),
+            latest_authoritative_tick: self.latest_authoritative_tick,
+            pending_message_count: self.pending_messages.len(),
         }
     }
 }
@@ -1294,6 +1323,14 @@ mod tests {
         });
         assert_eq!(client.assigned_player_id, Some(PlayerId::new(13)));
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(20));
+        let status = client.runtime_status();
+        assert_eq!(status.mode, super::ClientRuntimeMode::RemoteNetwork);
+        assert_eq!(status.client_id, ClientId::new(12));
+        assert_eq!(status.assigned_player_id, Some(PlayerId::new(13)));
+        assert!(status.has_session_token);
+        assert_eq!(status.latest_authoritative_tick, SimulationTick::new(20));
+        assert_eq!(status.pending_message_count, 0);
+        assert!(status.joined());
 
         client.handle_message(ProtocolMessage::WorldDelta {
             tick: SimulationTick::new(21),
