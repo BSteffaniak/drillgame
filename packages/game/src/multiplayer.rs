@@ -406,6 +406,20 @@ impl InMemoryTransportStatus {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RuntimePacketPumpSummary {
+    pub host_received: usize,
+    pub client_received: usize,
+    pub responses_sent: usize,
+}
+
+impl RuntimePacketPumpSummary {
+    #[must_use]
+    pub const fn exchanged_packets(&self) -> bool {
+        self.host_received > 0 || self.client_received > 0 || self.responses_sent > 0
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct InMemoryTransportQueues {
     client_to_host: Vec<TransportPacket>,
@@ -441,6 +455,56 @@ impl InMemoryTransportQueues {
             addressed_clients: self.host_to_clients.len(),
         }
     }
+}
+
+pub fn pump_in_memory_runtime_packets(
+    queues: &mut InMemoryTransportQueues,
+    host: &mut HostSessionRuntime,
+    client: &mut ClientSessionRuntime,
+    assigned_player_id: PlayerId,
+    snapshot_tick: SimulationTick,
+) -> RuntimePacketPumpSummary {
+    let mut summary = RuntimePacketPumpSummary {
+        host_received: 0,
+        client_received: 0,
+        responses_sent: 0,
+    };
+    for packet in queues.drain_client_to_host() {
+        summary.host_received += 1;
+        match packet.message {
+            ProtocolMessage::JoinRequest { client_id, .. } => {
+                if let Some(response) =
+                    host.accept_client(client_id, assigned_player_id, snapshot_tick)
+                {
+                    queues.send_to_client(client_id, response);
+                    summary.responses_sent += 1;
+                }
+            }
+            ProtocolMessage::ReconnectRequest {
+                client_id,
+                session_token,
+            } => {
+                if let Some(response) =
+                    host.reconnect_client(client_id, session_token, snapshot_tick)
+                {
+                    queues.send_to_client(client_id, response);
+                    summary.responses_sent += 1;
+                }
+            }
+            ProtocolMessage::CommandPacket(packet) => {
+                for response in host.apply_command_packet(&packet) {
+                    queues.send_to_client(packet.client_id, response);
+                    summary.responses_sent += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    for packet in queues.drain_host_to_client(client.config.client_id) {
+        summary.client_received += 1;
+        client.handle_message(packet.message);
+    }
+    summary
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1405,8 +1469,9 @@ mod tests {
         disconnect_reservation_policy, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
-        per_client_ui_policy, scaffolded_edge_case_proof, session_continuity_decision,
-        session_shutdown_decision, terrain_recovery_decision, transport_integration_status,
+        per_client_ui_policy, pump_in_memory_runtime_packets, scaffolded_edge_case_proof,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        transport_integration_status,
     };
 
     #[test]
@@ -1722,6 +1787,58 @@ mod tests {
             client.handle_message(packet.message);
         }
 
+        assert_eq!(client.latest_authoritative_tick, SimulationTick::new(5));
+        assert!(client.pending_messages.is_empty());
+    }
+
+    #[test]
+    fn in_memory_runtime_packet_pump_drives_host_and_client_runtime() {
+        let mut host =
+            HostSessionRuntime::new(super::HostRuntimeConfig::default(), SimulationTick::new(5));
+        let mut client = ClientSessionRuntime::new(super::ClientRuntimeConfig {
+            mode: super::ClientRuntimeMode::RemoteNetwork,
+            client_id: ClientId::new(42),
+            player_id: None,
+        });
+        let mut queues = InMemoryTransportQueues::default();
+
+        queues.send_to_host(client.connect_request());
+        let join_summary = pump_in_memory_runtime_packets(
+            &mut queues,
+            &mut host,
+            &mut client,
+            PlayerId::new(77),
+            SimulationTick::new(5),
+        );
+
+        assert!(join_summary.exchanged_packets());
+        assert_eq!(join_summary.host_received, 1);
+        assert_eq!(join_summary.client_received, 1);
+        assert_eq!(client.assigned_player_id, Some(PlayerId::new(77)));
+        assert_eq!(
+            host.connected_player(ClientId::new(42)),
+            Some(PlayerId::new(77))
+        );
+
+        queues.send_to_host(ProtocolMessage::CommandPacket(CommandPacket {
+            client_id: client.config.client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id: PlayerId::new(77),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(5),
+                command: PlayerCommand::Interact,
+            }],
+        }));
+        let command_summary = pump_in_memory_runtime_packets(
+            &mut queues,
+            &mut host,
+            &mut client,
+            PlayerId::new(77),
+            SimulationTick::new(5),
+        );
+
+        assert_eq!(command_summary.host_received, 1);
+        assert_eq!(command_summary.client_received, 1);
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(5));
         assert!(client.pending_messages.is_empty());
     }

@@ -187,6 +187,22 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         reason: crate::multiplayer::CommandAcceptance::Duplicate,
         authoritative_tick: session.current_tick(),
     });
+    let mut runtime_queues = crate::multiplayer::InMemoryTransportQueues::default();
+    let mut host_runtime = crate::multiplayer::HostSessionRuntime::new(
+        crate::multiplayer::HostRuntimeConfig::default(),
+        session.current_tick(),
+    );
+    let mut client_runtime = crate::multiplayer::ClientSessionRuntime::new(
+        crate::multiplayer::default_local_client_runtime(),
+    );
+    runtime_queues.send_to_host(client_runtime.connect_request());
+    let _runtime_pump_summary = crate::multiplayer::pump_in_memory_runtime_packets(
+        &mut runtime_queues,
+        &mut host_runtime,
+        &mut client_runtime,
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        session.current_tick(),
+    );
     let _network_payload = session
         .drain_world_delta()
         .compact_network_delta()
