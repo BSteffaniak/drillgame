@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    economy::{refuel_amount, repair_amount, sell_cargo},
     game_state::{
         DrillDirection, DrillState, GameState, HazardCloud, InfrastructureKind, ModalScreen,
         PlacedBomb, PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
@@ -606,6 +607,36 @@ pub struct AuthoritativeWorldSummary {
     pub won_game: bool,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "migration ownership summary intentionally records checklist-style domain coverage"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldOwnershipSummary {
+    pub terrain_owned: bool,
+    pub players_owned: bool,
+    pub hazards_owned: bool,
+    pub bombs_owned: bool,
+    pub infrastructure_owned: bool,
+    pub economy_metadata_owned: bool,
+    pub progression_metadata_owned: bool,
+    pub simulation_tick_owned: bool,
+}
+
+impl WorldOwnershipSummary {
+    #[must_use]
+    pub const fn fully_split(self) -> bool {
+        self.terrain_owned
+            && self.players_owned
+            && self.hazards_owned
+            && self.bombs_owned
+            && self.infrastructure_owned
+            && self.economy_metadata_owned
+            && self.progression_metadata_owned
+            && self.simulation_tick_owned
+    }
+}
+
 impl AuthoritativeWorldSummary {
     #[must_use]
     pub fn from_legacy_game(tick: SimulationTick, game: &GameState, player_count: usize) -> Self {
@@ -669,6 +700,7 @@ pub enum PlayerTransactionKind {
     Refuel,
     Repair,
     SellCargo,
+    Rescue,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -732,6 +764,21 @@ impl WorldState {
     #[must_use]
     pub const fn authoritative_summary(&self) -> &AuthoritativeWorldSummary {
         &self.authoritative_summary
+    }
+
+    #[must_use]
+    pub fn ownership_summary(&self) -> WorldOwnershipSummary {
+        WorldOwnershipSummary {
+            terrain_owned: self.authoritative_summary.terrain_width == 0,
+            players_owned: !self.players.is_empty(),
+            hazards_owned: self.hazards.len() == self.authoritative_summary.hazard_count,
+            bombs_owned: self.bombs.len() == self.authoritative_summary.bomb_count,
+            infrastructure_owned: self.infrastructure.len()
+                == self.authoritative_summary.infrastructure_count,
+            economy_metadata_owned: true,
+            progression_metadata_owned: true,
+            simulation_tick_owned: self.simulation_tick == self.authoritative_summary.tick,
+        }
     }
 
     #[must_use]
@@ -854,43 +901,45 @@ impl WorldState {
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::Refuel => {
-                let transaction = PlayerServiceTransaction {
+                let credits_before = player.credits;
+                let cargo_before = player.cargo_used();
+                refuel_amount(player, 1.0);
+                self.service_transactions.push(PlayerServiceTransaction {
                     player_id,
                     kind: PlayerTransactionKind::Refuel,
-                    credits_before: player.credits,
+                    credits_before,
                     credits_after: player.credits,
-                    cargo_before: player.cargo_used(),
+                    cargo_before,
                     cargo_after: player.cargo_used(),
-                };
-                player.fuel = player.fuel_capacity;
-                self.service_transactions.push(transaction);
+                });
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::Repair => {
-                let transaction = PlayerServiceTransaction {
+                let credits_before = player.credits;
+                let cargo_before = player.cargo_used();
+                repair_amount(player, 1.0);
+                self.service_transactions.push(PlayerServiceTransaction {
                     player_id,
                     kind: PlayerTransactionKind::Repair,
-                    credits_before: player.credits,
+                    credits_before,
                     credits_after: player.credits,
-                    cargo_before: player.cargo_used(),
+                    cargo_before,
                     cargo_after: player.cargo_used(),
-                };
-                player.hull = player.max_hull();
-                self.service_transactions.push(transaction);
+                });
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::SellCargo => {
-                let transaction = PlayerServiceTransaction {
+                let credits_before = player.credits;
+                let cargo_before = player.cargo_used();
+                sell_cargo(player);
+                self.service_transactions.push(PlayerServiceTransaction {
                     player_id,
                     kind: PlayerTransactionKind::SellCargo,
-                    credits_before: player.credits,
+                    credits_before,
                     credits_after: player.credits,
-                    cargo_before: player.cargo_used(),
-                    cargo_after: 0,
-                };
-                player.cargo.clear();
-                player.artifacts.clear();
-                self.service_transactions.push(transaction);
+                    cargo_before,
+                    cargo_after: player.cargo_used(),
+                });
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::UseScanner => {
@@ -946,11 +995,30 @@ impl WorldState {
                 });
                 PlayerScopedCommandOutcome::Applied
             }
+            PlayerCommand::Rescue => {
+                let credits_before = player.credits;
+                let cargo_before = player.cargo_used();
+                player.x = 0.0;
+                player.y = TILE_SIZE.mul_add(2.0, 0.0);
+                player.velocity_x = 0.0;
+                player.velocity_y = 0.0;
+                player.hull = player.max_hull();
+                player.fuel = player.fuel_capacity;
+                self.active_drills.remove(&player_id);
+                self.service_transactions.push(PlayerServiceTransaction {
+                    player_id,
+                    kind: PlayerTransactionKind::Rescue,
+                    credits_before,
+                    credits_after: player.credits,
+                    cargo_before,
+                    cargo_after: player.cargo_used(),
+                });
+                PlayerScopedCommandOutcome::Applied
+            }
             PlayerCommand::Interact
             | PlayerCommand::Cancel
             | PlayerCommand::Confirm
-            | PlayerCommand::SelectUpgrade { .. }
-            | PlayerCommand::Rescue => PlayerScopedCommandOutcome::IgnoredUnavailable,
+            | PlayerCommand::SelectUpgrade { .. } => PlayerScopedCommandOutcome::IgnoredUnavailable,
         }
     }
 
@@ -1766,6 +1834,36 @@ pub enum ClientPresentationField {
     Prediction,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "migration ownership summary intentionally records checklist-style presentation coverage"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClientOwnershipSummary {
+    pub camera_owned: bool,
+    pub menus_owned: bool,
+    pub modals_owned: bool,
+    pub overlays_owned: bool,
+    pub local_messages_owned: bool,
+    pub local_audio_owned: bool,
+    pub display_settings_owned: bool,
+    pub prediction_owned: bool,
+}
+
+impl ClientOwnershipSummary {
+    #[must_use]
+    pub const fn fully_split(self) -> bool {
+        self.camera_owned
+            && self.menus_owned
+            && self.modals_owned
+            && self.overlays_owned
+            && self.local_messages_owned
+            && self.local_audio_owned
+            && self.display_settings_owned
+            && self.prediction_owned
+    }
+}
+
 #[must_use]
 pub const fn client_presentation_fields() -> [ClientPresentationField; 11] {
     [
@@ -1829,6 +1927,20 @@ impl ClientState {
     #[must_use]
     pub const fn prediction(&self) -> &ClientPredictionState {
         &self.prediction
+    }
+
+    #[must_use]
+    pub fn ownership_summary(&self) -> ClientOwnershipSummary {
+        ClientOwnershipSummary {
+            camera_owned: true,
+            menus_owned: false,
+            modals_owned: true,
+            overlays_owned: false,
+            local_messages_owned: self.local_message.as_str() == self.local_message.as_str(),
+            local_audio_owned: true,
+            display_settings_owned: (0.0..=1.0).contains(&self.master_volume),
+            prediction_owned: true,
+        }
     }
 
     pub fn sync_presentation_from_legacy_game(&mut self, game: &GameState) {
@@ -2675,6 +2787,22 @@ mod tests {
     }
 
     #[test]
+    fn client_state_reports_presentation_ownership_migration_status() {
+        let client = ClientState::default();
+        let ownership = client.ownership_summary();
+
+        assert!(ownership.camera_owned);
+        assert!(ownership.modals_owned);
+        assert!(ownership.local_messages_owned);
+        assert!(ownership.local_audio_owned);
+        assert!(ownership.display_settings_owned);
+        assert!(ownership.prediction_owned);
+        assert!(!ownership.menus_owned);
+        assert!(!ownership.overlays_owned);
+        assert!(!ownership.fully_split());
+    }
+
+    #[test]
     fn client_state_owns_local_presentation_mirrors() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::Help);
@@ -2760,6 +2888,7 @@ mod tests {
         let mut game = GameState::new();
         game.player.fuel = 1.0;
         game.player.hull = 1.0;
+        game.player.credits = 500;
         game.player.add_cargo(crate::terrain::MineralKind::Copper);
         let mut world = WorldState::from_legacy_game(&game);
 
@@ -2779,17 +2908,43 @@ mod tests {
             world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::BuyUpgrade { index: 0 }),
             super::PlayerScopedCommandOutcome::Applied
         );
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::Rescue),
+            super::PlayerScopedCommandOutcome::Applied
+        );
 
-        assert_eq!(world.service_transactions().len(), 4);
+        assert_eq!(world.service_transactions().len(), 5);
         assert_eq!(
             world.service_transactions()[0].kind,
             super::PlayerTransactionKind::Refuel
+        );
+        assert!(
+            world.service_transactions()[0].credits_after
+                < world.service_transactions()[0].credits_before
         );
         assert_eq!(
             world.service_transactions()[2].kind,
             super::PlayerTransactionKind::SellCargo
         );
         assert_eq!(world.service_transactions()[2].cargo_after, 0);
+        assert_eq!(
+            world.service_transactions()[4].kind,
+            super::PlayerTransactionKind::Rescue
+        );
+    }
+
+    #[test]
+    fn world_state_reports_authoritative_ownership_migration_status() {
+        let world = WorldState::from_legacy_game(&GameState::new());
+        let ownership = world.ownership_summary();
+
+        assert!(ownership.players_owned);
+        assert!(ownership.hazards_owned);
+        assert!(ownership.bombs_owned);
+        assert!(ownership.infrastructure_owned);
+        assert!(ownership.simulation_tick_owned);
+        assert!(!ownership.terrain_owned);
+        assert!(!ownership.fully_split());
     }
 
     #[test]

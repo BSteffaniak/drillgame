@@ -191,6 +191,10 @@ fn observe_multiplayer_scaffolding(
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();
     let render_frame_plan = session.render_frame_plan();
+    let world_ownership = session.world().ownership_summary();
+    let client_ownership = session.local_client().ownership_summary();
+    let _world_fully_split = world_ownership.fully_split();
+    let _client_fully_split = client_ownership.fully_split();
     let _render_view_count = render_frame_plan.view_count();
     let _render_player_for_view = render_frame_plan
         .views
