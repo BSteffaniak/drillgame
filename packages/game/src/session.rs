@@ -1166,6 +1166,14 @@ pub enum PredictionFailureResolution {
     RollBackProgression,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PredictionRecoveryAction {
+    RequestTerrainDelta(CompactWorldDelta),
+    RequestAuthoritativeSnapshot { player_id: PlayerId },
+    RollBackLocalEconomy { player_id: PlayerId },
+    RollBackProgression { player_id: PlayerId },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionOffset {
     pub x: f32,
@@ -1430,6 +1438,38 @@ impl ClientPredictionState {
                 }
                 PredictionFailure::ProgressionChangedState => {
                     PredictionFailureResolution::RollBackProgression
+                }
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn prediction_recovery_actions(
+        &self,
+        player_id: PlayerId,
+        terrain_revisions: &TerrainRevisionTracker,
+        tick: SimulationTick,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> Vec<PredictionRecoveryAction> {
+        self.prediction_failures
+            .iter()
+            .map(|failure| match failure {
+                PredictionFailure::TerrainAlreadyChanged => {
+                    PredictionRecoveryAction::RequestTerrainDelta(terrain_revisions.recovery_delta(
+                        tick,
+                        terrain_position,
+                        known_revision,
+                    ))
+                }
+                PredictionFailure::HazardOrRescueChangedState => {
+                    PredictionRecoveryAction::RequestAuthoritativeSnapshot { player_id }
+                }
+                PredictionFailure::EconomyChangedState => {
+                    PredictionRecoveryAction::RollBackLocalEconomy { player_id }
+                }
+                PredictionFailure::ProgressionChangedState => {
+                    PredictionRecoveryAction::RollBackProgression { player_id }
                 }
             })
             .collect()
@@ -1788,6 +1828,23 @@ impl GameSession {
             remote_players: prediction.remote_presentations(remote_alpha, remote_stall_seconds),
             failure_resolutions: prediction.prediction_failure_resolutions(),
         }
+    }
+
+    #[must_use]
+    pub fn prediction_recovery_actions(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> Vec<PredictionRecoveryAction> {
+        self.local_client()
+            .prediction()
+            .prediction_recovery_actions(
+                self.local_client().controlled_player_id,
+                &self.terrain_revisions,
+                self.current_tick,
+                terrain_position,
+                known_revision,
+            )
     }
 
     #[must_use]
@@ -2888,6 +2945,29 @@ mod tests {
                 super::PredictionFailureResolution::RollBackProgression,
             ]
         );
+
+        let mut tracker = super::TerrainRevisionTracker::default();
+        let position = super::TerrainChunkPosition { x: 0, y: 0 };
+        tracker.mark_tiles_changed([crate::terrain::TilePosition { x: 1, y: 1 }]);
+        let actions = prediction.prediction_recovery_actions(
+            LOCAL_PLAYER_ID,
+            &tracker,
+            SimulationTick::new(12),
+            position,
+            0,
+        );
+        assert!(matches!(
+            &actions[0],
+            super::PredictionRecoveryAction::RequestTerrainDelta(
+                super::CompactWorldDelta::TerrainChunks { .. }
+            )
+        ));
+        assert!(matches!(
+            actions[1],
+            super::PredictionRecoveryAction::RollBackLocalEconomy {
+                player_id: LOCAL_PLAYER_ID
+            }
+        ));
     }
 
     #[test]
