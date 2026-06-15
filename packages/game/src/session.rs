@@ -1838,6 +1838,14 @@ pub enum PredictionRecoveryAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredictionFailureApplicationSummary {
+    pub requested_keyframe: bool,
+    pub requested_terrain_deltas: usize,
+    pub rolled_back_economy_players: Vec<PlayerId>,
+    pub rolled_back_progression_players: Vec<PlayerId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PredictionFailureRecoveryPlan {
     pub actions: Vec<PredictionRecoveryAction>,
     pub request_keyframe: bool,
@@ -1855,6 +1863,33 @@ impl PredictionFailureRecoveryPlan {
         Self {
             actions,
             request_keyframe,
+        }
+    }
+
+    #[must_use]
+    pub fn application_summary(&self) -> PredictionFailureApplicationSummary {
+        let mut requested_terrain_deltas = 0;
+        let mut rolled_back_economy_players = Vec::new();
+        let mut rolled_back_progression_players = Vec::new();
+        for action in &self.actions {
+            match action {
+                PredictionRecoveryAction::RequestTerrainDelta(_) => {
+                    requested_terrain_deltas += 1;
+                }
+                PredictionRecoveryAction::RollBackLocalEconomy { player_id } => {
+                    rolled_back_economy_players.push(*player_id);
+                }
+                PredictionRecoveryAction::RollBackProgression { player_id } => {
+                    rolled_back_progression_players.push(*player_id);
+                }
+                PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. } => {}
+            }
+        }
+        PredictionFailureApplicationSummary {
+            requested_keyframe: self.request_keyframe,
+            requested_terrain_deltas,
+            rolled_back_economy_players,
+            rolled_back_progression_players,
         }
     }
 }
@@ -2869,6 +2904,16 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn prediction_failure_application_summary(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> PredictionFailureApplicationSummary {
+        self.prediction_failure_recovery_plan(terrain_position, known_revision)
+            .application_summary()
+    }
+
+    #[must_use]
     pub fn snapshot_chunk_recovery_plan(
         &self,
         terrain_position: TerrainChunkPosition,
@@ -3740,6 +3785,41 @@ mod tests {
         assert_eq!(viewport_plans[0].remote_player_count, 1);
         assert_eq!(viewport_plans[0].remote_players.len(), 1);
         assert!(viewport_plans[0].local_player.is_some());
+    }
+
+    #[test]
+    fn prediction_failure_application_summary_covers_real_recovery_actions() {
+        let mut session = GameSession::new();
+        session
+            .local_client_mut()
+            .prediction
+            .note_prediction_failure(super::PredictionFailure::TerrainAlreadyChanged);
+        session
+            .local_client_mut()
+            .prediction
+            .note_prediction_failure(super::PredictionFailure::EconomyChangedState);
+        session
+            .local_client_mut()
+            .prediction
+            .note_prediction_failure(super::PredictionFailure::ProgressionChangedState);
+        session
+            .local_client_mut()
+            .prediction
+            .note_prediction_failure(super::PredictionFailure::CommandRejected);
+        let terrain_position = super::TerrainChunkPosition { x: 0, y: 0 };
+        session
+            .terrain_revisions
+            .mark_tiles_changed([TilePosition { x: 1, y: 1 }]);
+
+        let summary = session.prediction_failure_application_summary(terrain_position, 0);
+
+        assert!(summary.requested_keyframe);
+        assert_eq!(summary.requested_terrain_deltas, 1);
+        assert_eq!(summary.rolled_back_economy_players, vec![LOCAL_PLAYER_ID]);
+        assert_eq!(
+            summary.rolled_back_progression_players,
+            vec![LOCAL_PLAYER_ID]
+        );
     }
 
     #[test]

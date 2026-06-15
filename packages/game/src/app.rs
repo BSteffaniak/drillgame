@@ -297,6 +297,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         session.prediction_recovery_actions(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let _prediction_failure_recovery_plan = session
         .prediction_failure_recovery_plan(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
+    let _prediction_failure_application_summary = session.prediction_failure_application_summary(
+        crate::session::TerrainChunkPosition { x: 0, y: 0 },
+        0,
+    );
     let snapshot_chunk_recovery_plan = session
         .snapshot_chunk_recovery_plan(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let _snapshot_chunk_recovered_revision = snapshot_chunk_recovery_plan.recovered_revision();
