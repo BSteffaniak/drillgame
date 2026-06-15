@@ -175,6 +175,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         session.world().service_transactions().len(),
     );
     let _world_snapshot_keyframe = session.world_snapshot().keyframe_message();
+    let _live_snapshot_batch = session.live_snapshot_exchange_batch();
     session.apply_command_acknowledgement(&crate::multiplayer::CommandAcknowledgement {
         client_id: crate::multiplayer::LOCAL_CLIENT_ID,
         acknowledged_sequence: crate::multiplayer::InputSequence::new(0),
@@ -216,6 +217,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         .drain_world_delta()
         .compact_network_delta()
         .protocol_message();
+    let probe_delta = crate::session::WorldDelta::new(session.current_tick(), Vec::new());
+    let _live_delta_batch = GameSession::live_world_delta_exchange_batch(&probe_delta);
+    let _live_chunk_batch = session
+        .live_terrain_chunk_exchange_batch(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();

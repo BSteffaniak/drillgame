@@ -2961,6 +2961,14 @@ impl GameSession {
         self.world_snapshot().keyframe_message()
     }
 
+    #[must_use]
+    pub fn live_snapshot_exchange_batch(&self) -> ProtocolExchangeBatch {
+        ProtocolMessage::exchange_batch(
+            ProtocolExchangeKind::SnapshotKeyframe,
+            vec![self.live_snapshot_keyframe_message()],
+        )
+    }
+
     pub fn live_world_delta_message(delta: &WorldDelta) -> ProtocolMessage {
         ProtocolMessage::WorldDelta {
             tick: delta.tick,
@@ -2968,9 +2976,42 @@ impl GameSession {
         }
     }
 
+    #[must_use]
+    pub fn live_world_delta_exchange_batch(delta: &WorldDelta) -> ProtocolExchangeBatch {
+        ProtocolMessage::exchange_batch(
+            ProtocolExchangeKind::WorldDelta,
+            vec![Self::live_world_delta_message(delta)],
+        )
+    }
+
     pub fn drain_live_world_delta_message(&mut self) -> ProtocolMessage {
         let delta = self.drain_world_delta();
         Self::live_world_delta_message(&delta)
+    }
+
+    pub fn live_terrain_chunk_response_message(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> ProtocolMessage {
+        let recovery = self.snapshot_chunk_recovery_plan(terrain_position, known_revision);
+        ProtocolMessage::TerrainChunkResponse {
+            chunk_x: terrain_position.x,
+            chunk_y: terrain_position.y,
+            revision: recovery.recovered_revision().unwrap_or(known_revision),
+        }
+    }
+
+    #[must_use]
+    pub fn live_terrain_chunk_exchange_batch(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> ProtocolExchangeBatch {
+        ProtocolMessage::exchange_batch(
+            ProtocolExchangeKind::TerrainChunk,
+            vec![self.live_terrain_chunk_response_message(terrain_position, known_revision)],
+        )
     }
 
     pub fn live_network_integration_plan(
@@ -5090,6 +5131,45 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn live_snapshot_delta_and_chunk_exchange_batches_use_real_session_state() {
+        let mut session = GameSession::new();
+        let target = TilePosition { x: 1, y: 1 };
+        session.terrain_revisions.mark_tiles_changed([target]);
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 0.25,
+            thrust: false,
+            drill_down: false,
+        }]);
+        assert_eq!(
+            session.process_authoritative_commands_for_tick(session.current_tick()),
+            1
+        );
+
+        let snapshot_batch = session.live_snapshot_exchange_batch();
+        assert_eq!(snapshot_batch.kind, ProtocolExchangeKind::SnapshotKeyframe);
+        assert!(matches!(
+            snapshot_batch.messages.as_slice(),
+            [ProtocolMessage::SnapshotKeyframe { snapshot }]
+                if snapshot.players.iter().any(|player| player.player_id == LOCAL_PLAYER_ID)
+        ));
+        let delta = session.drain_world_delta();
+        let delta_batch = GameSession::live_world_delta_exchange_batch(&delta);
+        assert_eq!(delta_batch.kind, ProtocolExchangeKind::WorldDelta);
+        assert!(matches!(
+            delta_batch.messages.as_slice(),
+            [ProtocolMessage::WorldDelta { payload: NetworkDeltaPayload::Players { players }, .. }]
+                if players.contains(&LOCAL_PLAYER_ID)
+        ));
+        let chunk_batch = session
+            .live_terrain_chunk_exchange_batch(super::TerrainChunkPosition::from_tile(target), 0);
+        assert_eq!(chunk_batch.kind, ProtocolExchangeKind::TerrainChunk);
+        assert!(matches!(
+            chunk_batch.messages.as_slice(),
+            [ProtocolMessage::TerrainChunkResponse { revision, .. }] if *revision > 0
+        ));
     }
 
     #[test]
