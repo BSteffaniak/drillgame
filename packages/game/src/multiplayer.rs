@@ -333,6 +333,55 @@ pub enum TransportIntegrationStatus {
     Selected,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HostSessionRuntime {
+    pub config: HostRuntimeConfig,
+    pub command_session: CommandNetworkSession,
+    connected_clients: BTreeMap<ClientId, PlayerId>,
+}
+
+impl HostSessionRuntime {
+    #[must_use]
+    pub const fn new(config: HostRuntimeConfig, current_tick: SimulationTick) -> Self {
+        Self {
+            config,
+            command_session: CommandNetworkSession::new(current_tick, 2),
+            connected_clients: BTreeMap::new(),
+        }
+    }
+
+    pub fn accept_client(
+        &mut self,
+        client_id: ClientId,
+        player_id: PlayerId,
+        snapshot_tick: SimulationTick,
+    ) -> Option<ProtocolMessage> {
+        if self.connected_clients.len() >= usize::from(self.config.max_clients) {
+            return None;
+        }
+        self.connected_clients.insert(client_id, player_id);
+        Some(ProtocolMessage::JoinAccepted {
+            client_id,
+            player_id,
+            snapshot_tick,
+        })
+    }
+
+    #[must_use]
+    pub fn connected_player(&self, client_id: ClientId) -> Option<PlayerId> {
+        self.connected_clients.get(&client_id).copied()
+    }
+
+    #[must_use]
+    pub fn connected_client_count(&self) -> usize {
+        self.connected_clients.len()
+    }
+
+    pub fn apply_command_packet(&mut self, packet: &CommandPacket) -> Vec<ProtocolMessage> {
+        self.command_session.apply_command_packet_messages(packet)
+    }
+}
+
 #[must_use]
 pub const fn transport_integration_status() -> TransportIntegrationStatus {
     TransportIntegrationStatus::Deferred
@@ -929,11 +978,11 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandNetworkSession, CommandPacket, CommandSequenceTracker,
-        CommandSource, InputSequence, NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand,
-        PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
-        SimulationTick, client_authority_allowed, command_conflicts, default_local_client_runtime,
-        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
+        CommandSource, HostSessionRuntime, InputSequence, NetworkDeltaPayload, NetworkRuntimePlan,
+        PlayerCommand, PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
+        SessionToken, SimulationTick, client_authority_allowed, command_conflicts,
+        default_local_client_runtime, disconnect_reservation_policy, host_save_decision,
+        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
         per_client_ui_policy, scaffolded_edge_case_proof, session_continuity_decision,
         session_shutdown_decision, terrain_recovery_decision, transport_integration_status,
@@ -990,6 +1039,44 @@ mod tests {
         assert_eq!(plan.local_client, local_client);
         assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
         assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
+    }
+
+    #[test]
+    fn host_session_runtime_accepts_clients_and_applies_command_packets() {
+        let mut host =
+            HostSessionRuntime::new(super::HostRuntimeConfig::default(), SimulationTick::new(5));
+        let client_id = ClientId::new(8);
+        let player_id = PlayerId::new(9);
+
+        let join = host
+            .accept_client(client_id, player_id, SimulationTick::new(5))
+            .expect("client accepted");
+        assert_eq!(host.connected_client_count(), 1);
+        assert_eq!(host.connected_player(client_id), Some(player_id));
+        assert!(matches!(
+            join,
+            ProtocolMessage::JoinAccepted {
+                client_id: accepted_client,
+                player_id: accepted_player,
+                snapshot_tick,
+            } if accepted_client == client_id
+                && accepted_player == player_id
+                && snapshot_tick == SimulationTick::new(5)
+        ));
+
+        let packet = CommandPacket {
+            client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(5),
+                command: PlayerCommand::Interact,
+            }],
+        };
+        assert!(matches!(
+            host.apply_command_packet(&packet).as_slice(),
+            [ProtocolMessage::CommandAcknowledgement(_)]
+        ));
     }
 
     #[test]
