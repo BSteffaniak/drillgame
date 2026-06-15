@@ -562,6 +562,7 @@ impl WorldDelta {
                 WorldEvent::PlayerChanged { player_id }
                 | WorldEvent::CargoChanged { player_id }
                 | WorldEvent::PlayerDamaged { player_id }
+                | WorldEvent::DrillProgressed { player_id }
                 | WorldEvent::PurchaseCompleted { player_id }
                 | WorldEvent::RescueTriggered { player_id }
                 | WorldEvent::BombPlaced { player_id } => {
@@ -760,6 +761,9 @@ pub enum WorldEvent {
         player_id: PlayerId,
     },
     PlayerDamaged {
+        player_id: PlayerId,
+    },
+    DrillProgressed {
         player_id: PlayerId,
     },
     PurchaseCompleted {
@@ -1081,6 +1085,12 @@ impl WorldState {
             .map(PlayerInventorySummary::from_player)
     }
 
+    pub fn sync_active_drill_to_legacy_game(&self, player_id: PlayerId, game: &mut GameState) {
+        if player_id == LOCAL_PLAYER_ID {
+            game.active_drill = self.active_drills.get(&player_id).copied();
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "compatibility command bridge covers all player-scoped intents until real systems split out"
@@ -1282,7 +1292,10 @@ fn world_events_for_applied_command(command: &SequencedPlayerCommand) -> Vec<Wor
     match command.command {
         PlayerCommand::Movement {
             drill_down: true, ..
-        } => vec![WorldEvent::ImportantEffectTriggered],
+        } => vec![
+            WorldEvent::ImportantEffectTriggered,
+            WorldEvent::DrillProgressed { player_id },
+        ],
         PlayerCommand::Refuel | PlayerCommand::Repair | PlayerCommand::BuyUpgrade { .. } => {
             vec![WorldEvent::PurchaseCompleted { player_id }]
         }
@@ -2971,6 +2984,7 @@ impl GameSession {
             let tick = self.current_tick;
             self.process_authoritative_commands_for_tick(tick);
             self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+            self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
             self.advance_tick();
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
@@ -3011,6 +3025,7 @@ impl GameSession {
                 self.game.player.velocity_x = authoritative_player.velocity_x;
                 self.game.player.velocity_y = authoritative_player.velocity_y;
             }
+            self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
         }
     }
 
@@ -3020,6 +3035,11 @@ impl GameSession {
         {
             self.game.player = player.clone();
         }
+    }
+
+    fn sync_legacy_active_drill_from_world(&mut self, player_id: PlayerId) {
+        self.world
+            .sync_active_drill_to_legacy_game(player_id, &mut self.game);
     }
 
     fn capture_legacy_events(
@@ -4321,6 +4341,29 @@ mod tests {
             .expect("world player exists");
         assert!(world_player.velocity_x.abs() < f32::EPSILON);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn routed_drill_command_syncs_active_drill_to_legacy_adapter() {
+        let mut session = GameSession::new();
+        let tick = session.current_tick();
+
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 0.0,
+            thrust: false,
+            drill_down: true,
+        }]);
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+        assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_some());
+        session.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+        assert!(session.game().active_drill.is_some());
+        assert!(session.drain_events().iter().any(|event| matches!(
+            event,
+            super::WorldEvent::DrillProgressed {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
     }
 
     #[test]

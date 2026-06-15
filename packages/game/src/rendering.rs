@@ -71,6 +71,7 @@ impl GameRenderer {
                 | WorldEvent::PlayerChanged { .. }
                 | WorldEvent::CargoChanged { .. }
                 | WorldEvent::PlayerDamaged { .. }
+                | WorldEvent::DrillProgressed { .. }
                 | WorldEvent::PurchaseCompleted { .. }
                 | WorldEvent::RescueTriggered { .. }
                 | WorldEvent::BombPlaced { .. }
