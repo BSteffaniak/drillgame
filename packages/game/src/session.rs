@@ -1331,6 +1331,12 @@ pub struct ReconciledMovement {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplayedPrediction {
+    pub predicted: PredictedMovement,
+    pub replayed_command_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RemotePlayerPresentation {
     pub player_id: PlayerId,
     pub x: f32,
@@ -1433,6 +1439,33 @@ impl ClientPredictionState {
             predicted,
             correction_plan,
             correction_offset,
+        }
+    }
+
+    #[must_use]
+    pub fn replay_unacknowledged_movement(
+        authoritative: &PlayerSnapshot,
+        commands: &[SequencedPlayerCommand],
+    ) -> ReplayedPrediction {
+        let mut predicted = PredictedMovement::from_snapshot(authoritative);
+        let mut replayed_command_count = 0;
+        for command in commands {
+            if let PlayerCommand::Movement {
+                horizontal, thrust, ..
+            } = command.command
+            {
+                replayed_command_count += 1;
+                predicted.velocity_x = horizontal;
+                if thrust {
+                    predicted.velocity_y -= 1.0;
+                }
+                predicted.x += predicted.velocity_x;
+                predicted.y += predicted.velocity_y;
+            }
+        }
+        ReplayedPrediction {
+            predicted,
+            replayed_command_count,
         }
     }
 
@@ -1923,14 +1956,25 @@ impl GameSession {
         remote_alpha: f32,
         remote_stall_seconds: f32,
     ) -> PredictionPresentationPlan {
-        let local_movement = self.predicted_local_movement(delta_seconds);
+        let prediction = self.local_client().prediction();
+        let local_movement = authoritative_snapshot.map_or_else(
+            || self.predicted_local_movement(delta_seconds),
+            |authoritative| {
+                Some(
+                    ClientPredictionState::replay_unacknowledged_movement(
+                        authoritative,
+                        prediction.unacknowledged_commands(),
+                    )
+                    .predicted,
+                )
+            },
+        );
         let correction =
             local_movement
                 .zip(authoritative_snapshot)
                 .map(|(predicted, authoritative)| {
                     ClientPredictionState::reconcile_movement(predicted, authoritative)
                 });
-        let prediction = self.local_client().prediction();
         PredictionPresentationPlan {
             local_movement,
             correction,
@@ -2299,7 +2343,7 @@ mod tests {
         multiplayer::{
             CommandAcknowledgement, CommandRejection, InputSequence, LOCAL_CLIENT_ID,
             LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolMessage,
-            SimulationTick,
+            SequencedPlayerCommand, SimulationTick,
         },
     };
 
@@ -3107,6 +3151,22 @@ mod tests {
         let predicted = super::ClientPredictionState::predict_local_movement(&previous, 0.5);
         assert!((predicted.x - 12.0).abs() < f32::EPSILON);
         assert!((predicted.y - 19.0).abs() < f32::EPSILON);
+
+        let replayed = super::ClientPredictionState::replay_unacknowledged_movement(
+            &previous,
+            &[SequencedPlayerCommand {
+                player_id: LOCAL_PLAYER_ID,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::Movement {
+                    horizontal: 3.0,
+                    thrust: true,
+                    drill_down: false,
+                },
+            }],
+        );
+        assert_eq!(replayed.replayed_command_count, 1);
+        assert!((replayed.predicted.x - 13.0).abs() < f32::EPSILON);
 
         let reconciled = super::ClientPredictionState::reconcile_movement(predicted, &next);
         assert_eq!(reconciled.correction_plan, super::CorrectionPlan::Smooth);
