@@ -221,6 +221,7 @@ fn observe_multiplayer_scaffolding(
         render_frame_plan.remote_player_presentations(view, &prediction_presentation_plan)
     });
     let _render_viewport_plans = render_frame_plan.viewport_plans(&prediction_presentation_plan);
+    let _render_hud_snapshots = render_frame_plan.hud_snapshots();
     let _feedback_output_count = prediction_presentation_plan.feedback_outputs.len();
     let _save_from_world = crate::save::PersistentWorldSave::from_world_and_legacy_game(
         session.world(),

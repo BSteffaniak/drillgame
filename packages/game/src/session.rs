@@ -355,6 +355,30 @@ impl PlayerSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PerPlayerHudSnapshot {
+    pub player_id: PlayerId,
+    pub cargo_used: u32,
+    pub credits: u32,
+    pub fuel: f32,
+    pub hull: f32,
+    pub scanner_cooldown_seconds: f32,
+}
+
+impl PerPlayerHudSnapshot {
+    #[must_use]
+    pub const fn from_player_snapshot(snapshot: &PlayerSnapshot) -> Self {
+        Self {
+            player_id: snapshot.player_id,
+            cargo_used: snapshot.cargo_used,
+            credits: snapshot.credits,
+            fuel: snapshot.fuel,
+            hull: snapshot.hull,
+            scanner_cooldown_seconds: snapshot.scanner_cooldown_seconds,
+        }
+    }
+}
+
 /// Compatibility world snapshot keyed by authoritative simulation tick.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorldSnapshot {
@@ -1477,6 +1501,20 @@ impl RenderFramePlan {
                     .remote_player_presentations(view, prediction_plan)
                     .len(),
             })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn hud_snapshot_for_view(&self, view: &ClientView) -> Option<PerPlayerHudSnapshot> {
+        self.player_for_view(view)
+            .map(PerPlayerHudSnapshot::from_player_snapshot)
+    }
+
+    #[must_use]
+    pub fn hud_snapshots(&self) -> Vec<PerPlayerHudSnapshot> {
+        self.views
+            .iter()
+            .filter_map(|view| self.hud_snapshot_for_view(view))
             .collect()
     }
 }
@@ -2977,6 +3015,29 @@ mod tests {
         assert_eq!(viewport_plans[0].client_id, LOCAL_CLIENT_ID);
         assert_eq!(viewport_plans[0].remote_player_count, 1);
         assert!(viewport_plans[0].local_player.is_some());
+    }
+
+    #[test]
+    fn render_frame_plan_exposes_per_view_hud_snapshots() {
+        let mut session = GameSession::new();
+        session
+            .world
+            .set_scanner_cooldown_seconds(LOCAL_PLAYER_ID, 2.0);
+        session
+            .world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .credits = 123;
+
+        let frame_plan = session.render_frame_plan();
+        let hud = frame_plan
+            .hud_snapshot_for_view(&frame_plan.views[0])
+            .expect("hud snapshot exists");
+
+        assert_eq!(hud.player_id, LOCAL_PLAYER_ID);
+        assert_eq!(hud.credits, 123);
+        assert!((hud.scanner_cooldown_seconds - 2.0).abs() < f32::EPSILON);
+        assert_eq!(frame_plan.hud_snapshots(), vec![hud]);
     }
 
     #[test]
