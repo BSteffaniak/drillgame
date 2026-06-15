@@ -12,7 +12,8 @@ use crate::{
     input::PlayerInput,
     multiplayer::{
         ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-        PlayerCommand, PlayerId, SIMULATION_HZ, SequencedPlayerCommand, SimulationTick,
+        NetworkDeltaPayload, NetworkTerrainChunkRevision, PlayerCommand, PlayerId, SIMULATION_HZ,
+        SequencedPlayerCommand, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -292,6 +293,39 @@ pub enum CompactWorldDelta {
     KeyframeRequired {
         tick: SimulationTick,
     },
+}
+
+impl CompactWorldDelta {
+    #[must_use]
+    pub fn network_payload(&self) -> NetworkDeltaPayload {
+        match self {
+            Self::Noop { .. } => NetworkDeltaPayload::Noop,
+            Self::TerrainChunks { revisions, .. } => NetworkDeltaPayload::TerrainChunks {
+                revisions: revisions
+                    .iter()
+                    .map(|revision| NetworkTerrainChunkRevision {
+                        chunk_x: revision.position.x,
+                        chunk_y: revision.position.y,
+                        revision: revision.revision,
+                    })
+                    .collect(),
+            },
+            Self::Players { players, .. } => NetworkDeltaPayload::Players {
+                players: players.clone(),
+            },
+            Self::KeyframeRequired { .. } => NetworkDeltaPayload::KeyframeRequired,
+        }
+    }
+
+    #[must_use]
+    pub const fn tick(&self) -> SimulationTick {
+        match self {
+            Self::Noop { tick }
+            | Self::TerrainChunks { tick, .. }
+            | Self::Players { tick, .. }
+            | Self::KeyframeRequired { tick } => *tick,
+        }
+    }
 }
 
 /// Compatibility world delta emitted after a session update.
@@ -1948,7 +1982,10 @@ mod tests {
 
     use crate::{
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
-        multiplayer::{LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, PlayerCommand, PlayerId, SimulationTick},
+        multiplayer::{
+            LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
+            SimulationTick,
+        },
     };
 
     use super::{ClientState, GameSession, WorldState};
@@ -2395,6 +2432,14 @@ mod tests {
             super::CompactWorldDelta::Players {
                 tick: SimulationTick::new(8),
                 players: vec![LOCAL_PLAYER_ID],
+            }
+        );
+
+        let payload = delta.compact_network_delta().network_payload();
+        assert_eq!(
+            payload,
+            NetworkDeltaPayload::Players {
+                players: vec![LOCAL_PLAYER_ID]
             }
         );
 

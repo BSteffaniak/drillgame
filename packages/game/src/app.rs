@@ -165,6 +165,11 @@ fn observe_multiplayer_scaffolding(
         session.world().infrastructure().len(),
         session.world().service_transactions().len(),
     );
+    let _network_payload = session
+        .drain_world_delta()
+        .compact_network_delta()
+        .network_payload();
+    let _network_delta_tick = session.drain_world_delta().compact_network_delta().tick();
     let _local_view = session.local_view();
     let _client_view_count = session.client_count();
     let _client_views = session.render_views();

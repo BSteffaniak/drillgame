@@ -371,6 +371,25 @@ impl NetworkRuntimePlan {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkTerrainChunkRevision {
+    pub chunk_x: i32,
+    pub chunk_y: i32,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NetworkDeltaPayload {
+    Noop,
+    TerrainChunks {
+        revisions: Vec<NetworkTerrainChunkRevision>,
+    },
+    Players {
+        players: Vec<PlayerId>,
+    },
+    KeyframeRequired,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum ProtocolMessage {
     JoinRequest {
@@ -393,6 +412,7 @@ pub enum ProtocolMessage {
     },
     WorldDelta {
         tick: SimulationTick,
+        payload: NetworkDeltaPayload,
     },
     TerrainChunkRequest {
         chunk_x: i32,
@@ -881,9 +901,9 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 mod tests {
     use super::{
         ClientId, CommandAcceptance, CommandNetworkSession, CommandPacket, CommandSequenceTracker,
-        CommandSource, InputSequence, NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage,
-        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        client_authority_allowed, command_conflicts, default_local_client_runtime,
+        CommandSource, InputSequence, NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand,
+        PlayerId, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken,
+        SimulationTick, client_authority_allowed, command_conflicts, default_local_client_runtime,
         disconnect_reservation_policy, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
@@ -909,6 +929,7 @@ mod tests {
     fn protocol_messages_classify_reliability() {
         let command_message = ProtocolMessage::WorldDelta {
             tick: SimulationTick::new(7),
+            payload: NetworkDeltaPayload::Noop,
         };
         let reconnect_message = ProtocolMessage::ReconnectRequest {
             client_id: ClientId::new(3),
