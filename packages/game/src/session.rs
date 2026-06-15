@@ -1558,6 +1558,34 @@ pub struct TentativeFeedbackOutput {
     pub channel: TentativeFeedbackChannel,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TentativeFeedbackFrame {
+    pub outputs: Vec<TentativeFeedbackOutput>,
+    pub render_output_count: usize,
+    pub audio_output_count: usize,
+}
+
+impl TentativeFeedbackFrame {
+    #[must_use]
+    pub fn from_outputs(outputs: Vec<TentativeFeedbackOutput>) -> Self {
+        let render_output_count = outputs
+            .iter()
+            .filter(|output| output.channel == TentativeFeedbackChannel::Render)
+            .count();
+        let audio_output_count = outputs.len() - render_output_count;
+        Self {
+            outputs,
+            render_output_count,
+            audio_output_count,
+        }
+    }
+
+    #[must_use]
+    pub const fn has_drill_feedback(&self) -> bool {
+        self.render_output_count > 0 || self.audio_output_count > 0
+    }
+}
+
 impl TentativeFeedbackPresentation {
     #[must_use]
     pub const fn output(self) -> TentativeFeedbackOutput {
@@ -1984,6 +2012,11 @@ impl ClientPredictionState {
             .into_iter()
             .map(TentativeFeedbackPresentation::output)
             .collect()
+    }
+
+    #[must_use]
+    pub fn tentative_feedback_frame(&self) -> TentativeFeedbackFrame {
+        TentativeFeedbackFrame::from_outputs(self.tentative_feedback_outputs())
     }
 
     #[must_use]
@@ -4049,6 +4082,10 @@ mod tests {
                 },
             ]
         );
+        let feedback_frame = prediction.tentative_feedback_frame();
+        assert_eq!(feedback_frame.render_output_count, 1);
+        assert_eq!(feedback_frame.audio_output_count, 1);
+        assert!(feedback_frame.has_drill_feedback());
         let offset = prediction.correction_offset().expect("offset set");
         assert!((offset.x - 2.0).abs() < f32::EPSILON);
         prediction.clear_feedback();

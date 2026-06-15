@@ -269,6 +269,8 @@ fn observe_multiplayer_scaffolding(
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::DrillProgressVisual);
     let _pending_feedback_count = prediction_probe.pending_feedback().len();
     let _tentative_feedback_presentations = prediction_probe.tentative_feedback_presentations();
+    let tentative_feedback_frame = prediction_probe.tentative_feedback_frame();
+    let _has_tentative_feedback = tentative_feedback_frame.has_drill_feedback();
     prediction_probe.clear_feedback();
     prediction_probe.set_correction_offset(crate::session::CorrectionOffset::new(0.0, 0.0));
     let _correction_offset = prediction_probe.correction_offset();
