@@ -55,7 +55,18 @@ Press `E` at a surface building to walk inside its room. Move with `A`/`D`, use 
 
 ## Multiplayer Status
 
-Multiplayer support is under active rearchitecture. Current code has an in-memory faithful transport adapter, host/client runtime scaffolding, player-scoped authoritative command slices, split-screen render planning, prediction/reconciliation coverage, and save/session metadata tests. This is not yet a production online release: platform networking, matchmaking/NAT traversal, invites, and manual split-screen QA remain future work.
+Multiplayer support is under active rearchitecture. Current code has an in-memory faithful transport adapter, host/client runtime scaffolding, player-scoped authoritative command slices, split-screen render planning, prediction/reconciliation coverage, deterministic replay coverage, and save/session metadata tests.
+
+This is not yet a production online release. Known limitations:
+
+- local split-screen still needs manual live-window QA and screenshots/video notes
+- second-player input binding metadata exists, but full multi-controller/keyboard polling needs productization
+- production online transport is planned as a QUIC-style backend, but no socket dependency is integrated yet
+- NAT traversal, matchmaking/server browser, platform invites, and host migration are explicitly deferred
+- legacy `GameState` still participates in live gameplay as compatibility glue while authoritative systems are extracted
+- prediction/reconciliation polish is covered by tests and plans, but still needs live high-ping playtesting
+
+## Saves and Settings
 
 - Quick save: `drillgame-save.json`
 - Save slots: `drillgame-save-slot-1.json` through `drillgame-save-slot-3.json`
