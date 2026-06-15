@@ -174,6 +174,8 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         planned_player_scoped_systems,
         all_future_producers_authoritative,
     );
+    let transport_decision = crate::multiplayer::transport_implementation_decision();
+    let _transport_deferred = transport_decision.deferred_until_concrete_need();
     let _fixed_tick_audit_items = GameSession::fixed_tick_audit_items();
     let _snapshot_purposes = GameSession::snapshot_purposes();
     let _client_presentation_fields = GameSession::client_presentation_fields();

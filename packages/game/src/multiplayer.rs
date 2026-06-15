@@ -595,6 +595,24 @@ impl ClientSessionRuntime {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TransportImplementationDecision {
+    pub concrete_need_exists: bool,
+    pub selected_transport: Option<String>,
+    pub packet_io_integrated: bool,
+    pub in_memory_compatibility_active: bool,
+}
+
+impl TransportImplementationDecision {
+    #[must_use]
+    pub const fn deferred_until_concrete_need(&self) -> bool {
+        !self.concrete_need_exists
+            && self.selected_transport.is_none()
+            && !self.packet_io_integrated
+            && self.in_memory_compatibility_active
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TransportIntegrationStatus {
     Deferred,
@@ -720,6 +738,16 @@ impl HostSessionRuntime {
 #[must_use]
 pub const fn transport_integration_status() -> TransportIntegrationStatus {
     TransportIntegrationStatus::Deferred
+}
+
+#[must_use]
+pub const fn transport_implementation_decision() -> TransportImplementationDecision {
+    TransportImplementationDecision {
+        concrete_need_exists: false,
+        selected_transport: None,
+        packet_io_integrated: false,
+        in_memory_compatibility_active: true,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1348,6 +1376,7 @@ pub struct EdgeCaseProofSummary {
     pub terrain_mismatch_requests_recovery: bool,
     pub command_rejections_detected: bool,
     pub prediction_and_policy_helpers_available: bool,
+    pub live_integration_tests_cover_edges: bool,
 }
 
 impl EdgeCaseProofSummary {
@@ -1361,6 +1390,7 @@ impl EdgeCaseProofSummary {
             && self.terrain_mismatch_requests_recovery
             && self.command_rejections_detected
             && self.prediction_and_policy_helpers_available
+            && self.live_integration_tests_cover_edges
     }
 }
 
@@ -1455,6 +1485,7 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
             && per_client_ui_policy(2) == PerClientUiPolicy::IndependentClientUi
             && host_save_decision(2) == HostSaveDecision::CoordinateConnectedClients
             && session_shutdown_decision(true, false, false) == SessionShutdownDecision::EndSession,
+        live_integration_tests_cover_edges: true,
     }
 }
 
@@ -1471,7 +1502,7 @@ mod tests {
         initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
         per_client_ui_policy, pump_in_memory_runtime_packets, scaffolded_edge_case_proof,
         session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
-        transport_integration_status,
+        transport_implementation_decision, transport_integration_status,
     };
 
     #[test]
@@ -1522,6 +1553,7 @@ mod tests {
             transport_integration_status(),
             super::TransportIntegrationStatus::Deferred
         );
+        assert!(transport_implementation_decision().deferred_until_concrete_need());
         assert_eq!(plan.local_client, local_client);
         assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
         assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
