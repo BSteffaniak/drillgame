@@ -253,13 +253,15 @@ fn observe_multiplayer_scaffolding(
     let predicted_movement =
         ClientPredictionState::predict_local_movement(&snapshot, delta_seconds);
     let _predicted_from_snapshot = crate::session::PredictedMovement::from_snapshot(&snapshot);
-    let _reconciled_movement =
+    let reconciled_movement =
         ClientPredictionState::reconcile_movement(predicted_movement, &snapshot);
     let _replayed_reconciliation =
         crate::session::ReplayedReconciliation::from_authoritative_snapshot(
             &snapshot,
             prediction.unacknowledged_commands(),
         );
+    let _correction_presentation_frame =
+        crate::session::CorrectionPresentationFrame::from_reconciliation(&reconciled_movement, 0.5);
     let _remote_player_presentation =
         ClientPredictionState::remote_player_presentation(&snapshot, None, 0.0, 0.0);
     let mut prediction_probe = prediction.clone();

@@ -1754,6 +1754,24 @@ pub struct CorrectedMovementPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CorrectionPresentationFrame {
+    pub presentation: CorrectedMovementPresentation,
+    pub smoothing_alpha: f32,
+    pub snap_applied: bool,
+}
+
+impl CorrectionPresentationFrame {
+    #[must_use]
+    pub fn from_reconciliation(reconciliation: &ReconciledMovement, smoothing_alpha: f32) -> Self {
+        Self {
+            presentation: reconciliation.corrected_presentation(smoothing_alpha),
+            smoothing_alpha: smoothing_alpha.clamp(0.0, 1.0),
+            snap_applied: reconciliation.correction_plan == CorrectionPlan::Snap,
+        }
+    }
+}
+
 impl ReconciledMovement {
     #[must_use]
     pub fn corrected_presentation(&self, smoothing_alpha: f32) -> CorrectedMovementPresentation {
@@ -4009,6 +4027,14 @@ mod tests {
         let smoothed = reconciled.corrected_presentation(0.5);
         assert_eq!(smoothed.correction_plan, super::CorrectionPlan::Smooth);
         assert!((smoothed.x - 16.0).abs() < f32::EPSILON);
+        let correction_frame =
+            super::CorrectionPresentationFrame::from_reconciliation(&reconciled, 1.5);
+        assert!((correction_frame.smoothing_alpha - 1.0).abs() < f32::EPSILON);
+        assert!(!correction_frame.snap_applied);
+        assert_eq!(
+            correction_frame.presentation.correction_plan,
+            super::CorrectionPlan::Smooth
+        );
 
         let interpolated = super::ClientPredictionState::remote_player_presentation(
             &previous,
