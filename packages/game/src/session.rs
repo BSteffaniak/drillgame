@@ -1494,6 +1494,14 @@ pub struct RenderFramePlan {
     pub players: Vec<PlayerSnapshot>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderWorldPlayerPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub local_to_view: bool,
+}
+
 impl RenderFramePlan {
     #[must_use]
     pub fn from_world_and_clients(
@@ -1565,6 +1573,22 @@ impl RenderFramePlan {
             .iter()
             .copied()
             .filter(|player| player.player_id != view.controlled_player_id)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn world_player_presentations_for_view(
+        &self,
+        view: &ClientView,
+    ) -> Vec<RenderWorldPlayerPresentation> {
+        self.players
+            .iter()
+            .map(|player| RenderWorldPlayerPresentation {
+                player_id: player.player_id,
+                x: player.x,
+                y: player.y,
+                local_to_view: player.player_id == view.controlled_player_id,
+            })
             .collect()
     }
 
@@ -4447,6 +4471,19 @@ mod tests {
         assert!(session.world().player(second_player).is_some());
         assert_eq!(session.render_frame_plan().view_count(), 2);
         assert_eq!(session.client_views().len(), 2);
+        let frame_plan = session.render_frame_plan();
+        let second_view = frame_plan
+            .views
+            .iter()
+            .find(|view| view.controlled_player_id == second_player)
+            .expect("second player view exists");
+        let world_players = frame_plan.world_player_presentations_for_view(second_view);
+        assert_eq!(world_players.len(), 2);
+        assert!(
+            world_players
+                .iter()
+                .any(|player| { player.player_id == second_player && player.local_to_view })
+        );
         assert!(!session.add_local_client_player(second_client, PlayerId::new(3)));
         assert!(!session.add_local_client_player(ClientId::new(3), second_player));
     }
