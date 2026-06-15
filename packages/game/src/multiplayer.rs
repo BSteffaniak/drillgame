@@ -327,6 +327,50 @@ pub const fn default_local_client_runtime() -> ClientRuntimeConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransportPacket {
+    pub reliability: ReliabilityClass,
+    pub message: ProtocolMessage,
+}
+
+impl TransportPacket {
+    #[must_use]
+    pub const fn from_message(message: ProtocolMessage) -> Self {
+        Self {
+            reliability: message.reliability_class(),
+            message,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct InMemoryTransportQueues {
+    client_to_host: Vec<TransportPacket>,
+    host_to_clients: BTreeMap<ClientId, Vec<TransportPacket>>,
+}
+
+impl InMemoryTransportQueues {
+    pub fn send_to_host(&mut self, message: ProtocolMessage) {
+        self.client_to_host
+            .push(TransportPacket::from_message(message));
+    }
+
+    pub fn drain_client_to_host(&mut self) -> Vec<TransportPacket> {
+        self.client_to_host.drain(..).collect()
+    }
+
+    pub fn send_to_client(&mut self, client_id: ClientId, message: ProtocolMessage) {
+        self.host_to_clients
+            .entry(client_id)
+            .or_default()
+            .push(TransportPacket::from_message(message));
+    }
+
+    pub fn drain_host_to_client(&mut self, client_id: ClientId) -> Vec<TransportPacket> {
+        self.host_to_clients.remove(&client_id).unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ClientSessionRuntime {
     pub config: ClientRuntimeConfig,
@@ -1035,9 +1079,9 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
-        CommandSequenceTracker, CommandSource, HostSessionRuntime, InputSequence,
-        NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand, PlayerId, ProtocolMessage,
-        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        CommandSequenceTracker, CommandSource, HostSessionRuntime, InMemoryTransportQueues,
+        InputSequence, NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand, PlayerId,
+        ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
         client_authority_allowed, command_conflicts, default_local_client_runtime,
         disconnect_reservation_policy, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
@@ -1167,6 +1211,33 @@ mod tests {
             payload: NetworkDeltaPayload::Noop,
         });
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(21));
+    }
+
+    #[test]
+    fn in_memory_transport_queues_classify_and_route_packets() {
+        let mut queues = InMemoryTransportQueues::default();
+        let client_id = ClientId::new(4);
+        queues.send_to_host(ProtocolMessage::CommandPacket(CommandPacket {
+            client_id,
+            commands: Vec::new(),
+        }));
+        queues.send_to_client(
+            client_id,
+            ProtocolMessage::JoinAccepted {
+                client_id,
+                player_id: PlayerId::new(5),
+                snapshot_tick: SimulationTick::new(6),
+            },
+        );
+
+        let host_packets = queues.drain_client_to_host();
+        assert_eq!(
+            host_packets[0].reliability,
+            ReliabilityClass::UnreliableSequenced
+        );
+        let client_packets = queues.drain_host_to_client(client_id);
+        assert_eq!(client_packets[0].reliability, ReliabilityClass::Reliable);
+        assert!(queues.drain_host_to_client(client_id).is_empty());
     }
 
     #[test]
