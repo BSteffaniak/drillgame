@@ -166,6 +166,11 @@ fn observe_multiplayer_scaffolding(
         session.world().service_transactions().len(),
     );
     let _world_snapshot_keyframe = session.world_snapshot().keyframe_message();
+    session.apply_command_acknowledgement(&crate::multiplayer::CommandAcknowledgement {
+        client_id: crate::multiplayer::LOCAL_CLIENT_ID,
+        acknowledged_sequence: crate::multiplayer::InputSequence::new(0),
+        authoritative_tick: session.current_tick(),
+    });
     let _network_payload = session
         .drain_world_delta()
         .compact_network_delta()

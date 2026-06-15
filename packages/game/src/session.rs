@@ -11,8 +11,8 @@ use crate::{
     },
     input::PlayerInput,
     multiplayer::{
-        ClientId, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-        NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
+        ClientId, CommandAcknowledgement, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID,
+        LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
         NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolMessage, SIMULATION_HZ,
         SequencedPlayerCommand, SimulationTick,
     },
@@ -2132,6 +2132,13 @@ impl GameSession {
             .acknowledge_commands_through(sequence);
     }
 
+    pub fn apply_command_acknowledgement(&mut self, acknowledgement: &CommandAcknowledgement) {
+        self.acknowledge_client_commands_through(
+            acknowledgement.client_id,
+            acknowledgement.acknowledged_sequence,
+        );
+    }
+
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         for _ in 0..fixed_steps {
@@ -2202,8 +2209,8 @@ mod tests {
     use crate::{
         game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
         multiplayer::{
-            LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
-            ProtocolMessage, SimulationTick,
+            CommandAcknowledgement, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
+            PlayerCommand, PlayerId, ProtocolMessage, SimulationTick,
         },
     };
 
@@ -2839,6 +2846,27 @@ mod tests {
         let commands = session.sequence_local_commands(vec![PlayerCommand::Interact]);
 
         session.acknowledge_client_commands_through(LOCAL_CLIENT_ID, commands[0].sequence);
+
+        assert!(
+            session
+                .local_client()
+                .prediction()
+                .unacknowledged_commands()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn command_acknowledgement_message_prunes_prediction_buffer() {
+        let mut session = GameSession::new();
+        let commands =
+            session.sequence_local_commands(vec![PlayerCommand::Interact, PlayerCommand::Confirm]);
+
+        session.apply_command_acknowledgement(&CommandAcknowledgement {
+            client_id: LOCAL_CLIENT_ID,
+            acknowledged_sequence: commands[1].sequence,
+            authoritative_tick: SimulationTick::new(2),
+        });
 
         assert!(
             session
