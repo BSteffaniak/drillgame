@@ -896,6 +896,29 @@ impl WorldState {
     }
 }
 
+fn world_events_for_applied_command(command: &SequencedPlayerCommand) -> Vec<WorldEvent> {
+    let player_id = command.player_id;
+    match command.command {
+        PlayerCommand::Movement {
+            drill_down: true, ..
+        } => vec![WorldEvent::ImportantEffectTriggered],
+        PlayerCommand::Refuel | PlayerCommand::Repair | PlayerCommand::BuyUpgrade { .. } => {
+            vec![WorldEvent::PurchaseCompleted { player_id }]
+        }
+        PlayerCommand::SellCargo => vec![WorldEvent::CargoChanged { player_id }],
+        PlayerCommand::PlaceBomb => vec![WorldEvent::BombPlaced { player_id }],
+        PlayerCommand::PlaceInfrastructure { .. } | PlayerCommand::UseScanner => {
+            vec![WorldEvent::ImportantEffectTriggered]
+        }
+        PlayerCommand::Rescue => vec![WorldEvent::RescueTriggered { player_id }],
+        PlayerCommand::Movement { .. }
+        | PlayerCommand::Interact
+        | PlayerCommand::Cancel
+        | PlayerCommand::Confirm
+        | PlayerCommand::SelectUpgrade { .. } => Vec::new(),
+    }
+}
+
 const fn infrastructure_kind_for_slot(slot: u8) -> Option<InfrastructureKind> {
     match slot {
         0 => Some(InfrastructureKind::SignalRelay),
@@ -1816,6 +1839,7 @@ impl GameSession {
         let controlled_player_id = self.local_client().controlled_player_id;
         let mut latest_local_sequence = None;
         let mut changed_players = BTreeSet::new();
+        let mut command_events = Vec::new();
         for command in &tick_commands {
             if self
                 .world
@@ -1823,6 +1847,7 @@ impl GameSession {
                 == PlayerScopedCommandOutcome::Applied
             {
                 changed_players.insert(command.player_id);
+                command_events.extend(world_events_for_applied_command(command));
             }
             if command.player_id == controlled_player_id {
                 latest_local_sequence = latest_local_sequence.max(Some(command.sequence));
@@ -1831,6 +1856,9 @@ impl GameSession {
 
         for player_id in changed_players {
             self.push_event(WorldEvent::PlayerChanged { player_id });
+        }
+        for event in command_events {
+            self.push_event(event);
         }
 
         if let Some(sequence) = latest_local_sequence {
@@ -2667,6 +2695,43 @@ mod tests {
         assert!(session.drain_events().iter().any(|event| matches!(
             event,
             super::WorldEvent::PlayerChanged {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+    }
+
+    #[test]
+    fn authoritative_command_processing_emits_domain_events_for_applied_commands() {
+        let mut session = GameSession::new();
+        session.game.player.bombs = 1;
+        session
+            .world
+            .sync_from_legacy_game(session.current_tick(), &session.game.clone());
+        let tick = session.current_tick();
+
+        session.sequence_local_commands(vec![
+            PlayerCommand::PlaceBomb,
+            PlayerCommand::Refuel,
+            PlayerCommand::SellCargo,
+        ]);
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 3);
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::BombPlaced {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::PurchaseCompleted {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::CargoChanged {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
