@@ -876,6 +876,41 @@ impl PlayerInventorySummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerMovementIntent {
+    pub horizontal: f32,
+    pub thrust: bool,
+    pub drill_down: bool,
+}
+
+impl PlayerMovementIntent {
+    #[must_use]
+    pub const fn from_command(command: &PlayerCommand) -> Option<Self> {
+        if let PlayerCommand::Movement {
+            horizontal,
+            thrust,
+            drill_down,
+        } = *command
+        {
+            Some(Self {
+                horizontal,
+                thrust,
+                drill_down,
+            })
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn apply_to_input(self, mut input: PlayerInput) -> PlayerInput {
+        input.horizontal = self.horizontal;
+        input.thrust = self.thrust;
+        input.drill_down = self.drill_down;
+        input
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerScopedCommandOutcome {
     Applied,
@@ -2355,6 +2390,7 @@ pub struct GameSession {
     terrain_revisions: TerrainRevisionTracker,
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
     pending_events: Vec<WorldEvent>,
+    latest_local_movement_intent: Option<PlayerMovementIntent>,
 }
 
 impl GameSession {
@@ -2454,6 +2490,7 @@ impl GameSession {
             terrain_revisions: TerrainRevisionTracker::default(),
             pending_commands: BTreeMap::new(),
             pending_events: Vec::new(),
+            latest_local_movement_intent: None,
         }
     }
 
@@ -2759,7 +2796,19 @@ impl GameSession {
         &mut self,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
+        self.latest_local_movement_intent = commands
+            .iter()
+            .rev()
+            .find_map(PlayerMovementIntent::from_command);
         self.sequence_local_commands(commands)
+    }
+
+    pub fn update_legacy_input_from_authoritative_commands(
+        &self,
+        input: PlayerInput,
+    ) -> PlayerInput {
+        self.latest_local_movement_intent
+            .map_or(input, |intent| intent.apply_to_input(input))
     }
 
     pub fn sequence_client_commands(
@@ -2935,8 +2984,34 @@ impl GameSession {
         self.game.update(input, delta_seconds);
         self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
         self.sync_client_settings_from_legacy_game();
+        self.sync_legacy_mutations_into_world_preserving_authoritative_movement(&previous_player);
+    }
+
+    fn sync_legacy_mutations_into_world_preserving_authoritative_movement(
+        &mut self,
+        previous_legacy_player: &Player,
+    ) {
+        let authoritative_player = self.world.player(LOCAL_PLAYER_ID).cloned();
         self.world
             .sync_from_legacy_game(self.current_tick, &self.game);
+        if let (Some(authoritative_player), Some(world_player)) =
+            (authoritative_player, self.world.player_mut(LOCAL_PLAYER_ID))
+        {
+            world_player.x = authoritative_player.x;
+            world_player.y = authoritative_player.y;
+            world_player.velocity_x = authoritative_player.velocity_x;
+            world_player.velocity_y = authoritative_player.velocity_y;
+            world_player.fuel = authoritative_player.fuel;
+            world_player.hull = authoritative_player.hull;
+            if self.latest_local_movement_intent.is_some()
+                && previous_legacy_player != &self.game.player
+            {
+                self.game.player.x = authoritative_player.x;
+                self.game.player.y = authoritative_player.y;
+                self.game.player.velocity_x = authoritative_player.velocity_x;
+                self.game.player.velocity_y = authoritative_player.velocity_y;
+            }
+        }
     }
 
     fn sync_legacy_player_from_world(&mut self, player_id: PlayerId) {
@@ -2993,7 +3068,8 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, SoundCue},
+        game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, RunMode, SoundCue},
+        input::PlayerInput,
         multiplayer::{
             CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
             LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
@@ -4219,6 +4295,32 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn routed_local_movement_overrides_legacy_variable_delta_movement() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 0.0,
+            thrust: false,
+            drill_down: false,
+        }]);
+        let input = session.update_legacy_input_from_authoritative_commands(PlayerInput {
+            horizontal: 1.0,
+            ..PlayerInput::default()
+        });
+
+        assert!((input.horizontal - 0.0).abs() < f32::EPSILON);
+
+        session.update_legacy(input, 0.016);
+
+        let world_player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("world player exists");
+        assert!(world_player.velocity_x.abs() < f32::EPSILON);
+        assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
     }
 
     #[test]

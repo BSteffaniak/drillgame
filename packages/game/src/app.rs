@@ -58,7 +58,8 @@ pub fn run() {
         session.route_local_player_commands(mapped_input.player_commands.clone());
         observe_multiplayer_scaffolding(&mut session, delta_seconds);
 
-        session.update_legacy(input, delta_seconds);
+        let authoritative_input = session.update_legacy_input_from_authoritative_commands(input);
+        session.update_legacy(authoritative_input, delta_seconds);
         let world_delta = session.drain_world_delta();
         let _world_delta_is_empty = world_delta.is_empty();
         if input.fullscreen {
