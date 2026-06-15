@@ -2921,6 +2921,7 @@ impl GameSession {
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
             self.process_authoritative_commands_for_tick(tick);
+            self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
             self.advance_tick();
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
@@ -2936,6 +2937,14 @@ impl GameSession {
         self.sync_client_settings_from_legacy_game();
         self.world
             .sync_from_legacy_game(self.current_tick, &self.game);
+    }
+
+    fn sync_legacy_player_from_world(&mut self, player_id: PlayerId) {
+        if player_id == LOCAL_PLAYER_ID
+            && let Some(player) = self.world.player(player_id)
+        {
+            self.game.player = player.clone();
+        }
     }
 
     fn capture_legacy_events(
@@ -4198,6 +4207,8 @@ mod tests {
             .expect("player exists")
             .velocity_x;
         assert!((velocity_x - 0.5).abs() < f32::EPSILON);
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        assert!((session.game().player.velocity_x - 0.5).abs() < f32::EPSILON);
         assert_eq!(
             session.local_client().prediction().replay_commands().len(),
             0
