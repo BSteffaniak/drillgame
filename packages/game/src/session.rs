@@ -1722,6 +1722,18 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn predicted_local_movement(&self, delta_seconds: f32) -> Option<PredictedMovement> {
+        let view = self.local_view();
+        let player = self.world.player(view.controlled_player_id)?;
+        let snapshot =
+            PlayerSnapshot::from_world_player(view.controlled_player_id, player, &self.world);
+        Some(ClientPredictionState::predict_local_movement(
+            &snapshot,
+            delta_seconds,
+        ))
+    }
+
+    #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -2134,6 +2146,23 @@ mod tests {
         assert_eq!(player.player_id, LOCAL_PLAYER_ID);
         assert_eq!(player.cargo_used, session.game().player.cargo_used());
         assert!((player.scanner_cooldown_seconds - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn session_projects_predicted_local_movement_from_world_state() {
+        let mut session = GameSession::new();
+        session
+            .world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .velocity_x = 10.0;
+
+        let predicted = session
+            .predicted_local_movement(0.5)
+            .expect("local player prediction exists");
+
+        assert_eq!(predicted.player_id, LOCAL_PLAYER_ID);
+        assert!((predicted.x - (session.game().player.x + 5.0)).abs() < f32::EPSILON);
     }
 
     #[test]
