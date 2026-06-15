@@ -334,10 +334,6 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _split_screen_ready = split_screen_readiness.ready_for_live_render_path();
     let _local_split_screen_productization =
         GameSession::local_split_screen_productization_report().ready_for_manual_live_qa();
-    let _local_split_screen_blockers_clear =
-        GameSession::local_split_screen_qa_blockers().no_known_blockers_pending_manual_qa();
-    let _prediction_polish_plan_complete =
-        GameSession::production_prediction_polish_plan().covers_current_migrated_scope();
     let _local_split_screen_live_verification_complete =
         crate::session::LocalSplitScreenLiveVerification::default().complete();
     let _live_render_counts = (
