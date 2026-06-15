@@ -1201,6 +1201,23 @@ impl RenderFramePlan {
                 }),
         })
     }
+
+    #[must_use]
+    pub fn remote_player_presentations(
+        &self,
+        view: &ClientView,
+        prediction_plan: &PredictionPresentationPlan,
+    ) -> Vec<RemotePlayerPresentation> {
+        if self.views.is_empty() {
+            return Vec::new();
+        }
+        prediction_plan
+            .remote_players
+            .iter()
+            .copied()
+            .filter(|player| player.player_id != view.controlled_player_id)
+            .collect()
+    }
 }
 
 impl ClientView {
@@ -2488,6 +2505,34 @@ mod tests {
         assert_eq!(player.player_id, LOCAL_PLAYER_ID);
         assert!(player.predicted);
         assert!((player.x - (session.game().player.x + 5.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn render_frame_plan_exposes_remote_prediction_presentations() {
+        let mut session = GameSession::new();
+        let remote_player_id = PlayerId::new(99);
+        session
+            .local_client_mut()
+            .prediction
+            .push_remote_snapshot(super::PlayerSnapshot {
+                player_id: remote_player_id,
+                x: 20.0,
+                y: 30.0,
+                velocity_x: 2.0,
+                velocity_y: 0.0,
+                fuel: 1.0,
+                hull: 1.0,
+                credits: 0,
+                cargo_used: 0,
+                scanner_cooldown_seconds: 0.0,
+            });
+        let plan = session.render_frame_plan();
+        let prediction_plan = session.prediction_presentation_plan(None, 0.5, 0.5, 0.1);
+
+        let remotes = plan.remote_player_presentations(&plan.views[0], &prediction_plan);
+
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0].player_id, remote_player_id);
     }
 
     #[test]
