@@ -5125,6 +5125,7 @@ mod tests {
         let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
         player.fuel = 1.0;
         player.hull = 1.0;
+        player.credits = 10_000;
         player.bombs = 1;
 
         assert_eq!(

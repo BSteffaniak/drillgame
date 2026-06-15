@@ -53,7 +53,9 @@ Press `E` at a surface building to walk inside its room. Move with `A`/`D`, use 
 - HQ: completes contracts, provides named story/radio briefings, and offers/collects debt advances
 - Upgrade Shop: sells drill, fuel tank, cargo bay, engine, hull, radiator, scanner, and bomb-pack upgrades
 
-## Saves and Settings
+## Multiplayer Status
+
+Multiplayer support is under active rearchitecture. Current code has an in-memory faithful transport adapter, host/client runtime scaffolding, player-scoped authoritative command slices, split-screen render planning, prediction/reconciliation coverage, and save/session metadata tests. This is not yet a production online release: platform networking, matchmaking/NAT traversal, invites, and manual split-screen QA remain future work.
 
 - Quick save: `drillgame-save.json`
 - Save slots: `drillgame-save-slot-1.json` through `drillgame-save-slot-3.json`
