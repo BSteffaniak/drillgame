@@ -119,6 +119,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         world_probe.player_survival_snapshot(crate::multiplayer::LOCAL_PLAYER_ID);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
     let _world_snapshot = session.world_snapshot();
+    let _world_terrain_width = session.world().terrain().width();
+    let mut terrain_probe = session.world().clone();
+    let _terrain_probe_chip_result =
+        terrain_probe.chip_active_drill_target(crate::multiplayer::LOCAL_PLAYER_ID);
     let _compact_delta =
         crate::session::WorldDelta::new(session.current_tick(), Vec::new()).compact_network_delta();
     let _sequenced_commands = session.sequence_local_commands(Vec::new());

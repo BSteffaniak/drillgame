@@ -20,7 +20,7 @@ use crate::{
     player::Player,
     rendering::render_camera,
     save::SettingsFile,
-    terrain::TilePosition,
+    terrain::{MineResult, Terrain, TileKind, TilePosition},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -970,6 +970,7 @@ pub struct WorldState {
     authoritative_summary: AuthoritativeWorldSummary,
     players: BTreeMap<PlayerId, Player>,
     hazards: Vec<HazardCloud>,
+    terrain: Terrain,
     bombs: Vec<PlacedBomb>,
     infrastructure: Vec<PlacedInfrastructure>,
     active_drills: BTreeMap<PlayerId, DrillState>,
@@ -989,6 +990,7 @@ impl WorldState {
             ),
             players: BTreeMap::from([(LOCAL_PLAYER_ID, game.player.clone())]),
             hazards: game.hazard_clouds.clone(),
+            terrain: game.terrain.clone(),
             bombs: game.placed_bombs.clone(),
             infrastructure: game.infrastructure.clone(),
             active_drills: game
@@ -1048,6 +1050,11 @@ impl WorldState {
     #[must_use]
     pub fn hazards(&self) -> &[HazardCloud] {
         &self.hazards
+    }
+
+    #[must_use]
+    pub const fn terrain(&self) -> &Terrain {
+        &self.terrain
     }
 
     #[must_use]
@@ -1126,6 +1133,23 @@ impl WorldState {
         if player_id == LOCAL_PLAYER_ID {
             game.active_drill = self.active_drills.get(&player_id).copied();
         }
+    }
+
+    pub fn chip_active_drill_target(&mut self, player_id: PlayerId) -> Option<MineResult> {
+        let target = self.active_drills.get(&player_id)?.target;
+        let result = self.terrain.chip(target);
+        if matches!(
+            result,
+            MineResult::Blocked | MineResult::TooDangerous | MineResult::Mined(_)
+        ) {
+            self.active_drills.remove(&player_id);
+        }
+        if let Some(player) = self.players.get_mut(&player_id)
+            && let MineResult::Mined(TileKind::Ore(mineral)) = result
+        {
+            let _added = player.add_cargo(mineral);
+        }
+        Some(result)
     }
 
     #[allow(
@@ -1310,6 +1334,7 @@ impl WorldState {
         self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());
         self.hazards.clone_from(&game.hazard_clouds);
+        self.terrain.clone_from(&game.terrain);
         self.bombs.clone_from(&game.placed_bombs);
         self.infrastructure.clone_from(&game.infrastructure);
         if let Some(drill) = game.active_drill {
@@ -3170,6 +3195,7 @@ impl GameSession {
             self.process_authoritative_commands_for_tick(tick);
             self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
             self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+            self.sync_legacy_terrain_from_world();
             self.advance_tick();
             self.push_event(WorldEvent::TickAdvanced {
                 tick: self.current_tick,
@@ -3227,6 +3253,10 @@ impl GameSession {
             .sync_active_drill_to_legacy_game(player_id, &mut self.game);
     }
 
+    fn sync_legacy_terrain_from_world(&mut self) {
+        self.game.terrain.clone_from(self.world.terrain());
+    }
+
     fn capture_legacy_events(
         &mut self,
         previous_message: &str,
@@ -3273,13 +3303,17 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        game_state::{DrillState, GameState, InfrastructureKind, ModalScreen, RunMode, SoundCue},
+        game_state::{
+            DrillDirection, DrillState, GameState, InfrastructureKind, ModalScreen, RunMode,
+            SoundCue,
+        },
         input::PlayerInput,
         multiplayer::{
             ClientId, CommandAcknowledgement, CommandRejection, CommandSource, InputSequence,
             LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, PlayerCommand, PlayerId,
             ProtocolMessage, SequencedPlayerCommand, SimulationTick,
         },
+        terrain::{MineResult, TileKind, TilePosition},
     };
 
     use super::{ClientState, GameSession, WorldState};
@@ -4706,6 +4740,79 @@ mod tests {
             event,
             super::WorldEvent::CargoChanged { player_id } if *player_id == second_player
         )));
+    }
+
+    #[test]
+    fn authoritative_world_chips_active_drill_target_and_collects_ore() {
+        let mut session = GameSession::new();
+        let target = TilePosition { x: 97, y: 5 };
+        session
+            .game
+            .terrain
+            .set_kind(target, TileKind::Ore(crate::terrain::MineralKind::Copper));
+        session
+            .world
+            .sync_from_legacy_game(session.current_tick(), &session.game.clone());
+        session.world.set_active_drill(
+            LOCAL_PLAYER_ID,
+            Some(DrillState {
+                target,
+                direction: DrillDirection::Down,
+                progress: 1.0,
+                initial_durability: 1,
+                seconds_per_chip: 0.0,
+                sound_timer: 0.0,
+                dust_timer: 0.0,
+            }),
+        );
+
+        let mut result = session
+            .world
+            .chip_active_drill_target(LOCAL_PLAYER_ID)
+            .expect("active drill chips");
+        for _ in 0..8 {
+            if matches!(result, MineResult::Mined(_)) {
+                break;
+            }
+            result = session
+                .world
+                .chip_active_drill_target(LOCAL_PLAYER_ID)
+                .expect("active drill continues chipping");
+        }
+
+        assert_eq!(
+            result,
+            MineResult::Mined(TileKind::Ore(crate::terrain::MineralKind::Copper))
+        );
+        assert_eq!(
+            session
+                .world()
+                .terrain()
+                .tile(target)
+                .expect("tile exists")
+                .kind,
+            TileKind::Air
+        );
+        assert_eq!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .cargo
+                .get(&crate::terrain::MineralKind::Copper)
+                .copied(),
+            Some(1)
+        );
+        session.sync_legacy_terrain_from_world();
+        assert_eq!(
+            session
+                .game()
+                .terrain
+                .tile(target)
+                .expect("tile exists")
+                .kind,
+            TileKind::Air
+        );
     }
 
     #[test]
