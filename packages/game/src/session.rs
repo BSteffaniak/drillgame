@@ -1289,6 +1289,28 @@ pub enum PredictionRecoveryAction {
     RollBackProgression { player_id: PlayerId },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredictionFailureRecoveryPlan {
+    pub actions: Vec<PredictionRecoveryAction>,
+    pub request_keyframe: bool,
+}
+
+impl PredictionFailureRecoveryPlan {
+    #[must_use]
+    pub fn from_actions(actions: Vec<PredictionRecoveryAction>) -> Self {
+        let request_keyframe = actions.iter().any(|action| {
+            matches!(
+                action,
+                PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+            )
+        });
+        Self {
+            actions,
+            request_keyframe,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionOffset {
     pub x: f32,
@@ -2054,6 +2076,17 @@ impl GameSession {
                 terrain_position,
                 known_revision,
             )
+    }
+
+    #[must_use]
+    pub fn prediction_failure_recovery_plan(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> PredictionFailureRecoveryPlan {
+        PredictionFailureRecoveryPlan::from_actions(
+            self.prediction_recovery_actions(terrain_position, known_revision),
+        )
     }
 
     #[must_use]
@@ -3324,6 +3357,22 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         ));
+        assert!(!super::PredictionFailureRecoveryPlan::from_actions(actions).request_keyframe);
+    }
+
+    #[test]
+    fn session_builds_prediction_failure_recovery_plan() {
+        let mut session = GameSession::new();
+        session
+            .local_client_mut()
+            .prediction
+            .note_prediction_failure(super::PredictionFailure::HazardOrRescueChangedState);
+
+        let plan =
+            session.prediction_failure_recovery_plan(super::TerrainChunkPosition { x: 0, y: 0 }, 0);
+
+        assert!(plan.request_keyframe);
+        assert_eq!(plan.actions.len(), 1);
     }
 
     #[test]

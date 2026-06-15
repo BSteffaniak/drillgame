@@ -212,6 +212,8 @@ fn observe_multiplayer_scaffolding(
     );
     let _prediction_recovery_actions =
         session.prediction_recovery_actions(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
+    let _prediction_failure_recovery_plan = session
+        .prediction_failure_recovery_plan(crate::session::TerrainChunkPosition { x: 0, y: 0 }, 0);
     let prediction = session.local_client().prediction();
     let _prediction_replay_len = prediction.replay_commands().len();
     let _prediction_buffer_len = prediction.unacknowledged_commands().len();
