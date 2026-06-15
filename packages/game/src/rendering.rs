@@ -108,7 +108,7 @@ impl GameRenderer {
             unsafe {
                 ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
             }
-            self.render_client_view(draw, game, view);
+            self.render_client_view(draw, game, view, &[]);
             unsafe {
                 ffi::EndScissorMode();
             }
@@ -122,7 +122,14 @@ impl GameRenderer {
         output: &LiveRenderFrameOutput,
     ) {
         for plan in &output.viewport_plans {
-            self.render_viewport_plan(draw, game, plan);
+            let world_players = output
+                .world_players_by_view
+                .iter()
+                .find_map(|(client_id, players)| {
+                    (*client_id == plan.client_id).then_some(players.as_slice())
+                })
+                .unwrap_or(&[]);
+            self.render_viewport_plan(draw, game, plan, world_players);
         }
     }
 
@@ -131,6 +138,7 @@ impl GameRenderer {
         draw: &mut RaylibDrawHandle<'_>,
         game: &GameState,
         plan: &RenderViewportPlan,
+        world_players: &[crate::session::RenderWorldPlayerPresentation],
     ) {
         if plan.clip_enabled {
             let viewport = plan.viewport;
@@ -152,7 +160,7 @@ impl GameRenderer {
             viewport: plan.viewport,
             run_mode: game.run_mode,
         };
-        self.render_client_view(draw, game, &view);
+        self.render_client_view(draw, game, &view, world_players);
         if plan.clip_enabled {
             unsafe {
                 ffi::EndScissorMode();
@@ -165,6 +173,7 @@ impl GameRenderer {
         draw: &mut RaylibDrawHandle<'_>,
         game: &GameState,
         view: &ClientView,
+        world_players: &[crate::session::RenderWorldPlayerPresentation],
     ) {
         draw.clear_background(Color::new(105, 190, 235, 255));
 
@@ -187,6 +196,11 @@ impl GameRenderer {
             }
 
             draw_player(&mut world_draw, game);
+            for player in world_players {
+                if !player.local_to_view {
+                    world::draw_remote_player(&mut world_draw, player.x, player.y);
+                }
+            }
         }
         if game.screen_flash_seconds > 0.0 {
             let alpha = (game.screen_flash_seconds * 500.0).clamp(0.0, 180.0) as u8;

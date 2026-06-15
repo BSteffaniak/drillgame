@@ -479,3 +479,15 @@ pub(super) fn draw_player(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, gam
         );
     }
 }
+
+pub(super) fn draw_remote_player(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    x: f32,
+    y: f32,
+) {
+    draw.draw_rectangle((x - 12.0) as i32, (y - 9.0) as i32, 24, 20, Color::PURPLE);
+    draw.draw_rectangle_lines((x - 12.0) as i32, (y - 9.0) as i32, 24, 20, Color::VIOLET);
+    draw.draw_rectangle((x - 6.0) as i32, (y - 16.0) as i32, 12, 7, Color::SKYBLUE);
+    draw.draw_circle((x - 9.0) as i32, (y + 12.0) as i32, 4.0, Color::DARKGRAY);
+    draw.draw_circle((x + 9.0) as i32, (y + 12.0) as i32, 4.0, Color::DARKGRAY);
+}
