@@ -296,4 +296,9 @@ fn observe_multiplayer_scaffolding(
         }],
     );
     let _protocol_exchange_unreliable_count = protocol_exchange_batch.unreliable_count();
+    let network_runtime_plan = crate::multiplayer::NetworkRuntimePlan::default();
+    let _join_flow_message_count = network_runtime_plan
+        .join_in_progress_flow(SimulationTick::default())
+        .messages
+        .len();
 }

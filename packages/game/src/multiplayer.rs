@@ -661,6 +661,97 @@ impl NetworkRuntimePlan {
             },
         ]
     }
+
+    #[must_use]
+    pub fn join_in_progress_flow(&self, snapshot_tick: SimulationTick) -> JoinReconnectFlowPlan {
+        JoinReconnectFlowPlan::join_in_progress(
+            self.local_client.client_id,
+            self.local_client.player_id.unwrap_or(LOCAL_PLAYER_ID),
+            snapshot_tick,
+        )
+    }
+
+    #[must_use]
+    pub fn reconnect_flow(&self, session_token: SessionToken) -> JoinReconnectFlowPlan {
+        JoinReconnectFlowPlan::reconnect(
+            self.local_client.client_id,
+            self.local_client.player_id.unwrap_or(LOCAL_PLAYER_ID),
+            SimulationTick::default(),
+            session_token,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct JoinReconnectFlowPlan {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub snapshot_tick: SimulationTick,
+    pub reconnect_token: Option<SessionToken>,
+    pub messages: Vec<ProtocolMessage>,
+}
+
+impl JoinReconnectFlowPlan {
+    #[must_use]
+    pub fn join_in_progress(
+        client_id: ClientId,
+        player_id: PlayerId,
+        snapshot_tick: SimulationTick,
+    ) -> Self {
+        Self {
+            client_id,
+            player_id,
+            snapshot_tick,
+            reconnect_token: None,
+            messages: vec![
+                ProtocolMessage::JoinRequest {
+                    client_id,
+                    session_token: None,
+                },
+                ProtocolMessage::JoinAccepted {
+                    client_id,
+                    player_id,
+                    snapshot_tick,
+                },
+                ProtocolMessage::TerrainChunkRequest {
+                    chunk_x: 0,
+                    chunk_y: 0,
+                    known_revision: 0,
+                },
+            ],
+        }
+    }
+
+    #[must_use]
+    pub fn reconnect(
+        client_id: ClientId,
+        player_id: PlayerId,
+        snapshot_tick: SimulationTick,
+        reconnect_token: SessionToken,
+    ) -> Self {
+        Self {
+            client_id,
+            player_id,
+            snapshot_tick,
+            reconnect_token: Some(reconnect_token),
+            messages: vec![
+                ProtocolMessage::ReconnectRequest {
+                    client_id,
+                    session_token: reconnect_token,
+                },
+                ProtocolMessage::JoinAccepted {
+                    client_id,
+                    player_id,
+                    snapshot_tick,
+                },
+            ],
+        }
+    }
+
+    #[must_use]
+    pub fn exchange_batch(&self) -> ProtocolExchangeBatch {
+        ProtocolMessage::exchange_batch(ProtocolExchangeKind::JoinHandshake, self.messages.clone())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1426,6 +1517,26 @@ mod tests {
         assert_eq!(batch.kind, super::ProtocolExchangeKind::JoinHandshake);
         assert_eq!(batch.reliable_count(), 2);
         assert_eq!(batch.unreliable_count(), 1);
+    }
+
+    #[test]
+    fn network_runtime_plan_builds_join_and_reconnect_flow_plans() {
+        let plan = NetworkRuntimePlan::default();
+        let token = SessionToken::new(11);
+
+        let join = plan.join_in_progress_flow(SimulationTick::new(8));
+        let reconnect = plan.reconnect_flow(token);
+
+        assert_eq!(join.client_id, super::LOCAL_CLIENT_ID);
+        assert_eq!(join.player_id, super::LOCAL_PLAYER_ID);
+        assert_eq!(join.snapshot_tick, SimulationTick::new(8));
+        assert_eq!(join.reconnect_token, None);
+        assert_eq!(join.messages.len(), 3);
+        assert_eq!(join.exchange_batch().reliable_count(), 3);
+
+        assert_eq!(reconnect.reconnect_token, Some(token));
+        assert_eq!(reconnect.messages.len(), 2);
+        assert_eq!(reconnect.exchange_batch().reliable_count(), 2);
     }
 
     #[test]
