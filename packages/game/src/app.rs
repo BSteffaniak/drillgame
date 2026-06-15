@@ -301,4 +301,12 @@ fn observe_multiplayer_scaffolding(
         .join_in_progress_flow(SimulationTick::default())
         .messages
         .len();
+    let mut command_network_probe =
+        crate::multiplayer::CommandNetworkSession::new(SimulationTick::default(), 2);
+    let (_command_exchange_messages, command_exchange_summary) = command_network_probe
+        .apply_command_packet_exchange(&crate::multiplayer::CommandPacket {
+            client_id: crate::multiplayer::LOCAL_CLIENT_ID,
+            commands: Vec::new(),
+        });
+    let _command_exchange_all_accepted = command_exchange_summary.all_accepted();
 }

@@ -195,6 +195,21 @@ pub enum CommandApplicationResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommandPacketExchangeSummary {
+    pub client_id: ClientId,
+    pub acknowledged: usize,
+    pub rejected: usize,
+    pub authoritative_tick: SimulationTick,
+}
+
+impl CommandPacketExchangeSummary {
+    #[must_use]
+    pub const fn all_accepted(&self) -> bool {
+        self.rejected == 0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommandNetworkSession {
     tracker: CommandSequenceTracker,
     current_tick: SimulationTick,
@@ -268,6 +283,38 @@ impl CommandNetworkSession {
                 }
             })
             .collect()
+    }
+
+    pub fn apply_command_packet_exchange(
+        &mut self,
+        packet: &CommandPacket,
+    ) -> (Vec<ProtocolMessage>, CommandPacketExchangeSummary) {
+        let responses = self.apply_command_packet(packet);
+        let acknowledged = responses
+            .iter()
+            .filter(|response| matches!(response, CommandApplicationResponse::Acknowledged(_)))
+            .count();
+        let rejected = responses.len() - acknowledged;
+        let messages = responses
+            .into_iter()
+            .map(|response| match response {
+                CommandApplicationResponse::Acknowledged(acknowledgement) => {
+                    ProtocolMessage::CommandAcknowledgement(acknowledgement)
+                }
+                CommandApplicationResponse::Rejected(rejection) => {
+                    ProtocolMessage::CommandRejection(rejection)
+                }
+            })
+            .collect();
+        (
+            messages,
+            CommandPacketExchangeSummary {
+                client_id: packet.client_id,
+                acknowledged,
+                rejected,
+                authoritative_tick: self.current_tick,
+            },
+        )
     }
 }
 
@@ -583,6 +630,13 @@ impl HostSessionRuntime {
 
     pub fn apply_command_packet(&mut self, packet: &CommandPacket) -> Vec<ProtocolMessage> {
         self.command_session.apply_command_packet_messages(packet)
+    }
+
+    pub fn apply_command_packet_exchange(
+        &mut self,
+        packet: &CommandPacket,
+    ) -> (Vec<ProtocolMessage>, CommandPacketExchangeSummary) {
+        self.command_session.apply_command_packet_exchange(packet)
     }
 
     #[must_use]
@@ -1451,6 +1505,25 @@ mod tests {
             host.apply_command_packet(&packet).as_slice(),
             [ProtocolMessage::CommandAcknowledgement(_)]
         ));
+        let duplicate_packet = CommandPacket {
+            client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(5),
+                command: PlayerCommand::Interact,
+            }],
+        };
+        let (messages, summary) = host.apply_command_packet_exchange(&duplicate_packet);
+        assert!(matches!(
+            messages.as_slice(),
+            [ProtocolMessage::CommandRejection(_)]
+        ));
+        assert_eq!(summary.client_id, client_id);
+        assert_eq!(summary.acknowledged, 0);
+        assert_eq!(summary.rejected, 1);
+        assert_eq!(summary.authoritative_tick, SimulationTick::new(5));
+        assert!(!summary.all_accepted());
     }
 
     #[test]
