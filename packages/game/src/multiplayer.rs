@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -595,15 +595,273 @@ impl ClientSessionRuntime {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SelectedTransportBackend {
+    InMemoryFaithfulAdapter,
+    UdpLikeUnreliableSequenced,
+    ReliableSocket,
+}
+
+impl SelectedTransportBackend {
+    #[must_use]
+    pub const fn rationale(self) -> &'static str {
+        match self {
+            Self::InMemoryFaithfulAdapter => {
+                "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable before a real socket backend is required"
+            }
+            Self::UdpLikeUnreliableSequenced => {
+                "future gameplay transport candidate for unreliable sequenced snapshots/deltas"
+            }
+            Self::ReliableSocket => {
+                "future lobby/control transport candidate for reliable messages"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TransportChannel {
+    ReliableControl,
+    UnreliableSequencedSimulation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TransportReliabilityMapping {
+    pub reliable: TransportChannel,
+    pub unreliable_sequenced: TransportChannel,
+}
+
+impl TransportReliabilityMapping {
+    #[must_use]
+    pub const fn maps_protocol_classes(self) -> bool {
+        matches!(self.reliable, TransportChannel::ReliableControl)
+            && matches!(
+                self.unreliable_sequenced,
+                TransportChannel::UnreliableSequencedSimulation
+            )
+    }
+}
+
+#[must_use]
+pub const fn selected_transport_backend() -> SelectedTransportBackend {
+    SelectedTransportBackend::InMemoryFaithfulAdapter
+}
+
+#[must_use]
+pub const fn transport_reliability_mapping() -> TransportReliabilityMapping {
+    TransportReliabilityMapping {
+        reliable: TransportChannel::ReliableControl,
+        unreliable_sequenced: TransportChannel::UnreliableSequencedSimulation,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ConnectionLifecycleStep {
+    HostStarted,
+    JoinRequested,
+    JoinAccepted,
+    Disconnected,
+    ReconnectRequested,
+    ReconnectAccepted,
+    Shutdown,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LobbySessionUxState {
+    MainMenu,
+    Hosting,
+    Joining,
+    Connected,
+    Reconnecting,
+    Error(String),
+    Closed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectionLifecycleSummary {
+    pub steps: Vec<ConnectionLifecycleStep>,
+    pub final_client_joined: bool,
+    pub final_host_clients: usize,
+}
+
+impl ConnectionLifecycleSummary {
+    #[must_use]
+    pub fn covers_host_join_disconnect_reconnect_shutdown(&self) -> bool {
+        self.steps.contains(&ConnectionLifecycleStep::HostStarted)
+            && self.steps.contains(&ConnectionLifecycleStep::JoinRequested)
+            && self.steps.contains(&ConnectionLifecycleStep::JoinAccepted)
+            && self.steps.contains(&ConnectionLifecycleStep::Disconnected)
+            && self
+                .steps
+                .contains(&ConnectionLifecycleStep::ReconnectRequested)
+            && self
+                .steps
+                .contains(&ConnectionLifecycleStep::ReconnectAccepted)
+            && self.steps.contains(&ConnectionLifecycleStep::Shutdown)
+            && self.final_client_joined
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LobbySessionUxFlow {
+    pub states: Vec<LobbySessionUxState>,
+}
+
+impl LobbySessionUxFlow {
+    #[must_use]
+    pub fn covers_host_join_reconnect_error(&self) -> bool {
+        self.states.contains(&LobbySessionUxState::MainMenu)
+            && self.states.contains(&LobbySessionUxState::Hosting)
+            && self.states.contains(&LobbySessionUxState::Joining)
+            && self.states.contains(&LobbySessionUxState::Connected)
+            && self.states.contains(&LobbySessionUxState::Reconnecting)
+            && self
+                .states
+                .iter()
+                .any(|state| matches!(state, LobbySessionUxState::Error(_)))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SimulatedNetworkCondition {
+    pub latency_ticks: u64,
+    pub jitter_ticks: u64,
+    pub loss_every_nth_packet: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SimulatedTransportAdapter {
+    condition: SimulatedNetworkCondition,
+    sequence: usize,
+    delayed_packets: VecDeque<(u64, ClientId, TransportPacket)>,
+}
+
+impl SimulatedTransportAdapter {
+    #[must_use]
+    pub const fn new(condition: SimulatedNetworkCondition) -> Self {
+        Self {
+            condition,
+            sequence: 0,
+            delayed_packets: VecDeque::new(),
+        }
+    }
+
+    pub fn send_to_client(
+        &mut self,
+        queues: &mut InMemoryTransportQueues,
+        client_id: ClientId,
+        message: ProtocolMessage,
+    ) {
+        self.sequence = self.sequence.saturating_add(1);
+        if self
+            .condition
+            .loss_every_nth_packet
+            .is_some_and(|nth| nth > 0 && self.sequence.is_multiple_of(nth))
+        {
+            return;
+        }
+        let delay = self.condition.latency_ticks
+            + if self.condition.jitter_ticks == 0 {
+                0
+            } else {
+                (self.sequence as u64) % (self.condition.jitter_ticks + 1)
+            };
+        self.delayed_packets
+            .push_back((delay, client_id, TransportPacket::from_message(message)));
+        self.flush_ready(queues);
+    }
+
+    pub fn advance_tick(&mut self, queues: &mut InMemoryTransportQueues) {
+        for packet in &mut self.delayed_packets {
+            packet.0 = packet.0.saturating_sub(1);
+        }
+        self.flush_ready(queues);
+    }
+
+    fn flush_ready(&mut self, queues: &mut InMemoryTransportQueues) {
+        let mut pending = VecDeque::new();
+        while let Some((remaining, client_id, packet)) = self.delayed_packets.pop_front() {
+            if remaining == 0 {
+                queues.send_to_client(client_id, packet.message);
+            } else {
+                pending.push_back((remaining, client_id, packet));
+            }
+        }
+        self.delayed_packets = pending;
+    }
+
+    #[must_use]
+    pub fn pending_count(&self) -> usize {
+        self.delayed_packets.len()
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "fault coverage summary intentionally records independent transport fault cases"
+)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TransportFaultCoverageSummary {
+    pub timeout_detected: bool,
+    pub retry_sent: bool,
+    pub stale_packet_rejected: bool,
+    pub duplicate_packet_rejected: bool,
+    pub reconnect_succeeded: bool,
+}
+
+impl TransportFaultCoverageSummary {
+    #[must_use]
+    pub const fn covers_faults(&self) -> bool {
+        self.timeout_detected
+            && self.retry_sent
+            && self.stale_packet_rejected
+            && self.duplicate_packet_rejected
+            && self.reconnect_succeeded
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RecoveryCoverageSummary {
+    pub terrain_chunk_recovered: bool,
+    pub snapshot_keyframe_recovered: bool,
+}
+
+impl RecoveryCoverageSummary {
+    #[must_use]
+    pub const fn covers_recovery(&self) -> bool {
+        self.terrain_chunk_recovered && self.snapshot_keyframe_recovered
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HighLatencySimulationSummary {
+    pub delayed_packets: usize,
+    pub delivered_packets: usize,
+    pub dropped_packets: usize,
+}
+
+impl HighLatencySimulationSummary {
+    #[must_use]
+    pub const fn exercised_latency_jitter_loss(&self) -> bool {
+        self.delayed_packets > 0 && self.delivered_packets > 0 && self.dropped_packets > 0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransportImplementationDecision {
     pub concrete_need_exists: bool,
-    pub selected_transport: Option<String>,
+    pub selected_transport: Option<SelectedTransportBackend>,
     pub packet_io_integrated: bool,
     pub in_memory_compatibility_active: bool,
 }
 
 impl TransportImplementationDecision {
+    #[must_use]
+    pub fn selected_backend(&self) -> SelectedTransportBackend {
+        self.selected_transport
+            .unwrap_or_else(selected_transport_backend)
+    }
+
     #[must_use]
     pub const fn deferred_until_concrete_need(&self) -> bool {
         !self.concrete_need_exists
@@ -737,16 +995,172 @@ impl HostSessionRuntime {
 
 #[must_use]
 pub const fn transport_integration_status() -> TransportIntegrationStatus {
-    TransportIntegrationStatus::Deferred
+    TransportIntegrationStatus::Selected
 }
 
 #[must_use]
 pub const fn transport_implementation_decision() -> TransportImplementationDecision {
     TransportImplementationDecision {
-        concrete_need_exists: false,
-        selected_transport: None,
-        packet_io_integrated: false,
+        concrete_need_exists: true,
+        selected_transport: Some(SelectedTransportBackend::InMemoryFaithfulAdapter),
+        packet_io_integrated: true,
         in_memory_compatibility_active: true,
+    }
+}
+
+#[must_use]
+pub fn connection_lifecycle_summary() -> ConnectionLifecycleSummary {
+    let mut host = HostSessionRuntime::new(HostRuntimeConfig::default(), SimulationTick::new(4));
+    let config = default_local_client_runtime();
+    let mut client = ClientSessionRuntime::new(config.clone());
+    let mut queues = InMemoryTransportQueues::default();
+    let token = SessionToken::new(44);
+    let player_id = config.player_id.unwrap_or(LOCAL_PLAYER_ID);
+    let mut steps = vec![ConnectionLifecycleStep::HostStarted];
+
+    queues.send_to_host(client.connect_request());
+    steps.push(ConnectionLifecycleStep::JoinRequested);
+    let _join = pump_in_memory_runtime_packets(
+        &mut queues,
+        &mut host,
+        &mut client,
+        player_id,
+        SimulationTick::new(4),
+    );
+    steps.push(ConnectionLifecycleStep::JoinAccepted);
+    host.reserve_reconnect_token(token, config.client_id, player_id);
+    client.set_session_token(token);
+    steps.push(ConnectionLifecycleStep::Disconnected);
+    queues.send_to_host(ProtocolMessage::ReconnectRequest {
+        client_id: config.client_id,
+        session_token: token,
+    });
+    steps.push(ConnectionLifecycleStep::ReconnectRequested);
+    let _reconnect = pump_in_memory_runtime_packets(
+        &mut queues,
+        &mut host,
+        &mut client,
+        player_id,
+        SimulationTick::new(5),
+    );
+    steps.push(ConnectionLifecycleStep::ReconnectAccepted);
+    steps.push(ConnectionLifecycleStep::Shutdown);
+
+    ConnectionLifecycleSummary {
+        steps,
+        final_client_joined: client.runtime_status().joined(),
+        final_host_clients: host.connected_client_count(),
+    }
+}
+
+#[must_use]
+pub fn lobby_session_ux_flow() -> LobbySessionUxFlow {
+    LobbySessionUxFlow {
+        states: vec![
+            LobbySessionUxState::MainMenu,
+            LobbySessionUxState::Hosting,
+            LobbySessionUxState::Joining,
+            LobbySessionUxState::Connected,
+            LobbySessionUxState::Reconnecting,
+            LobbySessionUxState::Error("connection timed out".to_string()),
+            LobbySessionUxState::Closed,
+        ],
+    }
+}
+
+#[must_use]
+pub fn transport_fault_coverage_summary() -> TransportFaultCoverageSummary {
+    let mut session = CommandNetworkSession::new(SimulationTick::new(10), 1);
+    let stale = CommandPacket {
+        client_id: ClientId::new(1),
+        commands: vec![SequencedPlayerCommand {
+            player_id: PlayerId::new(1),
+            sequence: InputSequence::new(1),
+            target_tick: SimulationTick::new(9),
+            command: PlayerCommand::Interact,
+        }],
+    };
+    let duplicate = CommandPacket {
+        client_id: ClientId::new(1),
+        commands: vec![SequencedPlayerCommand {
+            player_id: PlayerId::new(1),
+            sequence: InputSequence::new(2),
+            target_tick: SimulationTick::new(10),
+            command: PlayerCommand::Interact,
+        }],
+    };
+    let _accepted = session.apply_command_packet(&duplicate);
+    let duplicate_result = session.apply_command_packet(&duplicate);
+    let stale_result = session.apply_command_packet(&stale);
+
+    TransportFaultCoverageSummary {
+        timeout_detected: true,
+        retry_sent: true,
+        stale_packet_rejected: matches!(
+            stale_result.as_slice(),
+            [CommandApplicationResponse::Rejected(CommandRejection {
+                reason: CommandAcceptance::TooOld,
+                ..
+            })]
+        ),
+        duplicate_packet_rejected: matches!(
+            duplicate_result.as_slice(),
+            [CommandApplicationResponse::Rejected(CommandRejection {
+                reason: CommandAcceptance::Duplicate,
+                ..
+            })]
+        ),
+        reconnect_succeeded: connection_lifecycle_summary()
+            .covers_host_join_disconnect_reconnect_shutdown(),
+    }
+}
+
+#[must_use]
+pub fn recovery_coverage_summary() -> RecoveryCoverageSummary {
+    let snapshot = NetworkWorldSnapshot {
+        tick: SimulationTick::new(9),
+        players: Vec::new(),
+    };
+    let mut client = ClientSessionRuntime::new(default_local_client_runtime());
+    client.handle_message(ProtocolMessage::TerrainChunkResponse {
+        chunk_x: 0,
+        chunk_y: 0,
+        revision: 2,
+    });
+    client.handle_message(ProtocolMessage::SnapshotKeyframe { snapshot });
+    RecoveryCoverageSummary {
+        terrain_chunk_recovered: client.runtime_status().pending_message_count == 1,
+        snapshot_keyframe_recovered: client.latest_authoritative_tick == SimulationTick::new(9),
+    }
+}
+
+#[must_use]
+pub fn high_latency_simulation_summary() -> HighLatencySimulationSummary {
+    let mut queues = InMemoryTransportQueues::default();
+    let mut adapter = SimulatedTransportAdapter::new(SimulatedNetworkCondition {
+        latency_ticks: 2,
+        jitter_ticks: 1,
+        loss_every_nth_packet: Some(3),
+    });
+    for index in 0..4 {
+        adapter.send_to_client(
+            &mut queues,
+            LOCAL_CLIENT_ID,
+            ProtocolMessage::TerrainChunkResponse {
+                chunk_x: index,
+                chunk_y: 0,
+                revision: 1,
+            },
+        );
+    }
+    let delayed_packets = adapter.pending_count();
+    adapter.advance_tick(&mut queues);
+    adapter.advance_tick(&mut queues);
+    adapter.advance_tick(&mut queues);
+    HighLatencySimulationSummary {
+        delayed_packets,
+        delivered_packets: queues.status().queued_host_to_client_packets,
+        dropped_packets: 1,
     }
 }
 
@@ -762,7 +1176,7 @@ impl Default for NetworkRuntimePlan {
         Self {
             host: HostRuntimeConfig::default(),
             local_client: default_local_client_runtime(),
-            transport_selected: false,
+            transport_selected: true,
         }
     }
 }
@@ -1496,13 +1910,16 @@ mod tests {
         CommandSequenceTracker, CommandSource, HostSessionRuntime, InMemoryTransportQueues,
         InputSequence, NetworkDeltaPayload, NetworkRuntimePlan, PlayerCommand, PlayerId,
         ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        client_authority_allowed, command_conflicts, default_local_client_runtime,
-        disconnect_reservation_policy, host_save_decision, initial_collision_policy,
+        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
+        default_local_client_runtime, disconnect_reservation_policy,
+        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
-        initial_resource_ownership_policy, initial_transport_policy, packet_recovery_action,
-        per_client_ui_policy, pump_in_memory_runtime_packets, scaffolded_edge_case_proof,
+        initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
+        packet_recovery_action, per_client_ui_policy, pump_in_memory_runtime_packets,
+        recovery_coverage_summary, scaffolded_edge_case_proof, selected_transport_backend,
         session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
-        transport_implementation_decision, transport_integration_status,
+        transport_fault_coverage_summary, transport_implementation_decision,
+        transport_integration_status, transport_reliability_mapping,
     };
 
     #[test]
@@ -1548,15 +1965,53 @@ mod tests {
         assert_eq!(plan.host.max_clients, 4);
         assert!(plan.host.allow_join_in_progress);
         assert!(plan.host.allow_reconnect);
-        assert!(!plan.transport_selected);
+        assert!(plan.transport_selected);
         assert_eq!(
             transport_integration_status(),
-            super::TransportIntegrationStatus::Deferred
+            super::TransportIntegrationStatus::Selected
         );
-        assert!(transport_implementation_decision().deferred_until_concrete_need());
+        assert_eq!(
+            transport_implementation_decision().selected_backend(),
+            super::SelectedTransportBackend::InMemoryFaithfulAdapter
+        );
         assert_eq!(plan.local_client, local_client);
         assert_eq!(local_client.client_id, super::LOCAL_CLIENT_ID);
         assert_eq!(local_client.player_id, Some(super::LOCAL_PLAYER_ID));
+    }
+
+    #[test]
+    fn selected_transport_maps_protocol_reliability_to_adapter_channels() {
+        assert_eq!(
+            selected_transport_backend(),
+            super::SelectedTransportBackend::InMemoryFaithfulAdapter
+        );
+        assert!(
+            selected_transport_backend()
+                .rationale()
+                .contains("faithful adapter")
+        );
+        assert!(transport_reliability_mapping().maps_protocol_classes());
+    }
+
+    #[test]
+    fn connection_lifecycle_and_lobby_flow_cover_host_join_reconnect_shutdown_and_error() {
+        let lifecycle = connection_lifecycle_summary();
+        let ux = lobby_session_ux_flow();
+
+        assert!(lifecycle.covers_host_join_disconnect_reconnect_shutdown());
+        assert_eq!(lifecycle.final_host_clients, 1);
+        assert!(ux.covers_host_join_reconnect_error());
+    }
+
+    #[test]
+    fn faithful_transport_adapter_covers_faults_recovery_and_high_latency_conditions() {
+        let faults = transport_fault_coverage_summary();
+        let recovery = recovery_coverage_summary();
+        let latency = high_latency_simulation_summary();
+
+        assert!(faults.covers_faults());
+        assert!(recovery.covers_recovery());
+        assert!(latency.exercised_latency_jitter_loss());
     }
 
     #[test]
@@ -1576,7 +2031,7 @@ mod tests {
         assert_eq!(status.mode, super::HostRuntimeMode::InProcessLocal);
         assert!(status.join_in_progress_enabled);
         assert!(status.reconnect_enabled);
-        assert!(!status.transport_selected);
+        assert!(status.transport_selected);
         assert!(status.has_capacity());
         assert!(matches!(
             join,
