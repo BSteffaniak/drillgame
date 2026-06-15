@@ -657,6 +657,51 @@ impl TerrainRevisionTracker {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotChunkRecoveryPlan {
+    pub snapshot_tick: SimulationTick,
+    pub requested_position: TerrainChunkPosition,
+    pub known_revision: u64,
+    pub delta: CompactWorldDelta,
+    pub requires_keyframe: bool,
+}
+
+impl SnapshotChunkRecoveryPlan {
+    #[must_use]
+    pub fn from_tracker(
+        tracker: &TerrainRevisionTracker,
+        snapshot_tick: SimulationTick,
+        requested_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> Self {
+        let delta = tracker.recovery_delta(snapshot_tick, requested_position, known_revision);
+        let requires_keyframe = matches!(delta, CompactWorldDelta::KeyframeRequired { .. });
+        Self {
+            snapshot_tick,
+            requested_position,
+            known_revision,
+            delta,
+            requires_keyframe,
+        }
+    }
+
+    #[must_use]
+    pub const fn recovered_revision(&self) -> Option<u64> {
+        match &self.delta {
+            CompactWorldDelta::TerrainChunks { revisions, .. } => {
+                if let [revision] = revisions.as_slice() {
+                    Some(revision.revision)
+                } else {
+                    None
+                }
+            }
+            CompactWorldDelta::Noop { .. }
+            | CompactWorldDelta::Players { .. }
+            | CompactWorldDelta::KeyframeRequired { .. } => None,
+        }
+    }
+}
+
 /// Lightweight simulation events emitted by the session compatibility layer.
 ///
 /// These are intentionally separate from save data and renderer snapshots. As systems migrate out
@@ -2350,6 +2395,20 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn snapshot_chunk_recovery_plan(
+        &self,
+        terrain_position: TerrainChunkPosition,
+        known_revision: u64,
+    ) -> SnapshotChunkRecoveryPlan {
+        SnapshotChunkRecoveryPlan::from_tracker(
+            &self.terrain_revisions,
+            self.current_tick,
+            terrain_position,
+            known_revision,
+        )
+    }
+
+    #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -3994,6 +4053,23 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn session_builds_snapshot_chunk_recovery_plan() {
+        let mut session = GameSession::new();
+        let position = super::TerrainChunkPosition { x: 0, y: 0 };
+        session
+            .terrain_revisions
+            .mark_tiles_changed([crate::terrain::TilePosition { x: 0, y: 0 }]);
+
+        let plan = session.snapshot_chunk_recovery_plan(position, 0);
+
+        assert_eq!(plan.snapshot_tick, session.current_tick());
+        assert_eq!(plan.requested_position, position);
+        assert_eq!(plan.known_revision, 0);
+        assert_eq!(plan.recovered_revision(), Some(1));
+        assert!(!plan.requires_keyframe);
     }
 
     #[test]
