@@ -192,6 +192,79 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyGameplayMutationDomain {
+    TerrainMining,
+    SurvivalHazards,
+    ScannerDiscovery,
+    BombInfrastructure,
+    EconomyProgressionContracts,
+    RenderUiSaveAdapter,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyGameplayMutationInventory {
+    pub domains: [LegacyGameplayMutationDomain; 6],
+    pub authoritative_extraction_remaining: usize,
+    pub adapter_only_domains: usize,
+}
+
+impl LegacyGameplayMutationInventory {
+    #[must_use]
+    pub const fn inventory_complete(self) -> bool {
+        self.domains.len() == 6
+            && self.authoritative_extraction_remaining > 0
+            && self.adapter_only_domains == 1
+    }
+}
+
+#[must_use]
+pub const fn legacy_gameplay_mutation_inventory() -> LegacyGameplayMutationInventory {
+    LegacyGameplayMutationInventory {
+        domains: [
+            LegacyGameplayMutationDomain::TerrainMining,
+            LegacyGameplayMutationDomain::SurvivalHazards,
+            LegacyGameplayMutationDomain::ScannerDiscovery,
+            LegacyGameplayMutationDomain::BombInfrastructure,
+            LegacyGameplayMutationDomain::EconomyProgressionContracts,
+            LegacyGameplayMutationDomain::RenderUiSaveAdapter,
+        ],
+        authoritative_extraction_remaining: 5,
+        adapter_only_domains: 1,
+    }
+}
+
+#[allow(
+    clippy::struct_field_names,
+    reason = "audit field names intentionally distinguish fixed, presentation-only, and unresolved domains"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VariableDeltaAuditSummary {
+    pub fixed_or_compatibility_gameplay_domains: usize,
+    pub presentation_only_variable_domains: usize,
+    pub unresolved_gameplay_variable_domains: usize,
+}
+
+impl VariableDeltaAuditSummary {
+    #[must_use]
+    pub const fn gameplay_delta_audit_complete(self) -> bool {
+        self.unresolved_gameplay_variable_domains == 0
+            && self.fixed_or_compatibility_gameplay_domains > 0
+            && self.presentation_only_variable_domains > 0
+    }
+}
+
+#[must_use]
+pub fn variable_delta_audit_summary() -> VariableDeltaAuditSummary {
+    let migration = FixedTickMigrationSummary::from_items(&fixed_tick_audit_items());
+    VariableDeltaAuditSummary {
+        fixed_or_compatibility_gameplay_domains: migration.fixed_ready
+            + migration.authoritative_migrations,
+        presentation_only_variable_domains: migration.presentation_exemptions,
+        unresolved_gameplay_variable_domains: migration.unresolved_variable_delta,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransientEffectDomain {
     LocalClientPresentation,
     GameplayRelevantWorld,
@@ -2979,6 +3052,16 @@ impl GameSession {
     }
 
     #[must_use]
+    pub const fn legacy_gameplay_mutation_inventory() -> LegacyGameplayMutationInventory {
+        legacy_gameplay_mutation_inventory()
+    }
+
+    #[must_use]
+    pub fn variable_delta_audit_summary() -> VariableDeltaAuditSummary {
+        variable_delta_audit_summary()
+    }
+
+    #[must_use]
     pub const fn snapshot_purposes() -> [SnapshotPurpose; 3] {
         snapshot_purposes()
     }
@@ -5744,6 +5827,51 @@ mod tests {
                 .kind,
             TileKind::Air
         );
+    }
+
+    #[test]
+    fn authoritative_extraction_inventory_tracks_remaining_legacy_gameplay_mutations() {
+        let inventory = GameSession::legacy_gameplay_mutation_inventory();
+
+        assert!(inventory.inventory_complete());
+        assert!(
+            inventory
+                .domains
+                .contains(&super::LegacyGameplayMutationDomain::TerrainMining)
+        );
+        assert!(
+            inventory
+                .domains
+                .contains(&super::LegacyGameplayMutationDomain::SurvivalHazards)
+        );
+        assert!(
+            inventory
+                .domains
+                .contains(&super::LegacyGameplayMutationDomain::ScannerDiscovery)
+        );
+        assert!(
+            inventory
+                .domains
+                .contains(&super::LegacyGameplayMutationDomain::BombInfrastructure)
+        );
+        assert!(
+            inventory
+                .domains
+                .contains(&super::LegacyGameplayMutationDomain::EconomyProgressionContracts)
+        );
+        assert_eq!(inventory.authoritative_extraction_remaining, 5);
+        assert_eq!(inventory.adapter_only_domains, 1);
+    }
+
+    #[test]
+    fn variable_delta_audit_marks_gameplay_fixed_or_compatibility_and_animation_presentation_only()
+    {
+        let audit = GameSession::variable_delta_audit_summary();
+
+        assert!(audit.gameplay_delta_audit_complete());
+        assert_eq!(audit.unresolved_gameplay_variable_domains, 0);
+        assert!(audit.fixed_or_compatibility_gameplay_domains >= 7);
+        assert_eq!(audit.presentation_only_variable_domains, 1);
     }
 
     #[test]

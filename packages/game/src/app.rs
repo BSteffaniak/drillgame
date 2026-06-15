@@ -158,6 +158,10 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         0,
     );
     let _keyframe_interval_ticks = GameSession::keyframe_interval_ticks();
+    let legacy_mutation_inventory = GameSession::legacy_gameplay_mutation_inventory();
+    let variable_delta_audit = GameSession::variable_delta_audit_summary();
+    let _legacy_mutation_inventory_complete = legacy_mutation_inventory.inventory_complete();
+    let _variable_delta_complete = variable_delta_audit.gameplay_delta_audit_complete();
     let _compatibility_mode = GameSession::compatibility_mode();
     let _target_compatibility_mode = GameSession::target_compatibility_mode();
     let _planned_state_boundaries = GameSession::planned_state_boundaries();
