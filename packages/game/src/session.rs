@@ -4640,6 +4640,75 @@ mod tests {
     }
 
     #[test]
+    fn local_two_player_gameplay_regression_covers_core_authoritative_slices() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        {
+            let player = session
+                .world
+                .player_mut(second_player)
+                .expect("second player exists");
+            player.fuel = 0.0;
+            player.hull = 0.0;
+            player.credits = 500;
+            player.cargo.insert(crate::terrain::MineralKind::Copper, 2);
+        }
+        let tick = session.current_tick();
+
+        session.route_client_player_commands(
+            LOCAL_CLIENT_ID,
+            CommandSource::Keyboard,
+            vec![PlayerCommand::Movement {
+                horizontal: 0.5,
+                thrust: false,
+                drill_down: true,
+            }],
+        );
+        session.route_split_screen_player_commands(
+            second_client,
+            vec![
+                PlayerCommand::Rescue,
+                PlayerCommand::SellCargo,
+                PlayerCommand::Refuel,
+            ],
+        );
+
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 4);
+        let local = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        let second = session
+            .world()
+            .player(second_player)
+            .expect("second player exists");
+        assert!((local.velocity_x - 0.5).abs() < f32::EPSILON);
+        assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_some());
+        assert!(second.hull > 0.0);
+        assert!(second.fuel > 0.0);
+        assert_eq!(second.cargo_used(), 0);
+        assert!(second.credits > 500);
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::DrillProgressed {
+                player_id: LOCAL_PLAYER_ID
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::PlayerSurvivalChanged { player_id }
+                if *player_id == second_player
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            super::WorldEvent::CargoChanged { player_id } if *player_id == second_player
+        )));
+    }
+
+    #[test]
     fn authoritative_rescue_updates_player_survival_state() {
         let mut session = GameSession::new();
         session.game.player.fuel = 0.0;
