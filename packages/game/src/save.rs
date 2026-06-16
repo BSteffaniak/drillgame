@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     error::Error,
     fmt, fs, io,
@@ -13,6 +14,7 @@ use crate::{
     multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
     player::Player,
     session::WorldState,
+    terrain::{ArtifactKind, MineralKind, StrategicResourceKind},
 };
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -107,10 +109,56 @@ pub struct PersistentPlayerState {
     pub velocity_x: f32,
     pub velocity_y: f32,
     pub credits: u32,
+    #[serde(default)]
+    pub cargo: BTreeMap<MineralKind, u32>,
+    #[serde(default)]
+    pub artifacts: BTreeMap<ArtifactKind, u32>,
+    #[serde(default)]
+    pub materials: BTreeMap<StrategicResourceKind, u32>,
     pub cargo_used: u32,
     pub cargo_capacity: u32,
     pub fuel: f32,
+    #[serde(default)]
+    pub fuel_capacity: f32,
     pub hull: f32,
+    #[serde(default)]
+    pub fuel_tank_level: u8,
+    #[serde(default)]
+    pub cargo_bay_level: u8,
+    #[serde(default)]
+    pub drill_strength: u8,
+    #[serde(default)]
+    pub engine_level: u8,
+    #[serde(default)]
+    pub hull_level: u8,
+    #[serde(default)]
+    pub radiator_level: u8,
+    #[serde(default)]
+    pub scanner_level: u8,
+    #[serde(default)]
+    pub bombs: u32,
+    #[serde(default)]
+    pub loan_debt: u32,
+    #[serde(default)]
+    pub insured: bool,
+    #[serde(default)]
+    pub insurance_tier: u8,
+    #[serde(default)]
+    pub crafted_bulkheads: u8,
+    #[serde(default)]
+    pub crafted_sorters: u8,
+    #[serde(default)]
+    pub signal_relay_kits: u32,
+    #[serde(default)]
+    pub survey_drone_kits: u32,
+    #[serde(default)]
+    pub cargo_lift_kits: u32,
+    #[serde(default)]
+    pub tunnel_support_kits: u32,
+    #[serde(default)]
+    pub pump_station_kits: u32,
+    #[serde(default)]
+    pub ore_processor_kits: u32,
 }
 
 impl PersistentPlayerState {
@@ -123,10 +171,33 @@ impl PersistentPlayerState {
             velocity_x: game.player.velocity_x,
             velocity_y: game.player.velocity_y,
             credits: game.player.credits,
+            cargo: game.player.cargo.clone(),
+            artifacts: game.player.artifacts.clone(),
+            materials: game.player.materials.clone(),
             cargo_used: game.player.cargo_used(),
             cargo_capacity: game.player.cargo_capacity,
             fuel: game.player.fuel,
+            fuel_capacity: game.player.fuel_capacity,
             hull: game.player.hull,
+            fuel_tank_level: game.player.fuel_tank_level,
+            cargo_bay_level: game.player.cargo_bay_level,
+            drill_strength: game.player.drill_strength,
+            engine_level: game.player.engine_level,
+            hull_level: game.player.hull_level,
+            radiator_level: game.player.radiator_level,
+            scanner_level: game.player.scanner_level,
+            bombs: game.player.bombs,
+            loan_debt: game.player.loan_debt,
+            insured: game.player.insured,
+            insurance_tier: game.player.insurance_tier,
+            crafted_bulkheads: game.player.crafted_bulkheads,
+            crafted_sorters: game.player.crafted_sorters,
+            signal_relay_kits: game.player.signal_relay_kits,
+            survey_drone_kits: game.player.survey_drone_kits,
+            cargo_lift_kits: game.player.cargo_lift_kits,
+            tunnel_support_kits: game.player.tunnel_support_kits,
+            pump_station_kits: game.player.pump_station_kits,
+            ore_processor_kits: game.player.ore_processor_kits,
         }
     }
 
@@ -145,22 +216,82 @@ impl PersistentPlayerState {
             velocity_x: player.velocity_x,
             velocity_y: player.velocity_y,
             credits: player.credits,
+            cargo: player.cargo.clone(),
+            artifacts: player.artifacts.clone(),
+            materials: player.materials.clone(),
             cargo_used: player.cargo_used(),
             cargo_capacity: player.cargo_capacity,
             fuel: player.fuel,
+            fuel_capacity: player.fuel_capacity,
             hull: player.hull,
+            fuel_tank_level: player.fuel_tank_level,
+            cargo_bay_level: player.cargo_bay_level,
+            drill_strength: player.drill_strength,
+            engine_level: player.engine_level,
+            hull_level: player.hull_level,
+            radiator_level: player.radiator_level,
+            scanner_level: player.scanner_level,
+            bombs: player.bombs,
+            loan_debt: player.loan_debt,
+            insured: player.insured,
+            insurance_tier: player.insurance_tier,
+            crafted_bulkheads: player.crafted_bulkheads,
+            crafted_sorters: player.crafted_sorters,
+            signal_relay_kits: player.signal_relay_kits,
+            survey_drone_kits: player.survey_drone_kits,
+            cargo_lift_kits: player.cargo_lift_kits,
+            tunnel_support_kits: player.tunnel_support_kits,
+            pump_station_kits: player.pump_station_kits,
+            ore_processor_kits: player.ore_processor_kits,
         }
     }
 
-    pub const fn apply_to_player(&self, player: &mut Player) {
+    pub fn apply_to_player(&self, player: &mut Player) {
         player.x = self.x;
         player.y = self.y;
         player.velocity_x = self.velocity_x;
         player.velocity_y = self.velocity_y;
         player.credits = self.credits;
+        player.cargo = self.cargo.clone();
+        player.artifacts = self.artifacts.clone();
+        player.materials = self.materials.clone();
         player.cargo_capacity = self.cargo_capacity;
         player.fuel = self.fuel;
+        if self.fuel_capacity > 0.0 {
+            player.fuel_capacity = self.fuel_capacity;
+        }
         player.hull = self.hull;
+        if self.fuel_tank_level > 0 {
+            player.fuel_tank_level = self.fuel_tank_level;
+        }
+        if self.cargo_bay_level > 0 {
+            player.cargo_bay_level = self.cargo_bay_level;
+        }
+        if self.drill_strength > 0 {
+            player.drill_strength = self.drill_strength;
+        }
+        if self.engine_level > 0 {
+            player.engine_level = self.engine_level;
+        }
+        if self.hull_level > 0 {
+            player.hull_level = self.hull_level;
+        }
+        if self.radiator_level > 0 {
+            player.radiator_level = self.radiator_level;
+        }
+        player.scanner_level = self.scanner_level;
+        player.bombs = self.bombs;
+        player.loan_debt = self.loan_debt;
+        player.insured = self.insured;
+        player.insurance_tier = self.insurance_tier;
+        player.crafted_bulkheads = self.crafted_bulkheads;
+        player.crafted_sorters = self.crafted_sorters;
+        player.signal_relay_kits = self.signal_relay_kits;
+        player.survey_drone_kits = self.survey_drone_kits;
+        player.cargo_lift_kits = self.cargo_lift_kits;
+        player.tunnel_support_kits = self.tunnel_support_kits;
+        player.pump_station_kits = self.pump_station_kits;
+        player.ore_processor_kits = self.ore_processor_kits;
     }
 }
 
@@ -517,6 +648,7 @@ mod tests {
         multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
         save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
         session::WorldState,
+        terrain::{ArtifactKind, MineralKind, StrategicResourceKind},
     };
 
     #[test]
@@ -617,6 +749,29 @@ mod tests {
             player.fuel = 33.0;
             player.hull = 44.0;
             player.cargo_capacity = 55;
+            player.cargo.insert(MineralKind::Copper, 3);
+            player.artifacts.insert(ArtifactKind::Fossil, 2);
+            player.materials.insert(StrategicResourceKind::CoreShard, 4);
+            player.fuel_capacity = 150.0;
+            player.fuel_tank_level = 3;
+            player.cargo_bay_level = 4;
+            player.drill_strength = 5;
+            player.engine_level = 6;
+            player.hull_level = 7;
+            player.radiator_level = 8;
+            player.scanner_level = 2;
+            player.bombs = 9;
+            player.loan_debt = 1234;
+            player.insured = true;
+            player.insurance_tier = 2;
+            player.crafted_bulkheads = 3;
+            player.crafted_sorters = 4;
+            player.signal_relay_kits = 5;
+            player.survey_drone_kits = 6;
+            player.cargo_lift_kits = 7;
+            player.tunnel_support_kits = 8;
+            player.pump_station_kits = 9;
+            player.ore_processor_kits = 10;
         }
         let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
         let mut restored_world = WorldState::from_legacy_game(&GameState::new());
@@ -635,6 +790,44 @@ mod tests {
         assert!((restored_player.fuel - 33.0).abs() < f32::EPSILON);
         assert!((restored_player.hull - 44.0).abs() < f32::EPSILON);
         assert_eq!(restored_player.cargo_capacity, 55);
+        assert_eq!(
+            restored_player.cargo.get(&MineralKind::Copper).copied(),
+            Some(3)
+        );
+        assert_eq!(
+            restored_player
+                .artifacts
+                .get(&ArtifactKind::Fossil)
+                .copied(),
+            Some(2)
+        );
+        assert_eq!(
+            restored_player
+                .materials
+                .get(&StrategicResourceKind::CoreShard)
+                .copied(),
+            Some(4)
+        );
+        assert!((restored_player.fuel_capacity - 150.0).abs() < f32::EPSILON);
+        assert_eq!(restored_player.fuel_tank_level, 3);
+        assert_eq!(restored_player.cargo_bay_level, 4);
+        assert_eq!(restored_player.drill_strength, 5);
+        assert_eq!(restored_player.engine_level, 6);
+        assert_eq!(restored_player.hull_level, 7);
+        assert_eq!(restored_player.radiator_level, 8);
+        assert_eq!(restored_player.scanner_level, 2);
+        assert_eq!(restored_player.bombs, 9);
+        assert_eq!(restored_player.loan_debt, 1234);
+        assert!(restored_player.insured);
+        assert_eq!(restored_player.insurance_tier, 2);
+        assert_eq!(restored_player.crafted_bulkheads, 3);
+        assert_eq!(restored_player.crafted_sorters, 4);
+        assert_eq!(restored_player.signal_relay_kits, 5);
+        assert_eq!(restored_player.survey_drone_kits, 6);
+        assert_eq!(restored_player.cargo_lift_kits, 7);
+        assert_eq!(restored_player.tunnel_support_kits, 8);
+        assert_eq!(restored_player.pump_station_kits, 9);
+        assert_eq!(restored_player.ore_processor_kits, 10);
     }
 
     #[test]
