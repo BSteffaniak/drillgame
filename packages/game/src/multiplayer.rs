@@ -997,6 +997,160 @@ impl QuinnPacketIo {
     }
 }
 
+#[derive(Debug)]
+pub enum QuinnOnlineSessionError {
+    Backend(QuinnBackendError),
+    PacketIo(QuinnPacketIoError),
+    MissingEndpoint(&'static str),
+    Connect(String),
+    Accept(String),
+    JoinRejected,
+    UnexpectedMessage(ProtocolMessage),
+}
+
+impl From<QuinnBackendError> for QuinnOnlineSessionError {
+    fn from(error: QuinnBackendError) -> Self {
+        Self::Backend(error)
+    }
+}
+
+impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
+    fn from(error: QuinnPacketIoError) -> Self {
+        Self::PacketIo(error)
+    }
+}
+
+#[derive(Debug)]
+pub struct QuinnOnlineSession {
+    pub host_runtime: HostSessionRuntime,
+    pub client_runtime: ClientSessionRuntime,
+    pub host_io: QuinnPacketIo,
+    pub client_io: QuinnPacketIo,
+    pub host_addr: SocketAddr,
+    pub client_addr: SocketAddr,
+}
+
+impl QuinnOnlineSession {
+    #[must_use]
+    pub const fn joined_player_id(&self) -> Option<PlayerId> {
+        self.client_runtime.assigned_player_id
+    }
+
+    #[must_use]
+    pub fn host_connected_client_count(&self) -> usize {
+        self.host_runtime.connected_client_count()
+    }
+}
+
+/// Start a localhost Quinn host/client pair and complete the join handshake through real packet IO.
+///
+/// # Errors
+///
+/// Returns an error when endpoint binding, Quinn connect/accept, packet IO, or host join acceptance
+/// fails.
+pub async fn connect_localhost_quinn_session(
+    host_config: HostRuntimeConfig,
+    client_config: ClientRuntimeConfig,
+    snapshot_tick: SimulationTick,
+) -> Result<QuinnOnlineSession, QuinnOnlineSessionError> {
+    let pair = QuinnLocalEndpointPair::bind(QuinnEndpointConfig::localhost_ephemeral())?;
+    let host_addr = pair
+        .server
+        .local_addr()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("host address"))?;
+    let client_addr = pair
+        .client
+        .local_addr()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("client address"))?;
+    let client_endpoint = pair
+        .client
+        .endpoint()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("client endpoint"))?
+        .clone();
+    let server_endpoint = pair
+        .server
+        .endpoint()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("server endpoint"))?
+        .clone();
+
+    let (client_connection, server_connection) = tokio::join!(
+        async move {
+            client_endpoint
+                .connect(host_addr, "localhost")
+                .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))?
+                .await
+                .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))
+        },
+        async move {
+            server_endpoint
+                .accept()
+                .await
+                .ok_or(QuinnOnlineSessionError::Accept(
+                    "endpoint closed".to_owned(),
+                ))?
+                .await
+                .map_err(|error| QuinnOnlineSessionError::Accept(error.to_string()))
+        }
+    );
+    let client_io = QuinnPacketIo::new(client_connection?);
+    let host_io = QuinnPacketIo::new(server_connection?);
+    let mut host_runtime = HostSessionRuntime::new(host_config, snapshot_tick);
+    let mut client_runtime = ClientSessionRuntime::new(client_config.clone());
+
+    client_io
+        .send_packet(VersionedProtocolPacket::new(
+            client_runtime.connect_request(),
+        ))
+        .await?;
+    let join_packet = host_io.receive_reliable_packet().await?;
+    let join_response = match join_packet.decode_supported().map_err(|error| {
+        QuinnOnlineSessionError::Connect(format!(
+            "unsupported protocol version: expected {}, actual {}",
+            error.expected, error.actual
+        ))
+    })? {
+        ProtocolMessage::JoinRequest {
+            client_id,
+            session_token: None,
+        } => host_runtime.accept_client(
+            client_id,
+            client_config.player_id.unwrap_or(LOCAL_PLAYER_ID),
+            snapshot_tick,
+        ),
+        ProtocolMessage::ReconnectRequest {
+            client_id,
+            session_token,
+        }
+        | ProtocolMessage::JoinRequest {
+            client_id,
+            session_token: Some(session_token),
+        } => host_runtime.reconnect_client(client_id, session_token, snapshot_tick),
+        other => return Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+    }
+    .ok_or(QuinnOnlineSessionError::JoinRejected)?;
+
+    host_io
+        .send_packet(VersionedProtocolPacket::new(join_response))
+        .await?;
+    let accepted_packet = client_io.receive_reliable_packet().await?;
+    let accepted_message = accepted_packet.decode_supported().map_err(|error| {
+        QuinnOnlineSessionError::Connect(format!(
+            "unsupported protocol version: expected {}, actual {}",
+            error.expected, error.actual
+        ))
+    })?;
+    client_runtime.handle_message(accepted_message);
+
+    Ok(QuinnOnlineSession {
+        host_runtime,
+        client_runtime,
+        host_io,
+        client_io,
+        host_addr,
+        client_addr,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionQuicPacketIoStatus {
     pub reliable_stream_packets: usize,
@@ -2639,7 +2793,8 @@ mod tests {
         QuinnEndpointConfig, QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend,
         ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
         VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
+        connect_localhost_quinn_session, connection_lifecycle_summary,
+        default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -2918,6 +3073,26 @@ mod tests {
                 .expect("datagram packet receives"),
             unreliable_packet
         );
+    }
+
+    #[tokio::test]
+    async fn localhost_quinn_session_entrypoint_drives_join_through_real_packet_io() {
+        let client_config = default_local_client_runtime();
+        let session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(55),
+        )
+        .await
+        .expect("localhost quinn session connects");
+
+        assert_eq!(session.host_connected_client_count(), 1);
+        assert_eq!(session.joined_player_id(), client_config.player_id);
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(55)
+        );
+        assert_ne!(session.host_addr, session.client_addr);
     }
 
     #[test]
