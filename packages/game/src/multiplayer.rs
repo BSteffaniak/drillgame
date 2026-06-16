@@ -986,6 +986,54 @@ impl QuinnEndpointConfig {
 }
 
 #[derive(Debug)]
+pub struct QuinnLocalEndpointPair {
+    pub client: QuinnSocketBackend,
+    pub server: QuinnSocketBackend,
+}
+
+impl QuinnLocalEndpointPair {
+    /// Bind a localhost client/server endpoint pair using one generated certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when certificate generation, TLS configuration, or UDP endpoint binding fails.
+    pub fn bind(config: QuinnEndpointConfig) -> Result<Self, QuinnBackendError> {
+        let certified_key = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])?;
+        let key = quinn::rustls::pki_types::PrivateKeyDer::Pkcs8(
+            certified_key.key_pair.serialize_der().into(),
+        );
+        let mut server_config =
+            quinn::ServerConfig::with_single_cert(vec![certified_key.cert.der().clone()], key)?;
+        server_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+
+        let mut roots = quinn::rustls::RootCertStore::empty();
+        roots.add(certified_key.cert.der().clone())?;
+        let mut client_config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))
+            .map_err(|error| QuinnBackendError::ClientConfig(error.to_string()))?;
+        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+
+        let client_endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            None,
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        let mut client = QuinnSocketBackend::from_bound_endpoint(client_endpoint)?;
+        client.set_default_client_config(client_config);
+
+        let server_endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        let server = QuinnSocketBackend::from_bound_endpoint(server_endpoint)?;
+
+        Ok(Self { client, server })
+    }
+}
+
+#[derive(Debug)]
 pub struct QuinnSocketBackend {
     endpoint: Option<quinn::Endpoint>,
     local_addr: Option<SocketAddr>,
@@ -1047,6 +1095,25 @@ impl QuinnSocketBackend {
         })
     }
 
+    fn from_bound_endpoint(endpoint: quinn::Endpoint) -> std::io::Result<Self> {
+        let local_addr = Some(endpoint.local_addr()?);
+        Ok(Self {
+            endpoint: Some(endpoint),
+            local_addr,
+        })
+    }
+
+    fn set_default_client_config(&mut self, config: quinn::ClientConfig) {
+        if let Some(endpoint) = &mut self.endpoint {
+            endpoint.set_default_client_config(config);
+        }
+    }
+
+    #[must_use]
+    pub const fn endpoint(&self) -> Option<&quinn::Endpoint> {
+        self.endpoint.as_ref()
+    }
+
     #[must_use]
     pub const fn endpoint_bound(&self) -> bool {
         self.endpoint.is_some()
@@ -1068,6 +1135,7 @@ pub enum QuinnBackendError {
     Io(std::io::Error),
     Certificate(rcgen::Error),
     Tls(quinn::rustls::Error),
+    ClientConfig(String),
 }
 
 impl From<std::io::Error> for QuinnBackendError {
@@ -2468,11 +2536,12 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
         PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
-        QuinnEndpointConfig, QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand,
-        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
-        command_conflicts, connection_lifecycle_summary, default_local_client_runtime,
-        disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
-        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
+        QuinnEndpointConfig, QuinnLocalEndpointPair, QuinnSocketBackend, ReliabilityClass,
+        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
+        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
+        default_local_client_runtime, disconnect_reservation_policy,
+        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
         network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
         per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
@@ -2604,6 +2673,82 @@ mod tests {
         assert!(server_status.endpoint_bound);
         assert!(server_status.socket_packet_io_ready);
         assert_ne!(client_status.local_addr, server_status.local_addr);
+    }
+
+    #[tokio::test]
+    async fn quinn_local_endpoint_pair_connects_and_exchanges_protocol_packets() {
+        let pair = QuinnLocalEndpointPair::bind(QuinnEndpointConfig::localhost_ephemeral())
+            .expect("endpoint pair binds");
+        let server_addr = pair.server.local_addr().expect("server address");
+        let client_endpoint = pair.client.endpoint().expect("client endpoint").clone();
+        let server_endpoint = pair.server.endpoint().expect("server endpoint").clone();
+        let reliable_packet = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+        let unreliable_packet = VersionedProtocolPacket::new(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(33),
+            payload: NetworkDeltaPayload::Noop,
+        });
+        let reliable_bytes = reliable_packet.encode_bytes().expect("reliable encodes");
+        let unreliable_bytes = unreliable_packet
+            .encode_bytes()
+            .expect("unreliable encodes");
+
+        let (client_connection, server_connection) = tokio::join!(
+            async move {
+                client_endpoint
+                    .connect(server_addr, "localhost")
+                    .expect("connect starts")
+                    .await
+                    .expect("client connects")
+            },
+            async move {
+                server_endpoint
+                    .accept()
+                    .await
+                    .expect("incoming connection")
+                    .await
+                    .expect("server accepts")
+            }
+        );
+
+        let server_datagram_connection = server_connection.clone();
+        let (mut send, _recv) = client_connection
+            .open_bi()
+            .await
+            .expect("client opens reliable stream");
+        let reliable_reader = tokio::spawn(async move {
+            let mut incoming = server_connection
+                .accept_bi()
+                .await
+                .expect("server accepts reliable stream")
+                .1;
+            incoming
+                .read_to_end(usize::MAX)
+                .await
+                .expect("server reads reliable packet")
+        });
+        send.write_all(&reliable_bytes)
+            .await
+            .expect("client writes reliable packet");
+        send.finish().expect("client finishes reliable stream");
+        let received_reliable = reliable_reader.await.expect("reader task joins");
+
+        let reliable_round_trip =
+            VersionedProtocolPacket::decode_bytes(&received_reliable).expect("reliable decodes");
+        assert_eq!(reliable_round_trip, reliable_packet);
+
+        client_connection
+            .send_datagram(unreliable_bytes.into())
+            .expect("client sends datagram");
+        let datagram = server_datagram_connection
+            .read_datagram()
+            .await
+            .expect("server reads datagram");
+        let unreliable_round_trip =
+            VersionedProtocolPacket::decode_bytes(&datagram).expect("unreliable decodes");
+        assert_eq!(unreliable_round_trip, unreliable_packet);
     }
 
     #[test]
