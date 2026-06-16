@@ -967,6 +967,45 @@ impl PacketIo for ProductionQuicPacketIo {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct QuinnSocketBackend {
+    endpoint: Option<quinn::Endpoint>,
+}
+
+impl QuinnSocketBackend {
+    #[must_use]
+    pub const fn new_unbound() -> Self {
+        Self { endpoint: None }
+    }
+
+    #[must_use]
+    pub const fn endpoint_bound(&self) -> bool {
+        self.endpoint.is_some()
+    }
+
+    #[must_use]
+    pub const fn real_dependency_linked() -> bool {
+        std::mem::size_of::<quinn::Endpoint>() > 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct QuinnSocketBackendStatus {
+    pub dependency_linked: bool,
+    pub endpoint_bound: bool,
+    pub socket_packet_io_ready: bool,
+}
+
+impl From<&QuinnSocketBackend> for QuinnSocketBackendStatus {
+    fn from(backend: &QuinnSocketBackend) -> Self {
+        Self {
+            dependency_linked: QuinnSocketBackend::real_dependency_linked(),
+            endpoint_bound: backend.endpoint_bound(),
+            socket_packet_io_ready: backend.endpoint_bound(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionTransportSelection {
     pub backend: SelectedTransportBackend,
@@ -1009,7 +1048,7 @@ pub const fn production_transport_selection() -> ProductionTransportSelection {
         backend: SelectedTransportBackend::QuinnQuic,
         reliable_channel: ProductionPacketChannel::QuicBidirectionalStream,
         unreliable_sequenced_channel: ProductionPacketChannel::QuicDatagram,
-        dependency_added: false,
+        dependency_added: true,
     }
 }
 
@@ -2328,7 +2367,7 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
         PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
-        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
         VersionedProtocolPacket, client_authority_allowed, command_conflicts,
         connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
@@ -2439,7 +2478,17 @@ mod tests {
     }
 
     #[test]
-    fn production_transport_selection_maps_reliability_to_quic_channels_without_dependency() {
+    fn quinn_socket_backend_links_real_dependency_but_starts_unbound() {
+        let backend = QuinnSocketBackend::new_unbound();
+        let status = super::QuinnSocketBackendStatus::from(&backend);
+
+        assert!(status.dependency_linked);
+        assert!(!status.endpoint_bound);
+        assert!(!status.socket_packet_io_ready);
+    }
+
+    #[test]
+    fn production_transport_selection_maps_reliability_to_quic_channels_with_dependency() {
         let selection = production_transport_selection();
         let mapping = transport_reliability_mapping();
 
@@ -2455,7 +2504,7 @@ mod tests {
             selection.unreliable_sequenced_channel,
             ProductionPacketChannel::QuicDatagram
         );
-        assert!(!selection.dependency_added);
+        assert!(selection.dependency_added);
         assert_eq!(
             mapping.production_channel_for(ReliabilityClass::Reliable),
             ProductionPacketChannel::QuicBidirectionalStream

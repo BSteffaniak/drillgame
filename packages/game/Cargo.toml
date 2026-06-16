@@ -19,6 +19,7 @@ name = "drillgame"
 path = "src/main.rs"
 
 [dependencies]
+quinn      = { workspace = true }
 raylib     = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }

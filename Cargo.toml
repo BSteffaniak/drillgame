@@ -11,6 +11,11 @@ repository = "https://github.com/BSteffaniak/drillgame"
 version    = "0.0.1-alpha.0"
 
 [workspace.dependencies]
+quinn = { version = "0.11.9", default-features = false, features = [
+    "rustls",
+    "ring",
+    "runtime-tokio",
+] }
 raylib = { version = "6.0.0", default-features = false, features = [
     "SUPPORT_MODULE_RSHAPES",
     "SUPPORT_MODULE_RTEXT",
