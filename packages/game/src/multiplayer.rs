@@ -897,6 +897,106 @@ pub enum ProductionPacketChannel {
     QuicDatagram,
 }
 
+#[derive(Debug)]
+pub enum QuinnPacketIoError {
+    Packet(PacketIoError),
+    ConnectionClosed,
+    OpenStream(String),
+    Write(String),
+    Read(String),
+    Datagram(String),
+}
+
+impl From<PacketIoError> for QuinnPacketIoError {
+    fn from(error: PacketIoError) -> Self {
+        Self::Packet(error)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct QuinnPacketIo {
+    connection: quinn::Connection,
+}
+
+impl QuinnPacketIo {
+    #[must_use]
+    pub const fn new(connection: quinn::Connection) -> Self {
+        Self { connection }
+    }
+
+    /// Send one versioned protocol packet over the selected Quinn channel for its reliability class.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when packet encoding fails, a stream cannot be opened/written, or a datagram
+    /// cannot be queued.
+    pub async fn send_packet(
+        &self,
+        packet: VersionedProtocolPacket,
+    ) -> Result<(), QuinnPacketIoError> {
+        let bytes = packet.encode_bytes()?;
+        match transport_reliability_mapping()
+            .production_channel_for(packet.message.reliability_class())
+        {
+            ProductionPacketChannel::QuicBidirectionalStream => {
+                let mut stream = self
+                    .connection
+                    .open_uni()
+                    .await
+                    .map_err(|error| QuinnPacketIoError::OpenStream(error.to_string()))?;
+                stream
+                    .write_all(&bytes)
+                    .await
+                    .map_err(|error| QuinnPacketIoError::Write(error.to_string()))?;
+                stream
+                    .finish()
+                    .map_err(|error| QuinnPacketIoError::Write(error.to_string()))?;
+                Ok(())
+            }
+            ProductionPacketChannel::QuicDatagram => self
+                .connection
+                .send_datagram(bytes.into())
+                .map_err(|error| QuinnPacketIoError::Datagram(error.to_string())),
+        }
+    }
+
+    /// Receive one reliable versioned protocol packet from an incoming Quinn unidirectional stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no stream can be accepted, stream reading fails, or packet decoding fails.
+    pub async fn receive_reliable_packet(
+        &self,
+    ) -> Result<VersionedProtocolPacket, QuinnPacketIoError> {
+        let mut stream = self
+            .connection
+            .accept_uni()
+            .await
+            .map_err(|error| QuinnPacketIoError::Read(error.to_string()))?;
+        let bytes = stream
+            .read_to_end(usize::MAX)
+            .await
+            .map_err(|error| QuinnPacketIoError::Read(error.to_string()))?;
+        VersionedProtocolPacket::decode_bytes(&bytes).map_err(Into::into)
+    }
+
+    /// Receive one unreliable/sequenced versioned protocol packet from a Quinn datagram.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when datagram receiving fails or packet decoding fails.
+    pub async fn receive_datagram_packet(
+        &self,
+    ) -> Result<VersionedProtocolPacket, QuinnPacketIoError> {
+        let bytes = self
+            .connection
+            .read_datagram()
+            .await
+            .map_err(|error| QuinnPacketIoError::Datagram(error.to_string()))?;
+        VersionedProtocolPacket::decode_bytes(&bytes).map_err(Into::into)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionQuicPacketIoStatus {
     pub reliable_stream_packets: usize,
@@ -2536,10 +2636,10 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
         PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
-        QuinnEndpointConfig, QuinnLocalEndpointPair, QuinnSocketBackend, ReliabilityClass,
-        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
-        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
-        default_local_client_runtime, disconnect_reservation_policy,
+        QuinnEndpointConfig, QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend,
+        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
+        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -2749,6 +2849,75 @@ mod tests {
         let unreliable_round_trip =
             VersionedProtocolPacket::decode_bytes(&datagram).expect("unreliable decodes");
         assert_eq!(unreliable_round_trip, unreliable_packet);
+    }
+
+    #[tokio::test]
+    async fn quinn_packet_io_sends_reliable_and_datagram_protocol_packets() {
+        let pair = QuinnLocalEndpointPair::bind(QuinnEndpointConfig::localhost_ephemeral())
+            .expect("endpoint pair binds");
+        let server_addr = pair.server.local_addr().expect("server address");
+        let client_endpoint = pair.client.endpoint().expect("client endpoint").clone();
+        let server_endpoint = pair.server.endpoint().expect("server endpoint").clone();
+        let reliable_packet = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+        let unreliable_packet = VersionedProtocolPacket::new(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(34),
+            payload: NetworkDeltaPayload::Noop,
+        });
+
+        let (client_connection, server_connection) = tokio::join!(
+            async move {
+                client_endpoint
+                    .connect(server_addr, "localhost")
+                    .expect("connect starts")
+                    .await
+                    .expect("client connects")
+            },
+            async move {
+                server_endpoint
+                    .accept()
+                    .await
+                    .expect("incoming connection")
+                    .await
+                    .expect("server accepts")
+            }
+        );
+        let client_io = QuinnPacketIo::new(client_connection);
+        let server_io = QuinnPacketIo::new(server_connection);
+
+        let reliable_reader = {
+            let server_io = server_io.clone();
+            tokio::spawn(async move { server_io.receive_reliable_packet().await })
+        };
+        client_io
+            .send_packet(reliable_packet.clone())
+            .await
+            .expect("reliable packet sends");
+        assert_eq!(
+            reliable_reader
+                .await
+                .expect("reliable reader joins")
+                .expect("reliable packet receives"),
+            reliable_packet
+        );
+
+        let datagram_reader = {
+            let server_io = server_io.clone();
+            tokio::spawn(async move { server_io.receive_datagram_packet().await })
+        };
+        client_io
+            .send_packet(unreliable_packet.clone())
+            .await
+            .expect("datagram packet sends");
+        assert_eq!(
+            datagram_reader
+                .await
+                .expect("datagram reader joins")
+                .expect("datagram packet receives"),
+            unreliable_packet
+        );
     }
 
     #[test]
