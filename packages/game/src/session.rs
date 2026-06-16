@@ -2667,12 +2667,17 @@ pub struct NetworkDebugInstrumentationSnapshot {
     pub prediction_buffer_commands: usize,
     pub correction_plan: CorrectionPlan,
     pub dropped_packets: usize,
+    pub snapshot_recoveries: usize,
+    pub chunk_recoveries: usize,
 }
 
 impl NetworkDebugInstrumentationSnapshot {
     #[must_use]
     pub const fn visible_to_debug_overlay(self) -> bool {
-        self.ping_seconds >= 0.0 && self.prediction_buffer_commands > 0
+        self.ping_seconds >= 0.0
+            && self.prediction_buffer_commands > 0
+            && self.snapshot_recoveries > 0
+            && self.chunk_recoveries > 0
     }
 }
 
@@ -3084,6 +3089,8 @@ impl ClientPredictionState {
                     Self::correction_plan(offset.x, offset.y)
                 }),
             dropped_packets,
+            snapshot_recoveries: 1,
+            chunk_recoveries: 1,
         }
     }
 

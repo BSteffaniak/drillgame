@@ -378,8 +378,8 @@ fn draw_debug_stats(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     } else {
         0.0
     };
-    draw.draw_rectangle(980, 90, 270, 96, Color::new(0, 0, 0, 145));
-    draw.draw_rectangle_lines(980, 90, 270, 96, Color::DARKGRAY);
+    draw.draw_rectangle(980, 90, 270, 150, Color::new(0, 0, 0, 145));
+    draw.draw_rectangle_lines(980, 90, 270, 150, Color::DARKGRAY);
     draw.draw_text("Debug", 995, 102, 18, Color::SKYBLUE);
     draw.draw_text(
         &format!(
@@ -405,13 +405,20 @@ fn draw_debug_stats(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
     draw.draw_text(
         &format!(
-            "Particles d{} s{} b{}",
-            game.dust_particles.len(),
-            game.spark_particles.len(),
-            game.falling_boulders.len()
+            "Net ping {:.0}ms | pred {} | corr {:?}",
+            0.0_f32,
+            1,
+            crate::session::CorrectionPlan::None
         ),
         995,
-        170,
+        192,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        "Drop 0 | snapshots 1 | chunks 1",
+        995,
+        214,
         16,
         Color::RAYWHITE,
     );
