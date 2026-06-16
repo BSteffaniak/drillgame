@@ -277,6 +277,26 @@ pub enum OnlineSessionUxState {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OnlineNetworkTaskRequest {
+    HostDirectConnect,
+    JoinDirectConnect,
+    ReconnectDirectConnect,
+    Shutdown,
+}
+
+#[allow(
+    dead_code,
+    reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OnlineNetworkTaskResult {
+    Connected(RealOnlineSessionUxSnapshot),
+    Reconnected(RealOnlineSessionUxSnapshot),
+    Failed(String),
+    Shutdown,
+}
+
 #[allow(
     dead_code,
     reason = "real online controller is exercised by tests until desktop async UI ownership calls it"
@@ -996,6 +1016,8 @@ pub struct GameState {
     pub online_player_slot: Option<u8>,
     #[serde(default)]
     pub online_session_limitations: Vec<String>,
+    #[serde(default, skip)]
+    pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
     #[serde(default)]
     pub local_multiplayer_requested: bool,
     #[serde(default)]
@@ -1223,6 +1245,7 @@ impl GameState {
             online_host_owns_save: false,
             online_player_slot: None,
             online_session_limitations: Self::online_session_limitations(),
+            online_network_task_request: None,
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
             local_multiplayer_player_slots: 1,
@@ -1589,6 +1612,38 @@ impl GameState {
 
     #[allow(
         dead_code,
+        reason = "online task request drain is exercised by tests until desktop event-loop ownership calls it"
+    )]
+    pub fn take_online_network_task_request(&mut self) -> Option<OnlineNetworkTaskRequest> {
+        mem::take(&mut self.online_network_task_request)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
+    )]
+    pub fn apply_online_network_task_result(&mut self, result: OnlineNetworkTaskResult) {
+        match result {
+            OnlineNetworkTaskResult::Connected(snapshot)
+            | OnlineNetworkTaskResult::Reconnected(snapshot) => {
+                self.apply_real_online_session_ux(snapshot);
+            }
+            OnlineNetworkTaskResult::Failed(message) => {
+                self.online_session_state = OnlineSessionUxState::Error;
+                self.online_session_status_message = format!("Connection error: {message}");
+                self.message = self.online_session_status_message.clone();
+            }
+            OnlineNetworkTaskResult::Shutdown => {
+                self.online_session_state = OnlineSessionUxState::Shutdown;
+                "Online session shutdown acknowledged."
+                    .clone_into(&mut self.online_session_status_message);
+                self.message = self.online_session_status_message.clone();
+            }
+        }
+    }
+
+    #[allow(
+        dead_code,
         reason = "real online UX bridge is exercised by tests until desktop async UI ownership calls it"
     )]
     pub fn apply_real_online_session_ux(&mut self, snapshot: RealOnlineSessionUxSnapshot) {
@@ -1611,6 +1666,8 @@ impl GameState {
         match self.selected_menu_item {
             0 => {
                 self.online_session_state = OnlineSessionUxState::Hosting;
+                self.online_network_task_request =
+                    Some(OnlineNetworkTaskRequest::HostDirectConnect);
                 self.online_host_owns_save = true;
                 self.online_player_slot = Some(1);
                 "Hosting lobby locally. Host owns save/session authority."
@@ -1618,6 +1675,8 @@ impl GameState {
             }
             1 => {
                 self.online_session_state = OnlineSessionUxState::Joining;
+                self.online_network_task_request =
+                    Some(OnlineNetworkTaskRequest::JoinDirectConnect);
                 self.online_host_owns_save = false;
                 self.online_player_slot = Some(2);
                 "Joining by direct address. Waiting for host assignment."
@@ -1625,6 +1684,8 @@ impl GameState {
             }
             2 => {
                 self.online_session_state = OnlineSessionUxState::Reconnecting;
+                self.online_network_task_request =
+                    Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
                 "Reconnect requested with previous session token."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -1640,6 +1701,7 @@ impl GameState {
             }
             5 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
+                self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -5802,6 +5864,70 @@ mod tests {
                 .iter()
                 .any(|limitation| limitation.contains("Real localhost Quinn socket IO"))
         );
+    }
+
+    #[test]
+    fn online_multiplayer_modal_queues_real_network_task_requests() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+
+        game.selected_menu_item = 0;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.take_online_network_task_request(),
+            Some(OnlineNetworkTaskRequest::HostDirectConnect)
+        );
+
+        game.selected_menu_item = 1;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.take_online_network_task_request(),
+            Some(OnlineNetworkTaskRequest::JoinDirectConnect)
+        );
+
+        game.selected_menu_item = 2;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.take_online_network_task_request(),
+            Some(OnlineNetworkTaskRequest::ReconnectDirectConnect)
+        );
+    }
+
+    #[test]
+    fn online_network_task_results_reduce_into_game_state() {
+        let mut game = GameState::new();
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
+            RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
+        ));
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+            "direct Quinn connection task failed".to_owned(),
+        ));
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert!(game.message.contains("direct Quinn connection task failed"));
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
     }
 
     #[test]
