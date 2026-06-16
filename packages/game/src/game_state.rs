@@ -17,6 +17,7 @@ use crate::{
         refuel_amount, repair_amount, sell_cargo, upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
+    multiplayer::{QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
     player::Player,
     save::{
         load_game, load_game_slot, load_latest_game, save_exists, save_game, save_game_slot,
@@ -274,6 +275,87 @@ pub enum OnlineSessionUxState {
     Error,
     Disconnected,
     Shutdown,
+}
+
+#[allow(
+    dead_code,
+    reason = "real online UX bridge is exercised by tests until desktop async UI ownership calls it"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RealOnlineSessionUxSnapshot {
+    pub state: OnlineSessionUxState,
+    pub host_owns_save: bool,
+    pub player_slot: Option<u8>,
+    pub status_message: String,
+}
+
+#[allow(
+    dead_code,
+    reason = "real online UX bridge is exercised by tests until desktop async UI ownership calls it"
+)]
+impl RealOnlineSessionUxSnapshot {
+    #[must_use]
+    pub fn from_joined_session(player_slot: Option<u8>) -> Self {
+        Self {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot,
+            status_message: "Connected through real localhost Quinn session.".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_reconnect(player_slot: Option<u8>) -> Self {
+        Self {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot,
+            status_message: "Reconnected through real localhost Quinn session.".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_tick_summary(summary: &QuinnSessionTickSummary, player_slot: Option<u8>) -> Self {
+        let state = if summary.advanced_authoritative_runtime() {
+            OnlineSessionUxState::Connected
+        } else {
+            OnlineSessionUxState::Hosting
+        };
+        Self {
+            state,
+            host_owns_save: true,
+            player_slot,
+            status_message: format!(
+                "Real Quinn tick: command={}, snapshot={}, delta={}, chunk={}, correction={}",
+                summary.command_summary.is_some(),
+                summary.snapshot_replicated,
+                summary.delta_replicated,
+                summary.terrain_chunk_response.is_some(),
+                summary.correction_summary.is_some()
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn from_correction(
+        summary: SocketDrivenCorrectionSummary,
+        player_slot: Option<u8>,
+    ) -> Self {
+        let state = if summary.exercised_socket_correction() {
+            OnlineSessionUxState::Connected
+        } else {
+            OnlineSessionUxState::Error
+        };
+        Self {
+            state,
+            host_owns_save: true,
+            player_slot,
+            status_message: format!(
+                "Authoritative correction over real Quinn: plan={:?}, snap={}",
+                summary.correction_plan, summary.snap_applied
+            ),
+        }
+    }
 }
 
 const fn default_online_session_state() -> OnlineSessionUxState {
@@ -1384,10 +1466,22 @@ impl GameState {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "real online UX bridge is exercised by tests until desktop async UI ownership calls it"
+    )]
+    pub fn apply_real_online_session_ux(&mut self, snapshot: RealOnlineSessionUxSnapshot) {
+        self.online_session_state = snapshot.state;
+        self.online_host_owns_save = snapshot.host_owns_save;
+        self.online_player_slot = snapshot.player_slot;
+        self.online_session_status_message = snapshot.status_message;
+        self.message = self.online_session_status_message.clone();
+    }
+
     #[must_use]
     pub fn online_session_limitations() -> Vec<String> {
         vec![
-            "Production socket IO is deferred; QUIC packet contracts are validated in code.".to_owned(),
+            "Real localhost Quinn socket IO is available for host/join/tick/reconnect coverage; desktop UI ownership is still being wired.".to_owned(),
             "NAT traversal, matchmaking, invites, and host migration are intentionally unsupported.".to_owned(),
         ]
     }
@@ -5504,6 +5598,57 @@ mod tests {
         assert_eq!(game.run_mode, RunMode::Playing);
         assert!(game.take_local_multiplayer_request());
         assert!(game.message.contains("Player 2"));
+    }
+
+    #[test]
+    fn real_online_session_ux_snapshot_updates_game_state_from_tick_driver() {
+        let mut game = GameState::new();
+        let tick_summary = QuinnSessionTickSummary {
+            command_summary: Some(crate::multiplayer::CommandPacketExchangeSummary {
+                client_id: crate::multiplayer::ClientId::new(1),
+                acknowledged: 1,
+                rejected: 0,
+                authoritative_tick: crate::multiplayer::SimulationTick::new(5),
+            }),
+            snapshot_replicated: true,
+            delta_replicated: true,
+            terrain_chunk_response: Some(
+                crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                    chunk_x: 1,
+                    chunk_y: 2,
+                    revision: 3,
+                },
+            ),
+            correction_summary: Some(SocketDrivenCorrectionSummary {
+                snapshot_replicated: true,
+                authoritative_tick: crate::multiplayer::SimulationTick::new(6),
+                correction_plan: crate::session::CorrectionPlan::Smooth,
+                presentation_x: 1.0,
+                presentation_y: 2.0,
+                snap_applied: false,
+            }),
+        };
+
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
+            &tick_summary,
+            Some(2),
+        ));
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(game.online_host_owns_save);
+        assert_eq!(game.online_player_slot, Some(2));
+        assert!(game.message.contains("Real Quinn tick"));
+    }
+
+    #[test]
+    fn online_limitations_report_real_local_quinn_socket_progress() {
+        let limitations = GameState::online_session_limitations();
+
+        assert!(
+            limitations
+                .iter()
+                .any(|limitation| limitation.contains("Real localhost Quinn socket IO"))
+        );
     }
 
     #[test]
