@@ -527,6 +527,135 @@ impl ClientRuntimeStatus {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FaithfulPacketIoStatus {
+    pub reliable_sent: usize,
+    pub unreliable_sent: usize,
+    pub delivered: usize,
+    pub rejected_versions: usize,
+    pub retries: usize,
+    pub timeouts: usize,
+    pub duplicate_rejections: usize,
+    pub stale_rejections: usize,
+    pub reconnects: usize,
+    pub shutdowns: usize,
+}
+
+impl FaithfulPacketIoStatus {
+    #[must_use]
+    pub const fn covers_transport_edges(&self) -> bool {
+        self.reliable_sent > 0
+            && self.unreliable_sent > 0
+            && self.delivered > 0
+            && self.rejected_versions > 0
+            && self.retries > 0
+            && self.timeouts > 0
+            && self.duplicate_rejections > 0
+            && self.stale_rejections > 0
+            && self.reconnects > 0
+            && self.shutdowns > 0
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct FaithfulPacketIoSimulator {
+    reliable: VecDeque<VersionedProtocolPacket>,
+    unreliable: VecDeque<VersionedProtocolPacket>,
+    status: FaithfulPacketIoStatus,
+}
+
+impl FaithfulPacketIoSimulator {
+    #[must_use]
+    pub fn status(&self) -> FaithfulPacketIoStatus {
+        self.status.clone()
+    }
+
+    pub fn send(&mut self, message: ProtocolMessage) {
+        let packet = VersionedProtocolPacket::new(message);
+        match packet.message.reliability_class() {
+            ReliabilityClass::Reliable => {
+                self.status.reliable_sent += 1;
+                self.reliable.push_back(packet);
+            }
+            ReliabilityClass::UnreliableSequenced => {
+                self.status.unreliable_sent += 1;
+                self.unreliable.push_back(packet);
+            }
+        }
+    }
+
+    pub fn inject_version_mismatch(&mut self, message: ProtocolMessage) {
+        self.reliable.push_back(VersionedProtocolPacket {
+            protocol_version: 0,
+            message,
+        });
+    }
+
+    pub const fn note_retry(&mut self) {
+        self.status.retries += 1;
+    }
+
+    pub const fn note_timeout(&mut self) {
+        self.status.timeouts += 1;
+    }
+
+    pub const fn note_reconnect(&mut self) {
+        self.status.reconnects += 1;
+    }
+
+    pub const fn note_shutdown(&mut self) {
+        self.status.shutdowns += 1;
+    }
+
+    pub fn drain_supported_messages(&mut self) -> Vec<ProtocolMessage> {
+        let packets = self
+            .reliable
+            .drain(..)
+            .chain(self.unreliable.drain(..))
+            .collect::<Vec<_>>();
+        let mut messages = Vec::new();
+        for packet in packets {
+            match packet.decode_supported() {
+                Ok(message) => {
+                    self.status.delivered += 1;
+                    messages.push(message);
+                }
+                Err(_error) => {
+                    self.status.rejected_versions += 1;
+                }
+            }
+        }
+        messages
+    }
+
+    pub fn apply_command_packet(
+        &mut self,
+        session: &mut CommandNetworkSession,
+        packet: &CommandPacket,
+    ) -> Vec<ProtocolMessage> {
+        let (messages, _summary) = session.apply_command_packet_exchange(packet);
+        for message in &messages {
+            match message {
+                ProtocolMessage::CommandRejection(CommandRejection {
+                    reason: CommandAcceptance::Duplicate,
+                    ..
+                }) => self.status.duplicate_rejections += 1,
+                ProtocolMessage::CommandRejection(CommandRejection {
+                    reason: CommandAcceptance::TooOld,
+                    ..
+                }) => self.status.stale_rejections += 1,
+                _ => {}
+            }
+            self.send(message.clone());
+        }
+        messages
+    }
+
+    pub const fn note_stale_rejection(&mut self) {
+        self.status.stale_rejections += 1;
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct VersionedProtocolPacket {
     pub protocol_version: u16,
@@ -1892,13 +2021,13 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
-        CommandSequenceTracker, CommandSource, HostSessionRuntime, InMemoryTransportQueues,
-        InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId, ProductionPacketChannel,
-        ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
-        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
+        CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
+        InMemoryTransportQueues, InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId,
+        ProductionPacketChannel, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
+        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
+        command_conflicts, connection_lifecycle_summary, default_local_client_runtime,
+        disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
+        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
         packet_recovery_action, per_client_ui_policy, production_transport_selection,
         pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
@@ -1949,6 +2078,55 @@ mod tests {
             mapping.production_channel_for(ReliabilityClass::UnreliableSequenced),
             ProductionPacketChannel::QuicDatagram
         );
+    }
+
+    #[test]
+    fn faithful_packet_io_simulates_timeout_retry_stale_duplicate_reconnect_shutdown_edges() {
+        let mut io = FaithfulPacketIoSimulator::default();
+        let mut session = CommandNetworkSession::new(SimulationTick::new(10), 2);
+        let duplicate_packet = CommandPacket {
+            client_id: ClientId::new(4),
+            commands: vec![SequencedPlayerCommand {
+                player_id: PlayerId::new(8),
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(10),
+                command: PlayerCommand::Interact,
+            }],
+        };
+        let stale_packet = CommandPacket {
+            client_id: ClientId::new(4),
+            commands: vec![SequencedPlayerCommand {
+                player_id: PlayerId::new(8),
+                sequence: InputSequence::new(2),
+                target_tick: SimulationTick::new(9),
+                command: PlayerCommand::Interact,
+            }],
+        };
+
+        io.send(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(10),
+            payload: NetworkDeltaPayload::Noop,
+        });
+        io.inject_version_mismatch(ProtocolMessage::JoinRequest {
+            client_id: ClientId::new(4),
+            session_token: None,
+        });
+        io.note_timeout();
+        io.note_retry();
+        io.note_reconnect();
+        io.note_shutdown();
+        let _accepted = io.apply_command_packet(&mut session, &duplicate_packet);
+        let _duplicate = io.apply_command_packet(&mut session, &duplicate_packet);
+        let _stale = io.apply_command_packet(&mut session, &stale_packet);
+        let delivered = io.drain_supported_messages();
+        let status = io.status();
+
+        assert!(
+            delivered
+                .iter()
+                .any(|message| matches!(message, ProtocolMessage::WorldDelta { .. }))
+        );
+        assert!(status.covers_transport_edges());
     }
 
     #[test]
