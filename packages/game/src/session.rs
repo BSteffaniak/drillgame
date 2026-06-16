@@ -7258,6 +7258,89 @@ mod tests {
     }
 
     #[test]
+    fn online_runtime_integration_covers_join_reconnect_ack_rejection_and_recovery() {
+        let mut session = GameSession::new();
+        let remote_client = ClientId::new(10);
+        let remote_player = PlayerId::new(10);
+        session
+            .terrain_revisions
+            .mark_tiles_changed([TilePosition { x: 1, y: 1 }]);
+
+        let (join, reconnect, command_responses, terrain_recovery, prediction) = session
+            .exercise_live_network_integration(
+                remote_client,
+                remote_player,
+                SessionToken::new(110),
+                super::TerrainChunkPosition { x: 0, y: 0 },
+                0,
+            );
+        let rejection_responses = session.apply_live_command_packet(&CommandPacket {
+            client_id: remote_client,
+            commands: vec![SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(session.current_tick().get() + 16),
+                command: PlayerCommand::Interact,
+            }],
+        });
+        let reliable_count = join
+            .messages
+            .iter()
+            .chain(reconnect.messages.iter())
+            .chain(command_responses.iter())
+            .chain(rejection_responses.iter())
+            .filter(|message| {
+                message.reliability_class() == crate::multiplayer::ReliabilityClass::Reliable
+            })
+            .count();
+        let unreliable_count = join
+            .messages
+            .iter()
+            .chain(reconnect.messages.iter())
+            .chain(command_responses.iter())
+            .chain(rejection_responses.iter())
+            .filter(|message| {
+                message.reliability_class()
+                    == crate::multiplayer::ReliabilityClass::UnreliableSequenced
+            })
+            .count();
+
+        assert!(join.messages.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::SnapshotKeyframe { snapshot }
+                if snapshot.players.iter().any(|player| player.player_id == remote_player)
+        )));
+        assert!(reconnect.messages.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::ReconnectRequest { client_id, session_token }
+                if *client_id == remote_client && *session_token == SessionToken::new(110)
+        )));
+        assert!(command_responses.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::CommandAcknowledgement(CommandAcknowledgement { client_id, .. })
+                if *client_id == remote_client
+        )));
+        assert!(rejection_responses.iter().any(|message| matches!(
+            message,
+            ProtocolMessage::CommandRejection(CommandRejection { client_id, .. })
+                if *client_id == remote_client
+        )));
+        assert!(
+            session
+                .clients
+                .get(&remote_client)
+                .expect("remote client exists")
+                .prediction()
+                .prediction_failures()
+                .contains(&super::PredictionFailure::CommandRejected)
+        );
+        assert!(terrain_recovery.recovered_revision().is_some());
+        assert!(!prediction.remote_players.is_empty());
+        assert!(reliable_count > 0);
+        assert!(unreliable_count > 0);
+    }
+
+    #[test]
     fn live_prediction_plan_replays_corrections_and_remote_presentations() {
         let mut session = GameSession::new();
         let second_client = ClientId::new(2);
