@@ -1695,6 +1695,130 @@ impl QuinnEndpointConfig {
 }
 
 #[derive(Debug)]
+pub struct QuinnHostListener {
+    pub backend: QuinnSocketBackend,
+    pub certificate: quinn::rustls::pki_types::CertificateDer<'static>,
+    pub server_name: String,
+}
+
+impl QuinnHostListener {
+    /// Bind a localhost Quinn host listener and expose the certificate needed by direct clients.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when certificate generation, TLS configuration, or UDP endpoint binding fails.
+    pub fn bind_localhost(config: QuinnEndpointConfig) -> Result<Self, QuinnBackendError> {
+        let certified_key = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])?;
+        let certificate = certified_key.cert.der().clone();
+        let key = quinn::rustls::pki_types::PrivateKeyDer::Pkcs8(
+            certified_key.key_pair.serialize_der().into(),
+        );
+        let mut server_config =
+            quinn::ServerConfig::with_single_cert(vec![certificate.clone()], key)?;
+        server_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        let endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        Ok(Self {
+            backend: QuinnSocketBackend::from_bound_endpoint(endpoint)?,
+            certificate,
+            server_name: "localhost".to_owned(),
+        })
+    }
+
+    #[must_use]
+    pub const fn local_addr(&self) -> Option<SocketAddr> {
+        self.backend.local_addr()
+    }
+
+    /// Accept one incoming Quinn connection and wrap it as packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the listener closes or the incoming connection fails.
+    pub async fn accept_packet_io(&self) -> Result<QuinnPacketIo, QuinnOnlineSessionError> {
+        let endpoint = self
+            .backend
+            .endpoint()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("host endpoint"))?
+            .clone();
+        let connection = endpoint
+            .accept()
+            .await
+            .ok_or(QuinnOnlineSessionError::Accept(
+                "endpoint closed".to_owned(),
+            ))?
+            .await
+            .map_err(|error| QuinnOnlineSessionError::Accept(error.to_string()))?;
+        Ok(QuinnPacketIo::new(connection))
+    }
+}
+
+#[derive(Debug)]
+pub struct QuinnClientConnector {
+    pub backend: QuinnSocketBackend,
+}
+
+impl QuinnClientConnector {
+    /// Bind a Quinn client endpoint configured to trust a direct host certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when client TLS configuration or UDP endpoint binding fails.
+    pub fn bind_with_server_certificate(
+        config: QuinnEndpointConfig,
+        certificate: quinn::rustls::pki_types::CertificateDer<'static>,
+    ) -> Result<Self, QuinnBackendError> {
+        let mut roots = quinn::rustls::RootCertStore::empty();
+        roots.add(certificate)?;
+        let mut client_config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))
+            .map_err(|error| QuinnBackendError::ClientConfig(error.to_string()))?;
+        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        let mut endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            None,
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        endpoint.set_default_client_config(client_config);
+        Ok(Self {
+            backend: QuinnSocketBackend::from_bound_endpoint(endpoint)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn local_addr(&self) -> Option<SocketAddr> {
+        self.backend.local_addr()
+    }
+
+    /// Connect to a direct Quinn host and wrap the connection as packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when connection setup fails.
+    pub async fn connect_packet_io(
+        &self,
+        host_addr: SocketAddr,
+        server_name: &str,
+    ) -> Result<QuinnPacketIo, QuinnOnlineSessionError> {
+        let endpoint = self
+            .backend
+            .endpoint()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("client endpoint"))?
+            .clone();
+        let connection = endpoint
+            .connect(host_addr, server_name)
+            .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))?
+            .await
+            .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))?;
+        Ok(QuinnPacketIo::new(connection))
+    }
+}
+
+#[derive(Debug)]
 pub struct QuinnLocalEndpointPair {
     pub client: QuinnSocketBackend,
     pub server: QuinnSocketBackend,
@@ -3245,11 +3369,12 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload,
         NetworkPlayerSnapshot, NetworkWorldSnapshot, PacketIo, PlayerCommand, PlayerId,
-        ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage, QuinnEndpointConfig,
-        QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend, ReliabilityClass,
-        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
-        client_authority_allowed, command_conflicts, connect_localhost_quinn_session,
-        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
+        ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage, QuinnClientConnector,
+        QuinnEndpointConfig, QuinnHostListener, QuinnLocalEndpointPair, QuinnPacketIo,
+        QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
+        connect_localhost_quinn_session, connection_lifecycle_summary,
+        default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -3383,6 +3508,44 @@ mod tests {
         assert!(server_status.endpoint_bound);
         assert!(server_status.socket_packet_io_ready);
         assert_ne!(client_status.local_addr, server_status.local_addr);
+    }
+
+    #[tokio::test]
+    async fn quinn_host_listener_and_client_connector_join_through_separate_entrypoints() {
+        let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
+            .expect("host listener binds");
+        let host_addr = host.local_addr().expect("host address");
+        let client = QuinnClientConnector::bind_with_server_certificate(
+            QuinnEndpointConfig::localhost_ephemeral(),
+            host.certificate.clone(),
+        )
+        .expect("client connector binds");
+        let client_addr = client.local_addr().expect("client address");
+        let server_name = host.server_name.clone();
+        let join_packet = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+
+        let (client_io, host_io) = tokio::join!(
+            async move { client.connect_packet_io(host_addr, &server_name).await },
+            async { host.accept_packet_io().await }
+        );
+        let client_io = client_io.expect("client connects");
+        let host_io = host_io.expect("host accepts");
+
+        client_io
+            .send_packet(join_packet.clone())
+            .await
+            .expect("join sends");
+        assert_eq!(
+            host_io
+                .receive_reliable_packet()
+                .await
+                .expect("join receives"),
+            join_packet
+        );
+        assert_ne!(host_addr, client_addr);
     }
 
     #[tokio::test]
