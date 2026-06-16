@@ -30,10 +30,14 @@ struct MinimapProjection {
     visible_height: i32,
 }
 
-pub(super) fn draw_heat_warning(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    let depth_heat = game.player.y > 18.0 * TILE_SIZE;
-    let tile_x = (game.player.x / TILE_SIZE) as i32;
-    let tile_y = (game.player.y / TILE_SIZE) as i32;
+pub(super) fn draw_heat_warning_for_view(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    view: &ClientView,
+) {
+    let depth_heat = view.camera.y > 18.0 * TILE_SIZE;
+    let tile_x = (view.camera.x / TILE_SIZE) as i32;
+    let tile_y = (view.camera.y / TILE_SIZE) as i32;
     let near_lava = (-2..=2).any(|dy| {
         (-2..=2).any(|dx| {
             matches!(
@@ -48,13 +52,19 @@ pub(super) fn draw_heat_warning(draw: &mut RaylibDrawHandle<'_>, game: &GameStat
     if depth_heat || near_lava {
         let alpha = if near_lava { 70 } else { 35 };
         draw.draw_rectangle(
-            0,
-            0,
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
+            view.viewport.x,
+            view.viewport.y,
+            view.viewport.width,
+            view.viewport.height,
             Color::new(255, 70, 20, alpha),
         );
-        draw.draw_text("HEAT", 1110, 48, 22, Color::ORANGE);
+        draw.draw_text(
+            "HEAT",
+            view.viewport.x + view.viewport.width - 92,
+            view.viewport.y + 48,
+            22,
+            Color::ORANGE,
+        );
     }
 }
 
@@ -125,17 +135,90 @@ pub(super) fn draw_hud_snapshot_for_view(
 pub(super) fn draw_minimap_for_view(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
-    _view: &ClientView,
+    view: &ClientView,
 ) {
-    draw_minimap(draw, game);
+    let width = (view.viewport.width / 6).clamp(86, 130);
+    let height = (view.viewport.height / 8).clamp(64, 96);
+    let x = view.viewport.x + view.viewport.width - width - 18;
+    let y = view.viewport.y + view.viewport.height - height - 38;
+    draw.draw_rectangle(
+        x - 8,
+        y - 24,
+        width + 16,
+        height + 32,
+        Color::new(0, 0, 0, 150),
+    );
+    draw.draw_text(
+        &format!("P{} Map", view.controlled_player_id.get()),
+        x,
+        y - 20,
+        16,
+        Color::WHITE,
+    );
+
+    let terrain_width = game.terrain.width().max(1);
+    let terrain_height = game.terrain.height().max(1);
+    let player_tile_y = (view.camera.y / TILE_SIZE) as i32;
+    let visible_height = terrain_height.min(80);
+    let origin_y = if terrain_height > visible_height {
+        (player_tile_y - visible_height / 2).clamp(0, terrain_height - visible_height)
+    } else {
+        0
+    };
+    let projection = MinimapProjection {
+        x,
+        y,
+        width,
+        height,
+        terrain_width,
+        origin_y,
+        visible_height,
+    };
+    draw.draw_text(
+        &format!("{}-{}m", origin_y, origin_y + visible_height),
+        x + width - 58,
+        y - 20,
+        12,
+        Color::LIGHTGRAY,
+    );
+    for ty in origin_y..origin_y + visible_height {
+        for tx in 0..terrain_width {
+            let Some(tile) = game.terrain.tile(TilePosition { x: tx, y: ty }) else {
+                continue;
+            };
+            let color = marker_color(tile.kind);
+            if color.a > 0 {
+                draw_map_marker(draw, &projection, tx, ty, color);
+            }
+        }
+    }
+    let player_x = x + ((view.camera.x / TILE_SIZE) as i32) * width / terrain_width;
+    let player_y = y + (((view.camera.y / TILE_SIZE) as i32) - origin_y) * height / visible_height;
+    draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
 }
 
 pub(super) fn draw_depth_ruler_for_view(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
-    _view: &ClientView,
+    view: &ClientView,
 ) {
-    draw_depth_ruler(draw, game);
+    let x = view.viewport.x + view.viewport.width - 20;
+    let top = view.viewport.y + 72;
+    let height = (view.viewport.height - 130).max(80);
+    draw.draw_rectangle(x, top, 10, height, Color::new(0, 0, 0, 120));
+    draw.draw_rectangle_lines(x, top, 10, height, Color::new(255, 255, 255, 120));
+
+    let max_depth = game.terrain.height().max(80);
+    let step = if max_depth > 180 { 50 } else { 20 };
+    for marker in (0..=max_depth).step_by(step as usize) {
+        let y = top + (marker * height / max_depth);
+        draw.draw_line(x - 8, y, x + 18, y, Color::LIGHTGRAY);
+        draw.draw_text(&format!("{marker}m"), x - 58, y - 8, 14, Color::LIGHTGRAY);
+    }
+
+    let depth = (view.camera.y / TILE_SIZE - 5.0).max(0.0);
+    let marker_y = top + ((depth / max_depth as f32).clamp(0.0, 1.0) * height as f32) as i32;
+    draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
 }
 
 pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -532,129 +615,6 @@ fn draw_detail_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "minimap draws terrain, markers, labels, and player context together"
-)]
-pub(super) fn draw_minimap(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    let x = SCREEN_WIDTH - 168;
-    let y = SCREEN_HEIGHT - 166;
-    let width = 130;
-    let height = 96;
-    draw.draw_rectangle(
-        x - 8,
-        y - 24,
-        width + 16,
-        height + 32,
-        Color::new(0, 0, 0, 150),
-    );
-    draw.draw_text("Mine Map", x, y - 20, 16, Color::WHITE);
-
-    let terrain_width = game.terrain.width().max(1);
-    let terrain_height = game.terrain.height().max(1);
-    let player_tile_y = (game.player.y / TILE_SIZE) as i32;
-    let visible_height = terrain_height.min(80);
-    let origin_y = if terrain_height > visible_height {
-        (player_tile_y - visible_height / 2).clamp(0, terrain_height - visible_height)
-    } else {
-        0
-    };
-    let projection = MinimapProjection {
-        x,
-        y,
-        width,
-        height,
-        terrain_width,
-        origin_y,
-        visible_height,
-    };
-    draw.draw_text(
-        &format!("{}-{}m", origin_y, origin_y + visible_height),
-        x + 70,
-        y - 20,
-        12,
-        Color::LIGHTGRAY,
-    );
-    for ty in origin_y..origin_y + visible_height {
-        for tx in 0..terrain_width {
-            let position = TilePosition { x: tx, y: ty };
-            if !game.is_explored(position) {
-                continue;
-            }
-            let Some(tile) = game.terrain.tile(position) else {
-                continue;
-            };
-            let px = x + tx * width / terrain_width;
-            let py = y + (ty - origin_y) * height / visible_height;
-            let color = match tile.kind {
-                TileKind::Air => Color::new(35, 35, 45, 180),
-                TileKind::Foundation => Color::new(135, 125, 105, 220),
-                TileKind::Lava | TileKind::MagmaVent => Color::RED,
-                TileKind::Gas => Color::GREEN,
-                TileKind::ExplosivePocket => Color::ORANGE,
-                TileKind::PressurePocket => Color::SKYBLUE,
-                TileKind::Ore(_) | TileKind::Artifact(_) => Color::GOLD,
-                _ => Color::new(105, 80, 55, 220),
-            };
-            draw.draw_pixel(px, py, color);
-        }
-    }
-
-    for marker in &game.scan_markers {
-        draw_map_marker(
-            draw,
-            &projection,
-            marker.position.x,
-            marker.position.y,
-            marker_color(marker.kind),
-        );
-    }
-
-    for item in &game.infrastructure {
-        let color = match item.kind {
-            crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
-            crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
-            crate::game_state::InfrastructureKind::CargoLift => Color::GOLD,
-            crate::game_state::InfrastructureKind::TunnelSupport => Color::ORANGE,
-            crate::game_state::InfrastructureKind::PumpStation => Color::BLUE,
-            crate::game_state::InfrastructureKind::OreProcessor => Color::PURPLE,
-        };
-        draw_map_marker(draw, &projection, item.position.x, item.position.y, color);
-    }
-
-    for warning in &game.collapse_warnings {
-        draw_map_marker(draw, &projection, warning.x, warning.y, Color::RED);
-    }
-
-    for building in SURFACE_BUILDINGS {
-        draw_map_marker(
-            draw,
-            &projection,
-            building.tile_x + building.tile_width / 2,
-            7,
-            Color::RAYWHITE,
-        );
-    }
-    let player_x = x + ((game.player.x / TILE_SIZE) as i32) * width / terrain_width;
-    let player_y = y + (((game.player.y / TILE_SIZE) as i32) - origin_y) * height / visible_height;
-    if game.scanner_pulse_seconds > 0.0 {
-        draw.draw_circle_lines(
-            player_x,
-            player_y,
-            10.0 + game.scanner_pulse_seconds * 12.0,
-            Color::SKYBLUE,
-        );
-    }
-    draw.draw_text(
-        "Gold ore/relic  Red hazard",
-        x,
-        y + height + 4,
-        10,
-        Color::LIGHTGRAY,
-    );
-    draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
-}
-
 const fn marker_color(kind: TileKind) -> Color {
     match kind {
         TileKind::Ore(_) => Color::GOLD,
@@ -682,26 +642,6 @@ fn draw_map_marker(
     let y = projection.y
         + (tile_y - projection.origin_y) * projection.height / projection.visible_height;
     draw.draw_rectangle(x - 1, y - 1, 3, 3, color);
-}
-
-pub(super) fn draw_depth_ruler(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    let x = SCREEN_WIDTH - 30;
-    let top = 80;
-    let height = SCREEN_HEIGHT - 150;
-    draw.draw_rectangle(x, top, 10, height, Color::new(0, 0, 0, 120));
-    draw.draw_rectangle_lines(x, top, 10, height, Color::new(255, 255, 255, 120));
-
-    let max_depth = game.terrain.height().max(80);
-    let step = if max_depth > 180 { 50 } else { 20 };
-    for marker in (0..=max_depth).step_by(step as usize) {
-        let y = top + (marker * height / max_depth);
-        draw.draw_line(x - 8, y, x + 18, y, Color::LIGHTGRAY);
-        draw.draw_text(&format!("{marker}m"), x - 58, y - 8, 14, Color::LIGHTGRAY);
-    }
-
-    let depth = (game.player.y / TILE_SIZE - 5.0).max(0.0);
-    let marker_y = top + ((depth / max_depth as f32).clamp(0.0, 1.0) * height as f32) as i32;
-    draw.draw_circle(x + 5, marker_y, 6.0, Color::GOLD);
 }
 
 fn draw_service_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState, service: &str) {

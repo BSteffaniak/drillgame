@@ -6610,7 +6610,7 @@ mod tests {
     }
 
     #[test]
-    fn local_split_screen_frame_updates_players_cameras_hud_and_remote_visibility() {
+    fn local_split_screen_frame_updates_players_cameras_hud_minimap_depth_and_remote_visibility() {
         let mut session = GameSession::new();
         let _enabled = session.enable_default_local_split_screen();
         let secondary_client_id = session.secondary_local_client_id();
