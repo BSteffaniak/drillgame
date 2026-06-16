@@ -4403,8 +4403,7 @@ impl GameSession {
             command_count,
         });
 
-        let controlled_player_id = self.local_client().controlled_player_id;
-        let mut latest_local_sequence = None;
+        let mut latest_sequences_by_client = BTreeMap::<ClientId, InputSequence>::new();
         let mut changed_players = BTreeSet::new();
         let mut command_events = Vec::new();
         for command in &tick_commands {
@@ -4416,8 +4415,15 @@ impl GameSession {
                 changed_players.insert(command.player_id);
                 command_events.extend(world_events_for_applied_command(command));
             }
-            if command.player_id == controlled_player_id {
-                latest_local_sequence = latest_local_sequence.max(Some(command.sequence));
+            if let Some((client_id, _client)) = self
+                .clients
+                .iter()
+                .find(|(_client_id, client)| client.controlled_player_id == command.player_id)
+            {
+                latest_sequences_by_client
+                    .entry(*client_id)
+                    .and_modify(|sequence| *sequence = (*sequence).max(command.sequence))
+                    .or_insert(command.sequence);
             }
         }
 
@@ -4428,8 +4434,8 @@ impl GameSession {
             self.push_event(event);
         }
 
-        if let Some(sequence) = latest_local_sequence {
-            self.acknowledge_client_commands_through(self.local_client_id, sequence);
+        for (client_id, sequence) in latest_sequences_by_client {
+            self.acknowledge_client_commands_through(client_id, sequence);
         }
 
         command_count
@@ -6607,6 +6613,37 @@ mod tests {
             .expect("player exists");
         assert!(player.hull < 50.0);
         assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn split_screen_authoritative_processing_acknowledges_secondary_client_commands() {
+        let mut session = GameSession::new();
+        let secondary_client = ClientId::new(2);
+        let secondary_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(secondary_client, secondary_player));
+        let tick = session.current_tick();
+        session.route_split_screen_player_commands(secondary_client, vec![PlayerCommand::Rescue]);
+
+        assert_eq!(
+            session
+                .clients
+                .get(&secondary_client)
+                .expect("secondary client exists")
+                .prediction()
+                .unacknowledged_commands()
+                .len(),
+            1
+        );
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 1);
+        assert!(
+            session
+                .clients
+                .get(&secondary_client)
+                .expect("secondary client exists")
+                .prediction()
+                .unacknowledged_commands()
+                .is_empty()
+        );
     }
 
     #[test]

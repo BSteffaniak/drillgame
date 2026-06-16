@@ -102,6 +102,10 @@ fn default_player_roster() -> Vec<PlayerId> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentPlayerState {
     pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
     pub credits: u32,
     pub cargo_used: u32,
     pub cargo_capacity: u32,
@@ -114,6 +118,10 @@ impl PersistentPlayerState {
     pub fn local_from_game(game: &GameState) -> Self {
         Self {
             player_id: LOCAL_PLAYER_ID,
+            x: game.player.x,
+            y: game.player.y,
+            velocity_x: game.player.velocity_x,
+            velocity_y: game.player.velocity_y,
             credits: game.player.credits,
             cargo_used: game.player.cargo_used(),
             cargo_capacity: game.player.cargo_capacity,
@@ -132,6 +140,10 @@ impl PersistentPlayerState {
     pub fn from_player(player_id: PlayerId, player: &Player) -> Self {
         Self {
             player_id,
+            x: player.x,
+            y: player.y,
+            velocity_x: player.velocity_x,
+            velocity_y: player.velocity_y,
             credits: player.credits,
             cargo_used: player.cargo_used(),
             cargo_capacity: player.cargo_capacity,
@@ -141,6 +153,10 @@ impl PersistentPlayerState {
     }
 
     pub const fn apply_to_player(&self, player: &mut Player) {
+        player.x = self.x;
+        player.y = self.y;
+        player.velocity_x = self.velocity_x;
+        player.velocity_y = self.velocity_y;
         player.credits = self.credits;
         player.cargo_capacity = self.cargo_capacity;
         player.fuel = self.fuel;
@@ -266,6 +282,10 @@ impl PersistentWorldSave {
         for player_state in &self.session.players {
             if let Some(player) = world.player_mut(player_state.player_id) {
                 player_state.apply_to_player(player);
+            } else {
+                let mut player = self.game.player.clone();
+                player_state.apply_to_player(&mut player);
+                world.insert_player(player_state.player_id, player);
             }
         }
     }
@@ -587,6 +607,10 @@ mod tests {
         {
             let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
             player.credits = 222;
+            player.x = 123.0;
+            player.y = 234.0;
+            player.velocity_x = 5.0;
+            player.velocity_y = -6.0;
             player.fuel = 33.0;
             player.hull = 44.0;
             player.cargo_capacity = 55;
@@ -601,6 +625,10 @@ mod tests {
             .expect("restored player exists");
         assert_eq!(restored_world.simulation_tick(), SimulationTick::new(13));
         assert_eq!(restored_player.credits, 222);
+        assert!((restored_player.x - 123.0).abs() < f32::EPSILON);
+        assert!((restored_player.y - 234.0).abs() < f32::EPSILON);
+        assert!((restored_player.velocity_x - 5.0).abs() < f32::EPSILON);
+        assert!((restored_player.velocity_y + 6.0).abs() < f32::EPSILON);
         assert!((restored_player.fuel - 33.0).abs() < f32::EPSILON);
         assert!((restored_player.hull - 44.0).abs() < f32::EPSILON);
         assert_eq!(restored_player.cargo_capacity, 55);
