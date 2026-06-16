@@ -13,11 +13,11 @@ use crate::{
     input::PlayerInput,
     input_mapping::CommandProducer,
     multiplayer::{
-        ClientId, CommandAcknowledgement, CommandApplicationResponse, CommandNetworkSession,
-        CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS, InputSequence,
-        LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot,
-        NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand, PlayerId,
-        ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, SIMULATION_HZ,
+        ClientAction, ClientId, CommandAcknowledgement, CommandApplicationResponse,
+        CommandNetworkSession, CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS,
+        InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
+        NetworkPlayerSnapshot, NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand,
+        PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, SIMULATION_HZ,
         SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
@@ -549,6 +549,31 @@ pub struct PerClientPresentationSnapshot {
     pub player_id: PlayerId,
     pub hud: PerPlayerHudSnapshot,
     pub viewport: Viewport,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitScreenUiPresentationSnapshot {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub viewport: Viewport,
+    pub camera: raylib::prelude::Vector2,
+    pub hud: PerPlayerHudSnapshot,
+    pub modal: Option<ModalScreen>,
+    pub run_mode: RunMode,
+    pub message: String,
+    pub audio_cues: Vec<SoundCue>,
+    pub scanner_cooldown_seconds: f32,
+    pub depth_tile: i32,
+}
+
+impl SplitScreenUiPresentationSnapshot {
+    #[must_use]
+    pub fn has_per_player_overlay_context(&self) -> bool {
+        self.viewport.width > 0
+            && self.viewport.height > 0
+            && self.hud.player_id == self.player_id
+            && self.depth_tile >= 0
+    }
 }
 
 impl PerPlayerHudSnapshot {
@@ -2174,6 +2199,7 @@ pub struct LiveRenderFrameOutput {
     pub viewport_plans: Vec<RenderViewportPlan>,
     pub hud_snapshots: Vec<PerPlayerHudSnapshot>,
     pub world_players_by_view: Vec<(ClientId, Vec<RenderWorldPlayerPresentation>)>,
+    pub ui_snapshots: Vec<SplitScreenUiPresentationSnapshot>,
 }
 
 impl LiveRenderFrameOutput {
@@ -2188,6 +2214,17 @@ impl LiveRenderFrameOutput {
     #[must_use]
     pub const fn hud_count(&self) -> usize {
         self.hud_snapshots.len()
+    }
+
+    #[must_use]
+    pub fn split_screen_ui_ready(&self) -> bool {
+        let client_count = self.viewport_plans.len();
+        client_count >= 2
+            && self.ui_snapshots.len() == client_count
+            && self
+                .ui_snapshots
+                .iter()
+                .all(SplitScreenUiPresentationSnapshot::has_per_player_overlay_context)
     }
 
     #[must_use]
@@ -2211,6 +2248,7 @@ impl LiveRenderFrameOutput {
             && viewports.len() == client_count
             && players.len() == client_count
             && self.hud_snapshots.len() == client_count
+            && self.split_screen_ui_ready()
             && (self
                 .viewport_plans
                 .iter()
@@ -3644,10 +3682,33 @@ impl GameSession {
                 )
             })
             .collect();
+        let ui_snapshots = frame_plan
+            .views
+            .iter()
+            .filter_map(|view| {
+                let hud = frame_plan.hud_snapshot_for_view(view)?;
+                let player = self.world.player(view.controlled_player_id)?;
+                let client = self.clients.get(&view.client_id)?;
+                Some(SplitScreenUiPresentationSnapshot {
+                    client_id: view.client_id,
+                    player_id: view.controlled_player_id,
+                    viewport: view.viewport,
+                    camera: view.camera,
+                    hud,
+                    modal: client.modal,
+                    run_mode: view.run_mode,
+                    message: client.local_message.clone(),
+                    audio_cues: client.local_audio_cues.clone(),
+                    scanner_cooldown_seconds: hud.scanner_cooldown_seconds,
+                    depth_tile: player.tile_position(TILE_SIZE).y.max(0),
+                })
+            })
+            .collect();
         LiveRenderFrameOutput {
             viewport_plans: frame_plan.viewport_plans(prediction_plan),
             hud_snapshots: frame_plan.hud_snapshots(),
             world_players_by_view,
+            ui_snapshots,
         }
     }
 
@@ -3676,6 +3737,61 @@ impl GameSession {
         self.local_client_mut()
             .prediction
             .note_save_session_transition();
+    }
+
+    pub fn apply_client_actions(&mut self, client_id: ClientId, actions: &[ClientAction]) {
+        let mut exit_requested = false;
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return;
+        };
+        for action in actions {
+            match action {
+                ClientAction::Pause => {
+                    client.view.run_mode = RunMode::Paused;
+                    client.modal = None;
+                    "Paused".clone_into(&mut client.local_message);
+                    client.local_audio_cues.push(SoundCue::Ui);
+                }
+                ClientAction::Cancel => {
+                    client.view.run_mode = RunMode::Playing;
+                    client.modal = None;
+                    "Resumed".clone_into(&mut client.local_message);
+                    client.local_audio_cues.push(SoundCue::Ui);
+                }
+                ClientAction::ToggleMap => {
+                    client.modal = Some(ModalScreen::Map);
+                    "Map opened".clone_into(&mut client.local_message);
+                    client.local_audio_cues.push(SoundCue::Ui);
+                }
+                ClientAction::ToggleHelp => {
+                    client.modal = Some(ModalScreen::Help);
+                    "Help opened".clone_into(&mut client.local_message);
+                    client.local_audio_cues.push(SoundCue::Ui);
+                }
+                ClientAction::ExitRequested => {
+                    client.exit_requested = true;
+                    exit_requested = true;
+                }
+                ClientAction::Save | ClientAction::Load => {
+                    client.prediction.note_save_session_transition();
+                    "Split-screen save/load synchronized".clone_into(&mut client.local_message);
+                    client.local_audio_cues.push(SoundCue::Ui);
+                }
+                ClientAction::Confirm
+                | ClientAction::MenuUp
+                | ClientAction::MenuDown
+                | ClientAction::MenuLeft
+                | ClientAction::MenuRight
+                | ClientAction::ToggleDetails
+                | ClientAction::VolumeUp
+                | ClientAction::VolumeDown
+                | ClientAction::ToggleFullscreen
+                | ClientAction::ToggleLocalMultiplayer => {}
+            }
+        }
+        if exit_requested {
+            self.push_event(WorldEvent::ClientExitRequested { client_id });
+        }
     }
 
     pub fn update_remote_timing_from_network_sample(&mut self, ping_seconds: f32, loss_ratio: f32) {
@@ -4979,7 +5095,155 @@ mod tests {
                 .all(|plan| plan.local_player.is_some())
         );
         assert_eq!(output.hud_count(), 2);
+        assert!(output.split_screen_ui_ready());
         assert!(output.ready_for_live_render_path());
+    }
+
+    #[test]
+    fn split_screen_ui_snapshots_cover_minimap_depth_scanner_pause_modal_audio_and_messages() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        session
+            .world
+            .set_scanner_cooldown_seconds(LOCAL_PLAYER_ID, 2.5);
+        session
+            .world
+            .set_scanner_cooldown_seconds(second_player, 4.0);
+        session.apply_client_actions(
+            LOCAL_CLIENT_ID,
+            &[
+                crate::multiplayer::ClientAction::Pause,
+                crate::multiplayer::ClientAction::ToggleMap,
+            ],
+        );
+        session.apply_client_actions(
+            second_client,
+            &[crate::multiplayer::ClientAction::ToggleHelp],
+        );
+        session
+            .clients
+            .get_mut(&second_client)
+            .expect("second client exists")
+            .local_audio_cues
+            .push(SoundCue::Milestone);
+        let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
+
+        let output = session.live_render_frame_output(&prediction_plan);
+
+        assert!(output.split_screen_ui_ready());
+        let primary = output
+            .ui_snapshots
+            .iter()
+            .find(|snapshot| snapshot.client_id == LOCAL_CLIENT_ID)
+            .expect("primary ui snapshot");
+        let secondary = output
+            .ui_snapshots
+            .iter()
+            .find(|snapshot| snapshot.client_id == second_client)
+            .expect("secondary ui snapshot");
+        assert_eq!(primary.modal, Some(ModalScreen::Map));
+        assert_eq!(primary.run_mode, RunMode::Paused);
+        assert!(primary.message.contains("Map"));
+        assert!(primary.audio_cues.contains(&SoundCue::Ui));
+        assert!((primary.scanner_cooldown_seconds - 2.5).abs() < f32::EPSILON);
+        assert_eq!(secondary.modal, Some(ModalScreen::Help));
+        assert!(secondary.message.contains("Help"));
+        assert!(secondary.audio_cues.contains(&SoundCue::Milestone));
+        assert!((secondary.scanner_cooldown_seconds - 4.0).abs() < f32::EPSILON);
+        assert_ne!(primary.viewport, secondary.viewport);
+    }
+
+    #[test]
+    fn split_screen_rescue_services_save_load_and_exit_paths_are_player_scoped() {
+        let mut session = GameSession::new();
+        let second_client = ClientId::new(2);
+        let second_player = PlayerId::new(2);
+        assert!(session.add_local_client_player(second_client, second_player));
+        {
+            let player = session
+                .world
+                .player_mut(second_player)
+                .expect("second player exists");
+            player.x = 500.0;
+            player.y = 600.0;
+            player.credits = 1_000;
+            player.fuel = 10.0;
+            player.hull = 20.0;
+            player.cargo.insert(crate::terrain::MineralKind::Copper, 2);
+        }
+
+        assert_eq!(
+            session
+                .world
+                .apply_player_command(second_player, &PlayerCommand::Rescue),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            session
+                .world
+                .apply_player_command(second_player, &PlayerCommand::Refuel),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            session
+                .world
+                .apply_player_command(second_player, &PlayerCommand::Repair),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            session
+                .world
+                .apply_player_command(second_player, &PlayerCommand::SellCargo),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        {
+            let second_client_state = session
+                .clients
+                .get_mut(&second_client)
+                .expect("second client exists");
+            "Surface service applied".clone_into(&mut second_client_state.local_message);
+            second_client_state.local_audio_cues.push(SoundCue::Sell);
+        }
+        session.apply_client_actions(
+            second_client,
+            &[
+                crate::multiplayer::ClientAction::Save,
+                crate::multiplayer::ClientAction::Load,
+            ],
+        );
+        session.apply_client_actions(
+            second_client,
+            &[crate::multiplayer::ClientAction::ExitRequested],
+        );
+
+        let player = session
+            .world
+            .player(second_player)
+            .expect("second player exists");
+        assert!((player.x - 0.0).abs() < f32::EPSILON);
+        assert!((TILE_SIZE.mul_add(-2.0, player.y)).abs() < f32::EPSILON);
+        assert_eq!(player.cargo_used(), 0);
+        assert!(session.clients.values().any(|client| client.exit_requested));
+        let second_client_state = session
+            .clients
+            .get(&second_client)
+            .expect("second client exists");
+        assert!(second_client_state.exit_requested);
+        assert!(
+            second_client_state
+                .prediction()
+                .prediction_failures()
+                .contains(&super::PredictionFailure::SaveSessionTransition)
+        );
+        assert!(second_client_state.local_message.contains("synchronized"));
+        assert!(second_client_state.local_audio_cues.contains(&SoundCue::Ui));
+        assert!(
+            second_client_state
+                .local_audio_cues
+                .contains(&SoundCue::Sell)
+        );
     }
 
     #[test]

@@ -74,6 +74,10 @@ pub fn run() {
                 .game_mut()
                 .mark_local_multiplayer_active(player_slots);
         }
+        session.apply_client_actions(
+            crate::multiplayer::LOCAL_CLIENT_ID,
+            &mapped_input.client_actions,
+        );
         let secondary_input =
             (session.client_count() > 1).then(|| read_secondary_keyboard_input(&raylib));
         for local_input in crate::input_mapping::local_split_screen_inputs(

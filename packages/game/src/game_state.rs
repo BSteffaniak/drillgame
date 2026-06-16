@@ -737,7 +737,7 @@ pub struct SparkParticle {
     pub life: f32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SoundCue {
     Drill,
     Sell,
