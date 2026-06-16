@@ -51,85 +51,237 @@ where
 /// Returns an error when the Tokio runtime cannot be created, Quinn setup fails, or smoke checks fail.
 pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> {
     match action {
-        OnlineCliAction::LocalSmoke => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            let summary = runtime
-                .block_on(local_online_smoke_summary())
-                .map_err(format_debug_error)?;
-            if summary.passed() {
-                Ok("local online smoke passed".to_owned())
-            } else {
-                Err("local online smoke did not satisfy all readiness checks".to_owned())
-            }
-        }
-        OnlineCliAction::HostDescriptorJson => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            let _guard = runtime.enter();
-            let listener =
-                QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
-                    .map_err(format_debug_error)?;
-            let descriptor = listener
-                .connection_descriptor()
-                .map_err(format_debug_error)?;
-            serde_json::to_string(&descriptor).map_err(|error| error.to_string())
-        }
-        OnlineCliAction::HostDescriptorFile { path } => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            runtime.block_on(async move {
-                let listener =
-                    QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
-                        .map_err(format_debug_error)?;
-                let descriptor = listener
-                    .connection_descriptor()
-                    .map_err(format_debug_error)?;
-                let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
-                std::fs::write(&path, json).map_err(|error| error.to_string())?;
-                println!("online host descriptor ready");
-                std::io::stdout()
-                    .flush()
-                    .map_err(|error| error.to_string())?;
-                tokio::time::timeout(Duration::from_secs(5), listener.accept_packet_io())
-                    .await
-                    .map_err(|_| "timed out waiting for descriptor-file client".to_owned())?
-                    .map_err(format_debug_error)?;
-                Ok("host descriptor file emitted and connection accepted".to_owned())
-            })
-        }
-        OnlineCliAction::JoinDescriptorFile { path } => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            runtime.block_on(async move {
-                let json = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-                let descriptor: QuinnHostConnectionDescriptor =
-                    serde_json::from_str(&json).map_err(|error| error.to_string())?;
-                let connector = QuinnClientConnector::bind_from_host_descriptor(
-                    QuinnEndpointConfig::localhost_ephemeral(),
-                    &descriptor,
-                )
-                .map_err(format_debug_error)?;
-                let _packet_io = connector
-                    .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
-                    .await
-                    .map_err(format_debug_error)?;
-                Ok("joined descriptor host".to_owned())
-            })
-        }
+        OnlineCliAction::LocalSmoke => run_local_smoke_cli_action(),
+        OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
+        OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
+        OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
     }
+}
+
+fn build_current_thread_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn run_local_smoke_cli_action() -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    let summary = runtime
+        .block_on(local_online_smoke_summary())
+        .map_err(format_debug_error)?;
+    if summary.passed() {
+        Ok("local online smoke passed".to_owned())
+    } else {
+        Err("local online smoke did not satisfy all readiness checks".to_owned())
+    }
+}
+
+fn run_host_descriptor_json_cli_action() -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    let _guard = runtime.enter();
+    let listener = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
+        .map_err(format_debug_error)?;
+    let descriptor = listener
+        .connection_descriptor()
+        .map_err(format_debug_error)?;
+    serde_json::to_string(&descriptor).map_err(|error| error.to_string())
+}
+
+fn run_host_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    runtime.block_on(async move {
+        let listener =
+            QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
+                .map_err(format_debug_error)?;
+        let descriptor = listener
+            .connection_descriptor()
+            .map_err(format_debug_error)?;
+        let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
+        std::fs::write(&path, json).map_err(|error| error.to_string())?;
+        println!("online host descriptor ready");
+        std::io::stdout()
+            .flush()
+            .map_err(|error| error.to_string())?;
+        let packet_io = tokio::time::timeout(Duration::from_secs(5), listener.accept_packet_io())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file client".to_owned())?
+            .map_err(format_debug_error)?;
+        run_host_descriptor_file_packet_exchange(&packet_io).await?;
+        Ok("host descriptor file exchanged command and snapshot".to_owned())
+    })
+}
+
+fn run_join_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    runtime.block_on(async move {
+        let json = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        let descriptor: QuinnHostConnectionDescriptor =
+            serde_json::from_str(&json).map_err(|error| error.to_string())?;
+        let connector = QuinnClientConnector::bind_from_host_descriptor(
+            QuinnEndpointConfig::localhost_ephemeral(),
+            &descriptor,
+        )
+        .map_err(format_debug_error)?;
+        let packet_io = connector
+            .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
+            .await
+            .map_err(format_debug_error)?;
+        run_join_descriptor_file_packet_exchange(&packet_io).await?;
+        Ok("joined descriptor host and exchanged command/snapshot".to_owned())
+    })
+}
+
+async fn run_host_descriptor_file_packet_exchange(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+) -> Result<(), String> {
+    let terrain_request =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_reliable_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file terrain request".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+        chunk_x,
+        chunk_y,
+        known_revision: _,
+    } = terrain_request.message
+    else {
+        return Err("descriptor-file host expected terrain request".to_owned());
+    };
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                chunk_x,
+                chunk_y,
+                revision: 1,
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    let command_packet =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_datagram_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file command packet".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::CommandPacket(_) = command_packet.message else {
+        return Err("descriptor-file host expected command packet".to_owned());
+    };
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::SnapshotKeyframe {
+                snapshot: descriptor_file_snapshot(),
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    let snapshot_ack =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_reliable_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file snapshot ack".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+        chunk_x: 99,
+        chunk_y: 99,
+        known_revision: 1,
+    } = snapshot_ack.message
+    else {
+        return Err("descriptor-file host expected snapshot ack".to_owned());
+    };
+    packet_io.close(b"descriptor-file exchange complete");
+    Ok(())
+}
+
+async fn run_join_descriptor_file_packet_exchange(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+) -> Result<(), String> {
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                chunk_x: 1,
+                chunk_y: 2,
+                known_revision: 0,
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    let terrain_response =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_reliable_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file terrain response".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::TerrainChunkResponse { revision: 1, .. } =
+        terrain_response.message
+    else {
+        return Err("descriptor-file join expected terrain response".to_owned());
+    };
+    packet_io
+        .send_packet(descriptor_file_command_packet())
+        .await
+        .map_err(format_debug_error)?;
+    let snapshot =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_datagram_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file snapshot".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } = snapshot.message
+    else {
+        return Err("descriptor-file join expected snapshot".to_owned());
+    };
+    if snapshot.players.is_empty() {
+        return Err("descriptor-file snapshot was empty".to_owned());
+    }
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                chunk_x: 99,
+                chunk_y: 99,
+                known_revision: 1,
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    tokio::task::yield_now().await;
+    Ok(())
 }
 
 fn format_debug_error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
+}
+
+fn descriptor_file_command_packet() -> crate::multiplayer::VersionedProtocolPacket {
+    crate::multiplayer::VersionedProtocolPacket::new(
+        crate::multiplayer::ProtocolMessage::CommandPacket(crate::multiplayer::CommandPacket {
+            client_id: crate::multiplayer::ClientId::new(1),
+            commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                sequence: crate::multiplayer::InputSequence::new(1),
+                target_tick: crate::multiplayer::SimulationTick::new(1),
+                command: crate::multiplayer::PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: true,
+                    drill_down: false,
+                },
+            }],
+        }),
+    )
+}
+
+fn descriptor_file_snapshot() -> crate::multiplayer::NetworkWorldSnapshot {
+    crate::multiplayer::NetworkWorldSnapshot {
+        tick: crate::multiplayer::SimulationTick::new(2),
+        players: vec![crate::multiplayer::NetworkPlayerSnapshot {
+            player_id: crate::multiplayer::PlayerId::new(1),
+            x: 10.0,
+            y: 20.0,
+            velocity_x: 1.0,
+            velocity_y: 0.0,
+            fuel: 99.0,
+            hull: 100.0,
+            credits: 5,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
+        }],
+    }
 }
 
 #[cfg(test)]

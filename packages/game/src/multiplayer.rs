@@ -961,6 +961,10 @@ impl QuinnPacketIo {
         }
     }
 
+    pub fn close(&self, reason: &[u8]) {
+        self.connection.close(0_u32.into(), reason);
+    }
+
     /// Receive one reliable versioned protocol packet from an incoming Quinn unidirectional stream.
     ///
     /// # Errors
