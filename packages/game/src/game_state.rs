@@ -340,6 +340,27 @@ impl RealOnlineSessionController {
         Ok(controller)
     }
 
+    /// Drive one real network tick from a caller-provided payload and apply online UX state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the real Quinn tick driver fails.
+    pub async fn drive_tick_input(
+        &mut self,
+        game: &mut GameState,
+        input: crate::multiplayer::QuinnSessionTickInput,
+    ) -> Result<
+        crate::multiplayer::QuinnSessionTickTelemetry,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let telemetry = self.session.drive_tick_with_telemetry(input).await?;
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
+            &telemetry.summary,
+            self.player_slot,
+        ));
+        Ok(telemetry)
+    }
+
     /// Drive one real network telemetry tick and apply online UX state.
     ///
     /// # Errors
