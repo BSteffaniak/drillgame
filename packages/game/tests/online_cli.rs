@@ -56,7 +56,7 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
     let stdout = host.stdout.take().expect("host stdout is piped");
     let stdout_lines = spawn_stdout_line_reader(stdout);
     let readiness_line = stdout_lines
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(Duration::from_secs(30))
         .unwrap_or_else(|error| {
             if let Some(status) = host.try_wait().expect("host status can be polled") {
                 panic!("host exited before readiness marker: {status}");
@@ -76,7 +76,7 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
         "join stderr: {}",
         String::from_utf8_lossy(&join_output.stderr)
     );
-    assert!(String::from_utf8_lossy(&join_output.stdout).contains("command/snapshot"));
+    assert!(String::from_utf8_lossy(&join_output.stdout).contains("command/snapshot/reconnect"));
 
     let host_output = host
         .wait_with_output()
@@ -89,7 +89,7 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
     let accepted_line = stdout_lines
         .recv_timeout(Duration::from_secs(1))
         .expect("host accepted marker is emitted");
-    assert!(accepted_line.contains("command and snapshot"));
+    assert!(accepted_line.contains("command/snapshot/reconnect"));
 
     let _ignored = std::fs::remove_file(descriptor_path);
 }

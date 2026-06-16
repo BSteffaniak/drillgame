@@ -108,7 +108,13 @@ fn run_host_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> 
             .map_err(|_| "timed out waiting for descriptor-file client".to_owned())?
             .map_err(format_debug_error)?;
         run_host_descriptor_file_packet_exchange(&packet_io).await?;
-        Ok("host descriptor file exchanged command and snapshot".to_owned())
+        let reconnect_io =
+            tokio::time::timeout(Duration::from_secs(5), listener.accept_packet_io())
+                .await
+                .map_err(|_| "timed out waiting for descriptor-file reconnect".to_owned())?
+                .map_err(format_debug_error)?;
+        run_host_descriptor_file_reconnect_exchange(&reconnect_io).await?;
+        Ok("host descriptor file exchanged command/snapshot/reconnect".to_owned())
     })
 }
 
@@ -128,7 +134,12 @@ fn run_join_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> 
             .await
             .map_err(format_debug_error)?;
         run_join_descriptor_file_packet_exchange(&packet_io).await?;
-        Ok("joined descriptor host and exchanged command/snapshot".to_owned())
+        let reconnect_io = connector
+            .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
+            .await
+            .map_err(format_debug_error)?;
+        run_join_descriptor_file_reconnect_exchange(&reconnect_io).await?;
+        Ok("joined descriptor host and exchanged command/snapshot/reconnect".to_owned())
     })
 }
 
@@ -191,6 +202,39 @@ async fn run_host_descriptor_file_packet_exchange(
     Ok(())
 }
 
+async fn run_host_descriptor_file_reconnect_exchange(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+) -> Result<(), String> {
+    let reconnect =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_reliable_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file reconnect request".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::ReconnectRequest {
+        client_id,
+        session_token,
+    } = reconnect.message
+    else {
+        return Err("descriptor-file host expected reconnect request".to_owned());
+    };
+    if session_token != descriptor_file_session_token() {
+        return Err("descriptor-file host received wrong reconnect token".to_owned());
+    }
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::JoinAccepted {
+                client_id,
+                player_id: crate::multiplayer::PlayerId::new(1),
+                snapshot_tick: crate::multiplayer::SimulationTick::new(3),
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    tokio::task::yield_now().await;
+    packet_io.close(b"descriptor-file reconnect complete");
+    Ok(())
+}
+
 async fn run_join_descriptor_file_packet_exchange(
     packet_io: &crate::multiplayer::QuinnPacketIo,
 ) -> Result<(), String> {
@@ -244,8 +288,46 @@ async fn run_join_descriptor_file_packet_exchange(
     Ok(())
 }
 
+async fn run_join_descriptor_file_reconnect_exchange(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+) -> Result<(), String> {
+    packet_io
+        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+            crate::multiplayer::ProtocolMessage::ReconnectRequest {
+                client_id: crate::multiplayer::ClientId::new(1),
+                session_token: descriptor_file_session_token(),
+            },
+        ))
+        .await
+        .map_err(format_debug_error)?;
+    let accepted =
+        tokio::time::timeout(Duration::from_secs(5), packet_io.receive_reliable_packet())
+            .await
+            .map_err(|_| "timed out waiting for descriptor-file reconnect accepted".to_owned())?
+            .map_err(format_debug_error)?;
+    let crate::multiplayer::ProtocolMessage::JoinAccepted {
+        client_id,
+        player_id,
+        snapshot_tick,
+    } = accepted.message
+    else {
+        return Err("descriptor-file join expected reconnect acceptance".to_owned());
+    };
+    if client_id != crate::multiplayer::ClientId::new(1)
+        || player_id != crate::multiplayer::PlayerId::new(1)
+        || snapshot_tick != crate::multiplayer::SimulationTick::new(3)
+    {
+        return Err("descriptor-file reconnect acceptance carried unexpected identity".to_owned());
+    }
+    Ok(())
+}
+
 fn format_debug_error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
+}
+
+const fn descriptor_file_session_token() -> crate::multiplayer::SessionToken {
+    crate::multiplayer::SessionToken::new(0xD411_600D_0000_0001)
 }
 
 fn descriptor_file_command_packet() -> crate::multiplayer::VersionedProtocolPacket {
