@@ -168,6 +168,9 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     let _player_scope_proof_complete =
         player_scope_proof.map(crate::session::PlayerScopedGameplayProof::complete);
     let _mutable_local_player = world_probe.player_mut(crate::multiplayer::LOCAL_PLAYER_ID);
+    let _world_authoritative_complete = world_probe.authoritative_gameplay_ownership_complete();
+    let _world_authoritative_domain_count = world_probe.authoritative_runtime_domain_count();
+    let _world_legacy_adapter_restricted = world_probe.legacy_gameplay_adapter_restricted();
     let _world_snapshot = session.world_snapshot();
     let _live_keyframe_message = session.live_snapshot_keyframe_message();
     let _command_network_tick = session.command_network_session().current_tick();

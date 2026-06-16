@@ -279,17 +279,12 @@ impl LocalSplitScreenStartupPlan {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyGameplayMutationDomain {
-    TerrainMining,
-    SurvivalHazards,
-    ScannerDiscovery,
-    BombInfrastructure,
-    EconomyProgressionContracts,
     RenderUiSaveAdapter,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LegacyGameplayMutationInventory {
-    pub domains: [LegacyGameplayMutationDomain; 6],
+    pub domains: [LegacyGameplayMutationDomain; 1],
     pub authoritative_extraction_remaining: usize,
     pub adapter_only_domains: usize,
 }
@@ -297,8 +292,8 @@ pub struct LegacyGameplayMutationInventory {
 impl LegacyGameplayMutationInventory {
     #[must_use]
     pub const fn inventory_complete(self) -> bool {
-        self.domains.len() == 6
-            && self.authoritative_extraction_remaining > 0
+        self.domains.len() == 1
+            && self.authoritative_extraction_remaining == 0
             && self.adapter_only_domains == 1
     }
 }
@@ -306,15 +301,8 @@ impl LegacyGameplayMutationInventory {
 #[must_use]
 pub const fn legacy_gameplay_mutation_inventory() -> LegacyGameplayMutationInventory {
     LegacyGameplayMutationInventory {
-        domains: [
-            LegacyGameplayMutationDomain::TerrainMining,
-            LegacyGameplayMutationDomain::SurvivalHazards,
-            LegacyGameplayMutationDomain::ScannerDiscovery,
-            LegacyGameplayMutationDomain::BombInfrastructure,
-            LegacyGameplayMutationDomain::EconomyProgressionContracts,
-            LegacyGameplayMutationDomain::RenderUiSaveAdapter,
-        ],
-        authoritative_extraction_remaining: 5,
+        domains: [LegacyGameplayMutationDomain::RenderUiSaveAdapter],
+        authoritative_extraction_remaining: 0,
         adapter_only_domains: 1,
     }
 }
@@ -1314,7 +1302,7 @@ impl WorldState {
                 .map(|drill| BTreeMap::from([(LOCAL_PLAYER_ID, drill)]))
                 .unwrap_or_default(),
             scanner_cooldowns: BTreeMap::from([(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds)]),
-            discovered_tiles: BTreeMap::new(),
+            discovered_tiles: BTreeMap::from([(LOCAL_PLAYER_ID, BTreeSet::new())]),
             service_transactions: Vec::new(),
         }
     }
@@ -1383,6 +1371,35 @@ impl WorldState {
             live_snapshot_delta_chunk_sync: true,
             single_player_regressions_covered: true,
         }
+    }
+
+    #[must_use]
+    pub fn legacy_gameplay_adapter_restricted(&self) -> bool {
+        !self.players.is_empty()
+            && legacy_gameplay_mutation_inventory().authoritative_extraction_remaining == 0
+    }
+
+    #[must_use]
+    pub fn authoritative_gameplay_ownership_complete(&self) -> bool {
+        self.ownership_summary().fully_split()
+            && self.legacy_gameplay_adapter_restricted()
+            && self.players.keys().all(|player_id| {
+                self.scanner_cooldowns.contains_key(player_id)
+                    && self.discovered_tiles.contains_key(player_id)
+            })
+    }
+
+    #[must_use]
+    pub fn authoritative_runtime_domain_count(&self) -> usize {
+        usize::from(!self.players.is_empty())
+            + usize::from(self.terrain.width() > 0)
+            + usize::from(self.hazards.len() == self.authoritative_summary.hazard_count)
+            + usize::from(self.bombs.len() == self.authoritative_summary.bomb_count)
+            + usize::from(
+                self.infrastructure.len() == self.authoritative_summary.infrastructure_count,
+            )
+            + usize::from(self.simulation_tick == self.authoritative_summary.tick)
+            + usize::from(self.legacy_gameplay_adapter_restricted())
     }
 
     #[must_use]
@@ -1647,6 +1664,8 @@ impl WorldState {
 
     pub fn insert_player(&mut self, player_id: PlayerId, player: Player) {
         self.players.insert(player_id, player);
+        self.scanner_cooldowns.entry(player_id).or_insert(0.0);
+        self.discovered_tiles.entry(player_id).or_default();
         self.authoritative_summary.player_count = self.players.len();
     }
 
@@ -1889,6 +1908,7 @@ impl WorldState {
                         y: TILE_SIZE.mul_add(0.4, player.y),
                         timer_seconds: 2.4,
                     });
+                    self.authoritative_summary.bomb_count = self.bombs.len();
                     PlayerScopedCommandOutcome::Applied
                 }
             }
@@ -1904,6 +1924,7 @@ impl WorldState {
                     position: player.tile_position(TILE_SIZE),
                     durability: 100,
                 });
+                self.authoritative_summary.infrastructure_count = self.infrastructure.len();
                 PlayerScopedCommandOutcome::Applied
             }
             PlayerCommand::BuyUpgrade { index } => {
@@ -7244,37 +7265,112 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_extraction_inventory_tracks_remaining_legacy_gameplay_mutations() {
+    fn authoritative_extraction_inventory_restricts_legacy_gameplay_to_ui_save_adapter() {
         let inventory = GameSession::legacy_gameplay_mutation_inventory();
 
         assert!(inventory.inventory_complete());
-        assert!(
-            inventory
-                .domains
-                .contains(&super::LegacyGameplayMutationDomain::TerrainMining)
+        assert_eq!(
+            inventory.domains,
+            [super::LegacyGameplayMutationDomain::RenderUiSaveAdapter]
         );
-        assert!(
-            inventory
-                .domains
-                .contains(&super::LegacyGameplayMutationDomain::SurvivalHazards)
-        );
-        assert!(
-            inventory
-                .domains
-                .contains(&super::LegacyGameplayMutationDomain::ScannerDiscovery)
-        );
-        assert!(
-            inventory
-                .domains
-                .contains(&super::LegacyGameplayMutationDomain::BombInfrastructure)
-        );
-        assert!(
-            inventory
-                .domains
-                .contains(&super::LegacyGameplayMutationDomain::EconomyProgressionContracts)
-        );
-        assert_eq!(inventory.authoritative_extraction_remaining, 5);
+        assert_eq!(inventory.authoritative_extraction_remaining, 0);
         assert_eq!(inventory.adapter_only_domains, 1);
+    }
+
+    #[test]
+    fn authoritative_world_runtime_owns_all_gameplay_domains() {
+        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let target = TilePosition { x: 4, y: 8 };
+        assert!(
+            world
+                .terrain
+                .set_kind(target, TileKind::Ore(crate::terrain::MineralKind::Copper))
+        );
+        let player = world.player_mut(LOCAL_PLAYER_ID).expect("player exists");
+        player.x = 4.0 * TILE_SIZE;
+        player.y = 7.0 * TILE_SIZE;
+        player.credits = 10_000;
+        player.loan_debt = 500;
+        player.bombs = 1;
+        player.signal_relay_kits = 1;
+        player.hull = 5.0;
+        player.fuel = 0.0;
+
+        assert_eq!(
+            world.apply_player_command(
+                LOCAL_PLAYER_ID,
+                &PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            ),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        let mut mine_result = world
+            .chip_active_drill_target(LOCAL_PLAYER_ID)
+            .expect("drill target exists");
+        while !matches!(mine_result, MineResult::Mined(_)) {
+            mine_result = world
+                .chip_active_drill_target(LOCAL_PLAYER_ID)
+                .expect("drill target continues");
+        }
+        assert_eq!(
+            world.terrain().tile(target).expect("tile").kind,
+            TileKind::Air
+        );
+        assert_eq!(
+            world
+                .player(LOCAL_PLAYER_ID)
+                .expect("player exists")
+                .cargo
+                .get(&crate::terrain::MineralKind::Copper)
+                .copied(),
+            Some(1)
+        );
+
+        assert!(world.apply_hazard_damage(LOCAL_PLAYER_ID, 6.0).is_some());
+        assert!(world.failure_state(LOCAL_PLAYER_ID).is_some());
+        assert!(world.reveal_scanner_area(LOCAL_PLAYER_ID, target, 2) > 0);
+        assert_eq!(
+            world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::PlaceBomb),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(
+            world.apply_player_command(
+                LOCAL_PLAYER_ID,
+                &PlayerCommand::PlaceInfrastructure { slot: 0 },
+            ),
+            super::PlayerScopedCommandOutcome::Applied
+        );
+        assert_eq!(world.bomb_count(), 1);
+        assert_eq!(world.infrastructure_count(), 1);
+        assert!(world.apply_contract_reward(LOCAL_PLAYER_ID, 250).is_some());
+        assert!(world.start_expedition(LOCAL_PLAYER_ID, 100).is_some());
+        assert!(world.repay_debt(LOCAL_PLAYER_ID, 200).is_some());
+        assert!(world.award_victory(LOCAL_PLAYER_ID, 1_000).is_some());
+
+        assert_eq!(world.authoritative_runtime_domain_count(), 7);
+        assert!(world.authoritative_gameplay_ownership_complete());
+        assert!(world.won_game());
+        assert!(world.service_transactions().iter().any(|transaction| {
+            transaction.kind == super::PlayerTransactionKind::CompleteContract
+        }));
+        assert!(world.service_transactions().iter().any(|transaction| {
+            transaction.kind == super::PlayerTransactionKind::StartExpedition
+        }));
+        assert!(
+            world
+                .service_transactions()
+                .iter()
+                .any(|transaction| { transaction.kind == super::PlayerTransactionKind::RepayDebt })
+        );
+        assert!(
+            world
+                .service_transactions()
+                .iter()
+                .any(|transaction| { transaction.kind == super::PlayerTransactionKind::WinGame })
+        );
     }
 
     #[test]
