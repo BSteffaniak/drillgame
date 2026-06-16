@@ -1020,6 +1020,48 @@ impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuinnSessionTickInput {
+    pub command_packet: Option<CommandPacket>,
+    pub snapshot: Option<NetworkWorldSnapshot>,
+    pub delta: Option<(SimulationTick, NetworkDeltaPayload)>,
+    pub terrain_chunk_request: Option<(i32, i32, u64, u64)>,
+    pub correction_probe: Option<(f32, f32, NetworkPlayerSnapshot, SimulationTick)>,
+}
+
+impl QuinnSessionTickInput {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            command_packet: None,
+            snapshot: None,
+            delta: None,
+            terrain_chunk_request: None,
+            correction_probe: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuinnSessionTickSummary {
+    pub command_summary: Option<CommandPacketExchangeSummary>,
+    pub snapshot_replicated: bool,
+    pub delta_replicated: bool,
+    pub terrain_chunk_response: Option<ProtocolMessage>,
+    pub correction_summary: Option<SocketDrivenCorrectionSummary>,
+}
+
+impl QuinnSessionTickSummary {
+    #[must_use]
+    pub const fn advanced_authoritative_runtime(&self) -> bool {
+        self.command_summary.is_some()
+            && self.snapshot_replicated
+            && self.delta_replicated
+            && self.terrain_chunk_response.is_some()
+            && self.correction_summary.is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SocketDrivenCorrectionSummary {
     pub snapshot_replicated: bool,
@@ -1086,6 +1128,72 @@ pub struct QuinnOnlineSession {
 }
 
 impl QuinnOnlineSession {
+    /// Drive one high-level online tick through the real Quinn packet IO helpers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any included command, replication, chunk, or correction exchange fails.
+    pub async fn drive_tick(
+        &mut self,
+        input: QuinnSessionTickInput,
+    ) -> Result<QuinnSessionTickSummary, QuinnOnlineSessionError> {
+        let command_summary = if let Some(packet) = input.command_packet {
+            Some(self.exchange_command_packet(packet).await?)
+        } else {
+            None
+        };
+        let snapshot_replicated = if let Some(snapshot) = input.snapshot {
+            self.replicate_snapshot_keyframe(snapshot).await?;
+            true
+        } else {
+            false
+        };
+        let delta_replicated = if let Some((tick, payload)) = input.delta {
+            self.replicate_world_delta(tick, payload).await?;
+            true
+        } else {
+            false
+        };
+        let terrain_chunk_response =
+            if let Some((chunk_x, chunk_y, known_revision, response_revision)) =
+                input.terrain_chunk_request
+            {
+                Some(
+                    self.exchange_terrain_chunk(
+                        chunk_x,
+                        chunk_y,
+                        known_revision,
+                        response_revision,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+        let correction_summary =
+            if let Some((predicted_x, predicted_y, authoritative, tick)) = input.correction_probe {
+                Some(
+                    self.replicate_authoritative_player_correction(
+                        predicted_x,
+                        predicted_y,
+                        authoritative,
+                        tick,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+
+        Ok(QuinnSessionTickSummary {
+            command_summary,
+            snapshot_replicated,
+            delta_replicated,
+            terrain_chunk_response,
+            correction_summary,
+        })
+    }
+
     /// Replicate one authoritative snapshot keyframe from host to client through real Quinn packet IO.
     ///
     /// # Errors
@@ -3677,6 +3785,69 @@ mod tests {
         assert_eq!(
             session.client_runtime.latest_authoritative_tick,
             SimulationTick::new(91)
+        );
+    }
+
+    #[tokio::test]
+    async fn quinn_session_tick_driver_advances_command_replication_chunk_and_correction() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(100),
+        )
+        .await
+        .expect("localhost quinn session connects");
+
+        let summary = session
+            .drive_tick(super::QuinnSessionTickInput {
+                command_packet: Some(CommandPacket {
+                    client_id: client_config.client_id,
+                    commands: vec![SequencedPlayerCommand {
+                        player_id,
+                        sequence: InputSequence::new(10),
+                        target_tick: SimulationTick::new(101),
+                        command: PlayerCommand::UseScanner,
+                    }],
+                }),
+                snapshot: Some(NetworkWorldSnapshot {
+                    tick: SimulationTick::new(102),
+                    players: Vec::new(),
+                }),
+                delta: Some((SimulationTick::new(103), NetworkDeltaPayload::Noop)),
+                terrain_chunk_request: Some((8, 9, 1, 2)),
+                correction_probe: Some((
+                    20.0,
+                    20.0,
+                    NetworkPlayerSnapshot {
+                        player_id,
+                        x: 1.0,
+                        y: 1.0,
+                        velocity_x: 0.0,
+                        velocity_y: 0.0,
+                        fuel: 10.0,
+                        hull: 10.0,
+                        credits: 0,
+                        cargo_used: 0,
+                        scanner_cooldown_seconds: 0.0,
+                    },
+                    SimulationTick::new(104),
+                )),
+            })
+            .await
+            .expect("tick driver runs");
+
+        assert!(summary.advanced_authoritative_runtime());
+        assert!(
+            summary
+                .command_summary
+                .expect("command summary")
+                .all_accepted()
+        );
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(104)
         );
     }
 
