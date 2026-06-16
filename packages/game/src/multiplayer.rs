@@ -557,6 +557,39 @@ impl FaithfulPacketIoStatus {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PacketIoError {
+    UnsupportedVersion { expected: u16, actual: u16 },
+    Encode(String),
+    Decode(String),
+    BackendUnavailable(String),
+}
+
+impl From<ProtocolVersionError> for PacketIoError {
+    fn from(error: ProtocolVersionError) -> Self {
+        Self::UnsupportedVersion {
+            expected: error.expected,
+            actual: error.actual,
+        }
+    }
+}
+
+pub trait PacketIo {
+    /// Queue a versioned protocol packet for delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PacketIoError`] when the backend cannot accept or encode the packet.
+    fn send_packet(&mut self, packet: VersionedProtocolPacket) -> Result<(), PacketIoError>;
+
+    /// Receive all currently available versioned protocol packets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PacketIoError`] when the backend cannot receive or decode queued packets.
+    fn receive_packets(&mut self) -> Result<Vec<VersionedProtocolPacket>, PacketIoError>;
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct FaithfulPacketIoSimulator {
     reliable: VecDeque<VersionedProtocolPacket>,
@@ -571,7 +604,17 @@ impl FaithfulPacketIoSimulator {
     }
 
     pub fn send(&mut self, message: ProtocolMessage) {
-        let packet = VersionedProtocolPacket::new(message);
+        self.queue_packet(VersionedProtocolPacket::new(message));
+    }
+
+    pub fn inject_version_mismatch(&mut self, message: ProtocolMessage) {
+        self.reliable.push_back(VersionedProtocolPacket {
+            protocol_version: 0,
+            message,
+        });
+    }
+
+    fn queue_packet(&mut self, packet: VersionedProtocolPacket) {
         match packet.message.reliability_class() {
             ReliabilityClass::Reliable => {
                 self.status.reliable_sent += 1;
@@ -584,11 +627,11 @@ impl FaithfulPacketIoSimulator {
         }
     }
 
-    pub fn inject_version_mismatch(&mut self, message: ProtocolMessage) {
-        self.reliable.push_back(VersionedProtocolPacket {
-            protocol_version: 0,
-            message,
-        });
+    fn drain_versioned_packets(&mut self) -> Vec<VersionedProtocolPacket> {
+        self.reliable
+            .drain(..)
+            .chain(self.unreliable.drain(..))
+            .collect()
     }
 
     pub const fn note_retry(&mut self) {
@@ -608,11 +651,7 @@ impl FaithfulPacketIoSimulator {
     }
 
     pub fn drain_supported_messages(&mut self) -> Vec<ProtocolMessage> {
-        let packets = self
-            .reliable
-            .drain(..)
-            .chain(self.unreliable.drain(..))
-            .collect::<Vec<_>>();
+        let packets = self.drain_versioned_packets();
         let mut messages = Vec::new();
         for packet in packets {
             match packet.decode_supported() {
@@ -656,6 +695,17 @@ impl FaithfulPacketIoSimulator {
     }
 }
 
+impl PacketIo for FaithfulPacketIoSimulator {
+    fn send_packet(&mut self, packet: VersionedProtocolPacket) -> Result<(), PacketIoError> {
+        self.queue_packet(packet);
+        Ok(())
+    }
+
+    fn receive_packets(&mut self) -> Result<Vec<VersionedProtocolPacket>, PacketIoError> {
+        Ok(self.drain_versioned_packets())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct VersionedProtocolPacket {
     pub protocol_version: u16,
@@ -694,6 +744,33 @@ impl VersionedProtocolPacket {
             Err(ProtocolVersionError {
                 expected: PROTOCOL_VERSION,
                 actual: self.protocol_version,
+            })
+        }
+    }
+
+    /// Encode this packet for production packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PacketIoError::Encode`] if serialization fails.
+    pub fn encode_bytes(&self) -> Result<Vec<u8>, PacketIoError> {
+        serde_json::to_vec(self).map_err(|error| PacketIoError::Encode(error.to_string()))
+    }
+
+    /// Decode a production packet payload and validate its protocol version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PacketIoError`] if deserialization fails or the protocol version is unsupported.
+    pub fn decode_bytes(bytes: &[u8]) -> Result<Self, PacketIoError> {
+        let packet: Self = serde_json::from_slice(bytes)
+            .map_err(|error| PacketIoError::Decode(error.to_string()))?;
+        if packet.is_supported() {
+            Ok(packet)
+        } else {
+            Err(PacketIoError::UnsupportedVersion {
+                expected: PROTOCOL_VERSION,
+                actual: packet.protocol_version,
             })
         }
     }
@@ -2132,12 +2209,13 @@ mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
-        InMemoryTransportQueues, InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId,
-        ProductionPacketChannel, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
-        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
-        command_conflicts, connection_lifecycle_summary, default_local_client_runtime,
-        disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
-        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
+        InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
+        PlayerCommand, PlayerId, ProductionPacketChannel, ProtocolMessage, ReliabilityClass,
+        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
+        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
+        default_local_client_runtime, disconnect_reservation_policy,
+        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
+        initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
         network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
         per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
@@ -2161,6 +2239,44 @@ mod tests {
         let sequence = InputSequence::new(u32::MAX);
 
         assert_eq!(sequence.next().get(), 0);
+    }
+
+    #[test]
+    fn versioned_protocol_packets_round_trip_through_production_bytes() {
+        let message = ProtocolMessage::TerrainChunkRequest {
+            chunk_x: 4,
+            chunk_y: 7,
+            known_revision: 3,
+        };
+        let packet = VersionedProtocolPacket::new(message.clone());
+
+        let bytes = packet.encode_bytes().expect("packet encodes");
+        let decoded = VersionedProtocolPacket::decode_bytes(&bytes).expect("packet decodes");
+
+        assert_eq!(decoded.protocol_version(), packet.protocol_version());
+        assert_eq!(decoded.decode_supported().expect("supported"), message);
+    }
+
+    #[test]
+    fn faithful_packet_io_implements_packet_io_trait_with_versioned_packets() {
+        let mut io = FaithfulPacketIoSimulator::default();
+        let reliable = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+        let unreliable = VersionedProtocolPacket::new(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(9),
+            payload: NetworkDeltaPayload::Noop,
+        });
+
+        PacketIo::send_packet(&mut io, reliable.clone()).expect("reliable send");
+        PacketIo::send_packet(&mut io, unreliable.clone()).expect("unreliable send");
+        let packets = PacketIo::receive_packets(&mut io).expect("receive packets");
+
+        assert_eq!(packets, vec![reliable, unreliable]);
+        let status = io.status();
+        assert_eq!(status.reliable_sent, 1);
+        assert_eq!(status.unreliable_sent, 1);
     }
 
     #[test]
