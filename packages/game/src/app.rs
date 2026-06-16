@@ -27,6 +27,7 @@ const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
 struct OnlineTaskDispatcher {
     runtime: Option<tokio::runtime::Runtime>,
     controller: Option<RealOnlineSessionController>,
+    tick_accumulator_seconds: f32,
 }
 
 impl OnlineTaskDispatcher {
@@ -37,6 +38,7 @@ impl OnlineTaskDispatcher {
                 .build()
                 .ok(),
             controller: None,
+            tick_accumulator_seconds: 0.0,
         }
     }
 
@@ -80,6 +82,32 @@ impl OnlineTaskDispatcher {
                 self.controller = None;
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
             }
+        }
+    }
+
+    fn drive_scheduled_tick(&mut self, game: &mut GameState, delta_seconds: f32) {
+        if self.controller.is_none() {
+            self.tick_accumulator_seconds = 0.0;
+            return;
+        }
+        self.tick_accumulator_seconds += delta_seconds;
+        if self.tick_accumulator_seconds < FIXED_DELTA_SECONDS {
+            return;
+        }
+        self.tick_accumulator_seconds = 0.0;
+        let Some(runtime) = &self.runtime else {
+            game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+                "Tokio runtime unavailable".to_owned(),
+            ));
+            return;
+        };
+        let Some(controller) = &mut self.controller else {
+            return;
+        };
+        if let Err(error) = runtime.block_on(controller.drive_telemetry_tick(game)) {
+            game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(format!(
+                "{error:?}"
+            )));
         }
     }
 }
@@ -139,6 +167,7 @@ pub fn run() {
                 .mark_local_multiplayer_active(player_slots);
         }
         online_tasks.drain_and_execute(session.game_mut());
+        online_tasks.drive_scheduled_tick(session.game_mut(), delta_seconds);
         session.apply_client_actions(
             crate::multiplayer::LOCAL_CLIENT_ID,
             &mapped_input.client_actions,
@@ -563,14 +592,16 @@ mod tests {
     use crate::game_state::OnlineSessionUxState;
 
     #[test]
-    fn online_task_dispatcher_executes_queued_connect_and_shutdown() {
+    fn online_task_dispatcher_executes_queued_connect_scheduled_tick_and_shutdown() {
         let mut game = GameState::new();
         let mut dispatcher = OnlineTaskDispatcher::new();
 
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
         dispatcher.drain_and_execute(&mut game);
+        dispatcher.drive_scheduled_tick(&mut game, FIXED_DELTA_SECONDS);
 
         assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(game.message.contains("Real Quinn tick"));
         assert!(game.online_network_task_request.is_none());
 
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);

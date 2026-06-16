@@ -304,6 +304,8 @@ pub enum OnlineNetworkTaskResult {
 pub struct RealOnlineSessionController {
     session: crate::multiplayer::QuinnOnlineSession,
     player_slot: Option<u8>,
+    next_sequence: u32,
+    next_tick: u64,
 }
 
 #[allow(
@@ -329,6 +331,8 @@ impl RealOnlineSessionController {
         let controller = Self {
             session,
             player_slot: Some(1),
+            next_sequence: 30,
+            next_tick: 301,
         };
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_joined_session(
             controller.player_slot,
@@ -353,6 +357,8 @@ impl RealOnlineSessionController {
             .joined_player_id()
             .unwrap_or(crate::multiplayer::LOCAL_PLAYER_ID);
         let client_id = self.session.client_runtime.config.client_id;
+        let sequence = self.next_sequence;
+        let tick = self.next_tick;
         let telemetry = self
             .session
             .drive_tick_with_telemetry(crate::multiplayer::QuinnSessionTickInput {
@@ -360,17 +366,17 @@ impl RealOnlineSessionController {
                     client_id,
                     commands: vec![crate::multiplayer::SequencedPlayerCommand {
                         player_id,
-                        sequence: crate::multiplayer::InputSequence::new(30),
-                        target_tick: crate::multiplayer::SimulationTick::new(301),
+                        sequence: crate::multiplayer::InputSequence::new(sequence),
+                        target_tick: crate::multiplayer::SimulationTick::new(tick),
                         command: crate::multiplayer::PlayerCommand::UseScanner,
                     }],
                 }),
                 snapshot: Some(crate::multiplayer::NetworkWorldSnapshot {
-                    tick: crate::multiplayer::SimulationTick::new(302),
+                    tick: crate::multiplayer::SimulationTick::new(tick + 1),
                     players: Vec::new(),
                 }),
                 delta: Some((
-                    crate::multiplayer::SimulationTick::new(303),
+                    crate::multiplayer::SimulationTick::new(tick + 2),
                     crate::multiplayer::NetworkDeltaPayload::Noop,
                 )),
                 terrain_chunk_request: Some((30, 31, 1, 2)),
@@ -389,10 +395,12 @@ impl RealOnlineSessionController {
                         cargo_used: 0,
                         scanner_cooldown_seconds: 0.0,
                     },
-                    crate::multiplayer::SimulationTick::new(304),
+                    crate::multiplayer::SimulationTick::new(tick + 3),
                 )),
             })
             .await?;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        self.next_tick = self.next_tick.saturating_add(4);
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
             &telemetry.summary,
             self.player_slot,
