@@ -114,7 +114,7 @@ fn run_host_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> 
                 .map_err(|_| "timed out waiting for descriptor-file reconnect".to_owned())?
                 .map_err(format_debug_error)?;
         run_host_descriptor_file_reconnect_exchange(&reconnect_io).await?;
-        Ok("host descriptor file exchanged command/snapshot/reconnect".to_owned())
+        Ok("host descriptor file exchanged command/snapshot/correction/reconnect".to_owned())
     })
 }
 
@@ -139,7 +139,7 @@ fn run_join_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> 
             .await
             .map_err(format_debug_error)?;
         run_join_descriptor_file_reconnect_exchange(&reconnect_io).await?;
-        Ok("joined descriptor host and exchanged command/snapshot/reconnect".to_owned())
+        Ok("joined descriptor host and exchanged command/snapshot/correction/reconnect".to_owned())
     })
 }
 
@@ -271,9 +271,7 @@ async fn run_join_descriptor_file_packet_exchange(
     else {
         return Err("descriptor-file join expected snapshot".to_owned());
     };
-    if snapshot.players.is_empty() {
-        return Err("descriptor-file snapshot was empty".to_owned());
-    }
+    validate_descriptor_file_correction(&snapshot)?;
     packet_io
         .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
             crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
@@ -285,6 +283,46 @@ async fn run_join_descriptor_file_packet_exchange(
         .await
         .map_err(format_debug_error)?;
     tokio::task::yield_now().await;
+    Ok(())
+}
+
+fn validate_descriptor_file_correction(
+    snapshot: &crate::multiplayer::NetworkWorldSnapshot,
+) -> Result<(), String> {
+    let Some(authoritative) = snapshot.players.first() else {
+        return Err("descriptor-file snapshot was empty".to_owned());
+    };
+    let authoritative_snapshot = crate::session::PlayerSnapshot {
+        player_id: authoritative.player_id,
+        x: authoritative.x,
+        y: authoritative.y,
+        velocity_x: authoritative.velocity_x,
+        velocity_y: authoritative.velocity_y,
+        fuel: authoritative.fuel,
+        hull: authoritative.hull,
+        credits: authoritative.credits,
+        cargo_used: authoritative.cargo_used,
+        scanner_cooldown_seconds: authoritative.scanner_cooldown_seconds,
+    };
+    let predicted = crate::session::PredictedMovement {
+        player_id: authoritative.player_id,
+        x: authoritative.x + 24.0,
+        y: authoritative.y,
+        velocity_x: authoritative.velocity_x,
+        velocity_y: authoritative.velocity_y,
+    };
+    let reconciled = crate::session::ClientPredictionState::reconcile_movement(
+        predicted,
+        &authoritative_snapshot,
+    );
+    if reconciled.correction_plan != crate::session::CorrectionPlan::Snap {
+        return Err("descriptor-file correction did not request snap".to_owned());
+    }
+    let presentation =
+        crate::session::CorrectionPresentationFrame::from_reconciliation(&reconciled, 0.5);
+    if !presentation.snap_applied {
+        return Err("descriptor-file correction snap was not applied".to_owned());
+    }
     Ok(())
 }
 

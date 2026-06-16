@@ -76,7 +76,10 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
         "join stderr: {}",
         String::from_utf8_lossy(&join_output.stderr)
     );
-    assert!(String::from_utf8_lossy(&join_output.stdout).contains("command/snapshot/reconnect"));
+    assert!(
+        String::from_utf8_lossy(&join_output.stdout)
+            .contains("command/snapshot/correction/reconnect")
+    );
 
     let host_output = host
         .wait_with_output()
@@ -89,7 +92,7 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
     let accepted_line = stdout_lines
         .recv_timeout(Duration::from_secs(1))
         .expect("host accepted marker is emitted");
-    assert!(accepted_line.contains("command/snapshot/reconnect"));
+    assert!(accepted_line.contains("command/snapshot/correction/reconnect"));
 
     let _ignored = std::fs::remove_file(descriptor_path);
 }
