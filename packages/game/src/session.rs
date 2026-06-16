@@ -4531,6 +4531,7 @@ impl GameSession {
 
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
+        self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
             self.command_network_session.set_current_tick(tick);
@@ -4546,14 +4547,48 @@ impl GameSession {
             self.maybe_emit_keyframe_event();
         }
         self.sync_client_settings_to_legacy_game();
-        self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
+        let legacy_adapter_input = self.legacy_adapter_input(input);
         let previous_message = self.game.message.clone();
         let previous_player = self.game.player.clone();
         let previous_request_exit = self.game.request_exit;
-        self.game.update(input, delta_seconds);
+        self.game.update(legacy_adapter_input, delta_seconds);
         self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
         self.sync_client_settings_from_legacy_game();
         self.sync_legacy_mutations_into_world_preserving_authoritative_movement(&previous_player);
+    }
+
+    fn legacy_adapter_input(&self, mut input: PlayerInput) -> PlayerInput {
+        if self.latest_local_movement_intent.is_some() {
+            input.horizontal = 0.0;
+            input.thrust = false;
+            input.drill_down = false;
+        }
+        for command in &self.latest_local_authoritative_commands {
+            match command {
+                PlayerCommand::UseScanner => input.scan = false,
+                PlayerCommand::PlaceBomb => input.bomb = false,
+                PlayerCommand::PlaceInfrastructure { slot } => match slot {
+                    0 => input.place_relay = false,
+                    1 => input.place_drone = false,
+                    2 => input.place_lift = false,
+                    3 => input.place_support = false,
+                    4 => input.place_pump = false,
+                    5 => input.place_processor = false,
+                    _ => {}
+                },
+                PlayerCommand::SelectUpgrade { .. } => input.selected_upgrade = None,
+                PlayerCommand::Interact
+                | PlayerCommand::Cancel
+                | PlayerCommand::Confirm
+                | PlayerCommand::Movement { .. }
+                | PlayerCommand::BuyUpgrade { .. }
+                | PlayerCommand::Refuel
+                | PlayerCommand::Repair
+                | PlayerCommand::SellCargo
+                | PlayerCommand::Rescue => {}
+            }
+        }
+        input
     }
 
     fn step_authoritative_movement_from_latest_intents(&mut self, delta_seconds: f32) {
@@ -4595,6 +4630,10 @@ impl GameSession {
         previous_legacy_player: &Player,
     ) {
         let authoritative_player = self.world.player(LOCAL_PLAYER_ID).cloned();
+        let authoritative_active_drill = self.world.active_drill(LOCAL_PLAYER_ID).copied();
+        let authoritative_bombs = self.world.bombs.clone();
+        let authoritative_infrastructure = self.world.infrastructure.clone();
+        let authoritative_scanner_cooldowns = self.world.scanner_cooldowns.clone();
         let secondary_players: Vec<(PlayerId, Player)> = self
             .world
             .players
@@ -4607,6 +4646,10 @@ impl GameSession {
         for (player_id, player) in secondary_players {
             self.world.insert_player(player_id, player);
         }
+        self.world.bombs = authoritative_bombs;
+        self.world.infrastructure = authoritative_infrastructure;
+        self.world.scanner_cooldowns = authoritative_scanner_cooldowns;
+        self.world.authoritative_summary.bomb_count = self.world.bombs.len();
         if let (Some(authoritative_player), Some(world_player)) =
             (authoritative_player, self.world.player_mut(LOCAL_PLAYER_ID))
         {
@@ -4624,6 +4667,11 @@ impl GameSession {
                 self.game.player.velocity_x = authoritative_player.velocity_x;
                 self.game.player.velocity_y = authoritative_player.velocity_y;
             }
+            self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+        }
+        if authoritative_active_drill.is_some() {
+            self.world
+                .set_active_drill(LOCAL_PLAYER_ID, authoritative_active_drill);
             self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
         }
     }
@@ -6613,6 +6661,60 @@ mod tests {
             .expect("player exists");
         assert!(player.hull < 50.0);
         assert!(session.world().active_drill(LOCAL_PLAYER_ID).is_none());
+    }
+
+    #[test]
+    fn authoritative_local_commands_are_masked_from_variable_delta_legacy_adapter() {
+        let mut session = GameSession::new();
+        session
+            .world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("player exists")
+            .bombs = 1;
+        let bomb_count = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists")
+            .bombs;
+        session.route_local_player_commands(vec![
+            PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: true,
+                drill_down: true,
+            },
+            PlayerCommand::UseScanner,
+            PlayerCommand::PlaceBomb,
+        ]);
+        let before = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists")
+            .clone();
+
+        session.update_legacy(
+            PlayerInput {
+                horizontal: 1.0,
+                thrust: true,
+                drill_down: true,
+                scan: true,
+                bomb: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        let after = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("player exists");
+        assert!(after.x > before.x);
+        assert!(after.y <= before.y);
+        assert_eq!(after.bombs, bomb_count.saturating_sub(1));
+        assert_eq!(session.world().bomb_count(), 1);
+        assert_eq!(
+            session.world().scanner_cooldown_seconds(LOCAL_PLAYER_ID),
+            Some(1.0)
+        );
     }
 
     #[test]
