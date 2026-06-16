@@ -1,5 +1,8 @@
 use crate::{
     audio::AudioBus,
+    game_state::{
+        GameState, OnlineNetworkTaskRequest, OnlineNetworkTaskResult, RealOnlineSessionController,
+    },
     input::{read_input, read_primary_keyboard_input, read_secondary_keyboard_input},
     input_mapping::{
         ai_commands, gamepad_commands, local_keyboard_commands, map_local_input, online_commands,
@@ -20,6 +23,66 @@ const WINDOW_WIDTH: i32 = 1280;
 const WINDOW_HEIGHT: i32 = 720;
 const TARGET_FPS: u32 = 60;
 const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
+
+struct OnlineTaskDispatcher {
+    runtime: Option<tokio::runtime::Runtime>,
+    controller: Option<RealOnlineSessionController>,
+}
+
+impl OnlineTaskDispatcher {
+    fn new() -> Self {
+        Self {
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok(),
+            controller: None,
+        }
+    }
+
+    fn drain_and_execute(&mut self, game: &mut GameState) {
+        let Some(request) = game.take_online_network_task_request() else {
+            return;
+        };
+        let Some(runtime) = &self.runtime else {
+            game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+                "Tokio runtime unavailable".to_owned(),
+            ));
+            return;
+        };
+
+        match request {
+            OnlineNetworkTaskRequest::HostDirectConnect
+            | OnlineNetworkTaskRequest::JoinDirectConnect => {
+                match runtime.block_on(RealOnlineSessionController::connect_localhost(game)) {
+                    Ok(controller) => self.controller = Some(controller),
+                    Err(error) => game.apply_online_network_task_result(
+                        OnlineNetworkTaskResult::Failed(format!("{error:?}")),
+                    ),
+                }
+            }
+            OnlineNetworkTaskRequest::ReconnectDirectConnect => {
+                if let Some(controller) = &mut self.controller {
+                    if let Err(error) = runtime.block_on(
+                        controller.reconnect(game, crate::multiplayer::SessionToken::new(1)),
+                    ) {
+                        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+                            format!("{error:?}"),
+                        ));
+                    }
+                } else {
+                    game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+                        "No active online session to reconnect".to_owned(),
+                    ));
+                }
+            }
+            OnlineNetworkTaskRequest::Shutdown => {
+                self.controller = None;
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+            }
+        }
+    }
+}
 
 pub fn run() {
     let (mut raylib, thread) = raylib::init()
@@ -45,6 +108,7 @@ pub fn run() {
     };
 
     let mut renderer = GameRenderer::new(&mut raylib, &thread, session.game());
+    let mut online_tasks = OnlineTaskDispatcher::new();
 
     while !session.should_exit() {
         let delta_seconds = raylib.get_frame_time();
@@ -74,6 +138,7 @@ pub fn run() {
                 .game_mut()
                 .mark_local_multiplayer_active(player_slots);
         }
+        online_tasks.drain_and_execute(session.game_mut());
         session.apply_client_actions(
             crate::multiplayer::LOCAL_CLIENT_ID,
             &mapped_input.client_actions,
@@ -490,4 +555,39 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
             commands: Vec::new(),
         });
     let _command_exchange_all_accepted = command_exchange_summary.all_accepted();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_state::OnlineSessionUxState;
+
+    #[test]
+    fn online_task_dispatcher_executes_queued_connect_and_shutdown() {
+        let mut game = GameState::new();
+        let mut dispatcher = OnlineTaskDispatcher::new();
+
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
+        dispatcher.drain_and_execute(&mut game);
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(game.online_network_task_request.is_none());
+
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
+        dispatcher.drain_and_execute(&mut game);
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+    }
+
+    #[test]
+    fn online_task_dispatcher_reports_reconnect_without_active_session() {
+        let mut game = GameState::new();
+        let mut dispatcher = OnlineTaskDispatcher::new();
+
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
+        dispatcher.drain_and_execute(&mut game);
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert!(game.message.contains("No active online session"));
+    }
 }
