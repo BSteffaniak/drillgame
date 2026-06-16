@@ -1,3 +1,5 @@
+use std::sync::mpsc;
+
 use crate::{
     audio::AudioBus,
     game_state::{
@@ -24,54 +26,113 @@ const WINDOW_HEIGHT: i32 = 720;
 const TARGET_FPS: u32 = 60;
 const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
 
+enum OnlineTaskCompletion {
+    Connected(Result<RealOnlineSessionController, String>),
+    Reconnected(Result<RealOnlineSessionController, String>),
+}
+
 struct OnlineTaskDispatcher {
     runtime: Option<tokio::runtime::Runtime>,
     controller: Option<RealOnlineSessionController>,
+    pending_completion: Option<mpsc::Receiver<OnlineTaskCompletion>>,
     tick_accumulator_seconds: f32,
 }
 
 impl OnlineTaskDispatcher {
     fn new() -> Self {
         Self {
-            runtime: tokio::runtime::Builder::new_current_thread()
+            runtime: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .worker_threads(1)
                 .build()
                 .ok(),
             controller: None,
+            pending_completion: None,
             tick_accumulator_seconds: 0.0,
         }
     }
 
+    fn poll_completions(&mut self, game: &mut GameState) {
+        let Some(receiver) = &self.pending_completion else {
+            return;
+        };
+        let Ok(completion) = receiver.try_recv() else {
+            return;
+        };
+        self.pending_completion = None;
+        match completion {
+            OnlineTaskCompletion::Connected(Ok(controller)) => {
+                self.controller = Some(controller);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
+                    crate::game_state::RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
+                ));
+            }
+            OnlineTaskCompletion::Reconnected(Ok(controller)) => {
+                self.controller = Some(controller);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Reconnected(
+                    crate::game_state::RealOnlineSessionUxSnapshot::from_reconnect(Some(1)),
+                ));
+            }
+            OnlineTaskCompletion::Connected(Err(error))
+            | OnlineTaskCompletion::Reconnected(Err(error)) => {
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(error));
+            }
+        }
+    }
+
+    fn spawn_connect(&mut self) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_completion = Some(receiver);
+        runtime.spawn(async move {
+            let mut game = GameState::new();
+            let result = RealOnlineSessionController::connect_localhost(&mut game)
+                .await
+                .map_err(|error| format!("{error:?}"));
+            let _ignored = sender.send(OnlineTaskCompletion::Connected(result));
+        });
+    }
+
+    fn spawn_reconnect(&mut self, mut controller: RealOnlineSessionController) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_completion = Some(receiver);
+        runtime.spawn(async move {
+            let mut game = GameState::new();
+            let result = controller
+                .reconnect(&mut game, crate::multiplayer::SessionToken::new(1))
+                .await
+                .map(|()| controller)
+                .map_err(|error| format!("{error:?}"));
+            let _ignored = sender.send(OnlineTaskCompletion::Reconnected(result));
+        });
+    }
+
     fn drain_and_execute(&mut self, game: &mut GameState) {
+        self.poll_completions(game);
         let Some(request) = game.take_online_network_task_request() else {
             return;
         };
-        let Some(runtime) = &self.runtime else {
+
+        if self.pending_completion.is_some() && request != OnlineNetworkTaskRequest::Shutdown {
             game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
-                "Tokio runtime unavailable".to_owned(),
+                "Online network task already in progress".to_owned(),
             ));
             return;
-        };
+        }
 
         match request {
             OnlineNetworkTaskRequest::HostDirectConnect
             | OnlineNetworkTaskRequest::JoinDirectConnect => {
-                match runtime.block_on(RealOnlineSessionController::connect_localhost(game)) {
-                    Ok(controller) => self.controller = Some(controller),
-                    Err(error) => game.apply_online_network_task_result(
-                        OnlineNetworkTaskResult::Failed(format!("{error:?}")),
-                    ),
-                }
+                self.spawn_connect();
             }
             OnlineNetworkTaskRequest::ReconnectDirectConnect => {
-                if let Some(controller) = &mut self.controller {
-                    if let Err(error) = runtime.block_on(
-                        controller.reconnect(game, crate::multiplayer::SessionToken::new(1)),
-                    ) {
-                        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
-                            format!("{error:?}"),
-                        ));
-                    }
+                if let Some(controller) = self.controller.take() {
+                    self.spawn_reconnect(controller);
                 } else {
                     game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
                         "No active online session to reconnect".to_owned(),
@@ -80,6 +141,7 @@ impl OnlineTaskDispatcher {
             }
             OnlineNetworkTaskRequest::Shutdown => {
                 self.controller = None;
+                self.pending_completion = None;
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
             }
         }
@@ -95,14 +157,20 @@ impl OnlineTaskDispatcher {
             return;
         }
         self.tick_accumulator_seconds = 0.0;
-        let Some(runtime) = &self.runtime else {
-            game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
-                "Tokio runtime unavailable".to_owned(),
-            ));
-            return;
-        };
         let Some(controller) = &mut self.controller else {
             return;
+        };
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+                    error.to_string(),
+                ));
+                return;
+            }
         };
         if let Err(error) = runtime.block_on(controller.drive_telemetry_tick(game)) {
             game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(format!(
@@ -591,6 +659,17 @@ mod tests {
     use super::*;
     use crate::game_state::OnlineSessionUxState;
 
+    fn wait_for_online_completion(dispatcher: &mut OnlineTaskDispatcher, game: &mut GameState) {
+        for _ in 0..50 {
+            dispatcher.drain_and_execute(game);
+            if dispatcher.pending_completion.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("online task did not complete");
+    }
+
     #[test]
     fn online_task_dispatcher_executes_queued_connect_scheduled_tick_and_shutdown() {
         let mut game = GameState::new();
@@ -598,9 +677,15 @@ mod tests {
 
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
         dispatcher.drain_and_execute(&mut game);
+        wait_for_online_completion(&mut dispatcher, &mut game);
         dispatcher.drive_scheduled_tick(&mut game, FIXED_DELTA_SECONDS);
 
-        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert_eq!(
+            game.online_session_state,
+            OnlineSessionUxState::Connected,
+            "{}",
+            game.message
+        );
         assert!(game.message.contains("Real Quinn tick"));
         assert!(game.online_network_task_request.is_none());
 
