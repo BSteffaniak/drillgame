@@ -261,6 +261,9 @@ impl PersistentWorldSave {
         let mut player_roster = world.player_ids().collect::<Vec<_>>();
         if player_roster.is_empty() {
             player_roster = default_player_roster();
+        } else {
+            player_roster.sort();
+            player_roster.dedup();
         }
         Self {
             save_authority: SaveAuthority::HostOwnedSession,
@@ -511,7 +514,7 @@ impl Error for SaveError {}
 mod tests {
     use crate::{
         game_state::GameState,
-        multiplayer::{LOCAL_PLAYER_ID, SimulationTick},
+        multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
         save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
         session::WorldState,
     };
@@ -632,6 +635,50 @@ mod tests {
         assert!((restored_player.fuel - 33.0).abs() < f32::EPSILON);
         assert!((restored_player.hull - 44.0).abs() < f32::EPSILON);
         assert_eq!(restored_player.cargo_capacity, 55);
+    }
+
+    #[test]
+    fn persistent_world_save_preserves_multi_player_roster_and_restore_order() {
+        let game = GameState::new();
+        let mut world = WorldState::from_legacy_game(&game);
+        let second_player_id = PlayerId::new(2);
+        let mut second_player = game.player.clone();
+        second_player.x = 222.0;
+        second_player.y = 333.0;
+        second_player.credits = 444;
+        world.insert_player(second_player_id, second_player);
+        world.set_simulation_tick(SimulationTick::new(99));
+        world
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .credits = 123;
+
+        let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
+        let json = serde_json::to_string(&save).expect("serialize multi-player save");
+        let loaded: PersistentWorldSave =
+            serde_json::from_str(&json).expect("deserialize multi-player save");
+        let mut restored_world = WorldState::from_legacy_game(&GameState::new());
+        loaded.restore_into_world(&mut restored_world);
+
+        assert_eq!(
+            loaded.player_roster,
+            vec![LOCAL_PLAYER_ID, second_player_id]
+        );
+        assert_eq!(loaded.default_player_id, LOCAL_PLAYER_ID);
+        assert_eq!(restored_world.simulation_tick(), SimulationTick::new(99));
+        assert_eq!(
+            restored_world
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player restored")
+                .credits,
+            123
+        );
+        let restored_second = restored_world
+            .player(second_player_id)
+            .expect("second player restored");
+        assert_eq!(restored_second.credits, 444);
+        assert!((restored_second.x - 222.0).abs() < f32::EPSILON);
+        assert!((restored_second.y - 333.0).abs() < f32::EPSILON);
     }
 
     #[test]
