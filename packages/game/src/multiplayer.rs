@@ -1031,6 +1031,51 @@ pub struct QuinnOnlineSession {
 }
 
 impl QuinnOnlineSession {
+    /// Exchange a client command packet through real Quinn packet IO and apply host responses.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when packet IO fails or the host/client receives an unexpected protocol message.
+    pub async fn exchange_command_packet(
+        &mut self,
+        packet: CommandPacket,
+    ) -> Result<CommandPacketExchangeSummary, QuinnOnlineSessionError> {
+        self.client_io
+            .send_packet(VersionedProtocolPacket::new(
+                ProtocolMessage::CommandPacket(packet.clone()),
+            ))
+            .await?;
+        let received = self.host_io.receive_datagram_packet().await?;
+        let received_packet = match received.decode_supported().map_err(|error| {
+            QuinnOnlineSessionError::Connect(format!(
+                "unsupported protocol version: expected {}, actual {}",
+                error.expected, error.actual
+            ))
+        })? {
+            ProtocolMessage::CommandPacket(packet) => packet,
+            other => return Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+        };
+        let (responses, summary) = self
+            .host_runtime
+            .apply_command_packet_exchange(&received_packet);
+        for response in responses {
+            self.host_io
+                .send_packet(VersionedProtocolPacket::new(response))
+                .await?;
+        }
+        for _ in 0..summary.acknowledged + summary.rejected {
+            let response = self.client_io.receive_reliable_packet().await?;
+            let message = response.decode_supported().map_err(|error| {
+                QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })?;
+            self.client_runtime.handle_message(message);
+        }
+        Ok(summary)
+    }
+
     #[must_use]
     pub const fn joined_player_id(&self) -> Option<PlayerId> {
         self.client_runtime.assigned_player_id
@@ -3093,6 +3138,45 @@ mod tests {
             SimulationTick::new(55)
         );
         assert_ne!(session.host_addr, session.client_addr);
+    }
+
+    #[tokio::test]
+    async fn localhost_quinn_session_exchanges_command_packet_through_real_packet_io() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(55),
+        )
+        .await
+        .expect("localhost quinn session connects");
+        let packet = CommandPacket {
+            client_id: client_config.client_id,
+            commands: vec![SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(7),
+                target_tick: SimulationTick::new(56),
+                command: PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: false,
+                    drill_down: false,
+                },
+            }],
+        };
+
+        let summary = session
+            .exchange_command_packet(packet)
+            .await
+            .expect("command packet exchanges");
+
+        assert!(summary.all_accepted());
+        assert_eq!(summary.acknowledged, 1);
+        assert_eq!(summary.rejected, 0);
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(55)
+        );
     }
 
     #[test]
