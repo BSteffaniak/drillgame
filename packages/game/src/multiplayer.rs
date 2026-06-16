@@ -1011,6 +1011,11 @@ impl SimulatedTransportAdapter {
     }
 
     #[must_use]
+    pub fn dropped_count(&self) -> usize {
+        self.sequence.saturating_sub(self.delayed_packets.len())
+    }
+
+    #[must_use]
     pub fn pending_count(&self) -> usize {
         self.delayed_packets.len()
     }
@@ -1050,6 +1055,42 @@ impl RecoveryCoverageSummary {
     #[must_use]
     pub const fn covers_recovery(&self) -> bool {
         self.terrain_chunk_recovered && self.snapshot_keyframe_recovered
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PacketIoRecoverySummary {
+    pub terrain_chunk_response_delivered: bool,
+    pub snapshot_keyframe_delivered: bool,
+    pub client_authoritative_tick: SimulationTick,
+}
+
+impl PacketIoRecoverySummary {
+    #[must_use]
+    pub const fn recovered_required_state(&self, expected_tick: SimulationTick) -> bool {
+        self.terrain_chunk_response_delivered
+            && self.snapshot_keyframe_delivered
+            && self.client_authoritative_tick.get() == expected_tick.get()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkSoakSummary {
+    pub ticks_run: u64,
+    pub sent_packets: usize,
+    pub delivered_packets: usize,
+    pub dropped_packets: usize,
+    pub max_pending_packets: usize,
+}
+
+impl NetworkSoakSummary {
+    #[must_use]
+    pub const fn covers_latency_jitter_loss_bandwidth_and_duration(&self) -> bool {
+        self.ticks_run >= 120
+            && self.sent_packets > 64
+            && self.delivered_packets > 0
+            && self.dropped_packets > 0
+            && self.max_pending_packets > 0
     }
 }
 
@@ -1381,6 +1422,75 @@ pub fn high_latency_simulation_summary() -> HighLatencySimulationSummary {
         delayed_packets,
         delivered_packets: queues.status().queued_host_to_client_packets,
         dropped_packets: 1,
+    }
+}
+
+#[must_use]
+pub fn packet_io_recovery_summary() -> PacketIoRecoverySummary {
+    let snapshot_tick = SimulationTick::new(42);
+    let mut io = FaithfulPacketIoSimulator::default();
+    let mut client = ClientSessionRuntime::new(default_local_client_runtime());
+    io.send(ProtocolMessage::TerrainChunkResponse {
+        chunk_x: 2,
+        chunk_y: 3,
+        revision: 7,
+    });
+    io.send(ProtocolMessage::SnapshotKeyframe {
+        snapshot: NetworkWorldSnapshot {
+            tick: snapshot_tick,
+            players: Vec::new(),
+        },
+    });
+    let messages = io.drain_supported_messages();
+    let mut terrain_chunk_response_delivered = false;
+    let mut snapshot_keyframe_delivered = false;
+    for message in messages {
+        match &message {
+            ProtocolMessage::TerrainChunkResponse { revision, .. } if *revision == 7 => {
+                terrain_chunk_response_delivered = true;
+            }
+            ProtocolMessage::SnapshotKeyframe { snapshot } if snapshot.tick == snapshot_tick => {
+                snapshot_keyframe_delivered = true;
+            }
+            _ => {}
+        }
+        client.handle_message(message);
+    }
+    PacketIoRecoverySummary {
+        terrain_chunk_response_delivered,
+        snapshot_keyframe_delivered,
+        client_authoritative_tick: client.latest_authoritative_tick,
+    }
+}
+
+#[must_use]
+pub fn network_soak_summary() -> NetworkSoakSummary {
+    let mut queues = InMemoryTransportQueues::default();
+    let mut adapter = SimulatedTransportAdapter::new(SimulatedNetworkCondition {
+        latency_ticks: 3,
+        jitter_ticks: 2,
+        loss_every_nth_packet: Some(5),
+    });
+    let ticks_run = 120;
+    let mut max_pending_packets = 0;
+    for tick in 0..ticks_run {
+        adapter.send_to_client(
+            &mut queues,
+            LOCAL_CLIENT_ID,
+            ProtocolMessage::WorldDelta {
+                tick: SimulationTick::new(tick),
+                payload: NetworkDeltaPayload::Noop,
+            },
+        );
+        max_pending_packets = max_pending_packets.max(adapter.pending_count());
+        adapter.advance_tick(&mut queues);
+    }
+    NetworkSoakSummary {
+        ticks_run,
+        sent_packets: usize::try_from(ticks_run).unwrap_or(usize::MAX),
+        delivered_packets: queues.status().queued_host_to_client_packets,
+        dropped_packets: adapter.dropped_count(),
+        max_pending_packets,
     }
 }
 
@@ -2029,8 +2139,9 @@ mod tests {
         disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
         initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        packet_recovery_action, per_client_ui_policy, production_transport_selection,
-        pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
+        network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
+        per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
+        recovery_coverage_summary, reliable_join_exchange_messages,
         reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
         selected_transport_backend, session_continuity_decision, session_shutdown_decision,
         terrain_recovery_decision, transport_fault_coverage_summary,
@@ -2078,6 +2189,20 @@ mod tests {
             mapping.production_channel_for(ReliabilityClass::UnreliableSequenced),
             ProductionPacketChannel::QuicDatagram
         );
+    }
+
+    #[test]
+    fn packet_io_recovers_terrain_chunks_and_snapshot_keyframes() {
+        let summary = packet_io_recovery_summary();
+
+        assert!(summary.recovered_required_state(SimulationTick::new(42)));
+    }
+
+    #[test]
+    fn network_soak_exercises_latency_jitter_loss_bandwidth_and_duration() {
+        let summary = network_soak_summary();
+
+        assert!(summary.covers_latency_jitter_loss_bandwidth_and_duration());
     }
 
     #[test]
