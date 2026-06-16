@@ -447,11 +447,12 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         }],
     );
     let _protocol_exchange_unreliable_count = protocol_exchange_batch.unreliable_count();
-    let network_runtime_plan = crate::multiplayer::NetworkRuntimePlan::default();
-    let _join_flow_message_count = network_runtime_plan
-        .join_in_progress_flow(SimulationTick::default())
-        .messages
-        .len();
+    let join_messages = crate::multiplayer::reliable_join_exchange_messages(
+        crate::multiplayer::LOCAL_CLIENT_ID,
+        crate::multiplayer::LOCAL_PLAYER_ID,
+        SimulationTick::default(),
+    );
+    let _join_flow_message_count = join_messages.len();
     let mut command_network_probe =
         crate::multiplayer::CommandNetworkSession::new(SimulationTick::default(), 2);
     let (_command_exchange_messages, command_exchange_summary) = command_network_probe
