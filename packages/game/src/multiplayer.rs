@@ -1020,6 +1020,24 @@ impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SocketDrivenCorrectionSummary {
+    pub snapshot_replicated: bool,
+    pub authoritative_tick: SimulationTick,
+    pub correction_plan: crate::session::CorrectionPlan,
+    pub presentation_x: f32,
+    pub presentation_y: f32,
+    pub snap_applied: bool,
+}
+
+impl SocketDrivenCorrectionSummary {
+    #[must_use]
+    pub const fn exercised_socket_correction(self) -> bool {
+        self.snapshot_replicated
+            && !matches!(self.correction_plan, crate::session::CorrectionPlan::None)
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "runtime driver summary intentionally records checklist-style coverage"
@@ -1163,6 +1181,60 @@ impl QuinnOnlineSession {
             }
             other => Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
         }
+    }
+
+    /// Replicate an authoritative player snapshot and compute client prediction correction from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot replication over real packet IO fails.
+    pub async fn replicate_authoritative_player_correction(
+        &mut self,
+        predicted_x: f32,
+        predicted_y: f32,
+        authoritative: NetworkPlayerSnapshot,
+        authoritative_tick: SimulationTick,
+    ) -> Result<SocketDrivenCorrectionSummary, QuinnOnlineSessionError> {
+        let snapshot = NetworkWorldSnapshot {
+            tick: authoritative_tick,
+            players: vec![authoritative.clone()],
+        };
+        self.replicate_snapshot_keyframe(snapshot).await?;
+        let authoritative_snapshot = crate::session::PlayerSnapshot {
+            player_id: authoritative.player_id,
+            x: authoritative.x,
+            y: authoritative.y,
+            velocity_x: authoritative.velocity_x,
+            velocity_y: authoritative.velocity_y,
+            fuel: authoritative.fuel,
+            hull: authoritative.hull,
+            credits: authoritative.credits,
+            cargo_used: authoritative.cargo_used,
+            scanner_cooldown_seconds: authoritative.scanner_cooldown_seconds,
+        };
+        let predicted = crate::session::PredictedMovement {
+            player_id: authoritative.player_id,
+            x: predicted_x,
+            y: predicted_y,
+            velocity_x: authoritative.velocity_x,
+            velocity_y: authoritative.velocity_y,
+        };
+        let reconciled = crate::session::ClientPredictionState::reconcile_movement(
+            predicted,
+            &authoritative_snapshot,
+        );
+        let presentation =
+            crate::session::CorrectionPresentationFrame::from_reconciliation(&reconciled, 0.5);
+
+        Ok(SocketDrivenCorrectionSummary {
+            snapshot_replicated: self.client_runtime.latest_authoritative_tick
+                == authoritative_tick,
+            authoritative_tick,
+            correction_plan: reconciled.correction_plan,
+            presentation_x: presentation.presentation.x,
+            presentation_y: presentation.presentation.y,
+            snap_applied: presentation.snap_applied,
+        })
     }
 
     /// Reconnect the client through a newly bound Quinn connection while preserving host session state.
@@ -3561,6 +3633,51 @@ mod tests {
         };
 
         assert!(summary.covers_core_runtime_loop());
+    }
+
+    #[tokio::test]
+    async fn socket_driven_authoritative_snapshot_exercises_prediction_correction() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config,
+            SimulationTick::new(90),
+        )
+        .await
+        .expect("localhost quinn session connects");
+
+        let correction = session
+            .replicate_authoritative_player_correction(
+                100.0,
+                100.0,
+                NetworkPlayerSnapshot {
+                    player_id,
+                    x: 4.0,
+                    y: 6.0,
+                    velocity_x: 0.0,
+                    velocity_y: 0.0,
+                    fuel: 50.0,
+                    hull: 75.0,
+                    credits: 10,
+                    cargo_used: 1,
+                    scanner_cooldown_seconds: 0.0,
+                },
+                SimulationTick::new(91),
+            )
+            .await
+            .expect("authoritative correction replicates");
+
+        assert!(correction.exercised_socket_correction());
+        assert_eq!(
+            correction.correction_plan,
+            crate::session::CorrectionPlan::Snap
+        );
+        assert!(correction.snap_applied);
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(91)
+        );
     }
 
     #[test]
