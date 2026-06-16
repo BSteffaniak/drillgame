@@ -98,6 +98,8 @@ pub fn run() {
         renderer.sync_delta(&mut raylib, &thread, session.game(), &world_delta);
 
         let mut draw = raylib.begin_drawing(&thread);
+        session.update_remote_timing_from_network_sample(0.0, 0.0);
+        let _remote_timing = session.remote_timing();
         let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.0);
         let live_render_output = session.live_render_frame_output(&prediction_plan);
         renderer.render_live_frame_output(&mut draw, session.game(), &live_render_output);

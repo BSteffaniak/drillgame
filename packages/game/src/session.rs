@@ -790,7 +790,9 @@ const DEFAULT_VIEWPORT_WIDTH: i32 = 1280;
 const DEFAULT_VIEWPORT_HEIGHT: i32 = 720;
 const MIN_INTERPOLATION_DELAY_SECONDS: f32 = 0.05;
 const MAX_INTERPOLATION_DELAY_SECONDS: f32 = 0.25;
-const EXTRAPOLATION_LIMIT_SECONDS: f32 = 0.12;
+const SMOOTH_CORRECTION_THRESHOLD_SQUARED: f32 = 4.0;
+const SNAP_CORRECTION_THRESHOLD_SQUARED: f32 = 400.0;
+const EXTRAPOLATION_LIMIT_SECONDS: f32 = 0.16;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TerrainChunkPosition {
@@ -2629,8 +2631,8 @@ impl PredictionCorrectionTuning {
     #[must_use]
     pub const fn default_gameplay_feel() -> Self {
         Self {
-            smooth_threshold_squared: 1.0,
-            snap_threshold_squared: 256.0,
+            smooth_threshold_squared: SMOOTH_CORRECTION_THRESHOLD_SQUARED,
+            snap_threshold_squared: SNAP_CORRECTION_THRESHOLD_SQUARED,
             smoothing_alpha: 0.5,
             extrapolation_limit_seconds: EXTRAPOLATION_LIMIT_SECONDS,
         }
@@ -2642,7 +2644,41 @@ impl PredictionCorrectionTuning {
         ClientPredictionState::correction_plan(tuning.smooth_threshold_squared.sqrt() * 0.25, 0.0)
             == CorrectionPlan::None
             && ClientPredictionState::correction_plan(8.0, 0.0) == CorrectionPlan::Smooth
-            && ClientPredictionState::correction_plan(32.0, 0.0) == CorrectionPlan::Snap
+            && ClientPredictionState::correction_plan(24.0, 0.0) == CorrectionPlan::Snap
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RemoteTimingTuning {
+    pub interpolation_delay: f32,
+    pub extrapolation_limit: f32,
+    pub timeout_after: f32,
+}
+
+impl RemoteTimingTuning {
+    #[must_use]
+    pub fn from_latency_loss(ping_seconds: f32, loss_ratio: f32) -> Self {
+        let interpolation_delay = ClientPredictionState::interpolation_delay_seconds(
+            (ping_seconds * (1.5 + loss_ratio)).max(FIXED_DELTA_SECONDS),
+        );
+        let extrapolation_limit = loss_ratio
+            .mul_add(0.08, EXTRAPOLATION_LIMIT_SECONDS)
+            .clamp(EXTRAPOLATION_LIMIT_SECONDS, 0.28);
+        Self {
+            interpolation_delay,
+            extrapolation_limit,
+            timeout_after: extrapolation_limit * 2.0,
+        }
+    }
+
+    #[must_use]
+    pub fn allows_extrapolation(self, stall_seconds: f32) -> bool {
+        stall_seconds <= self.extrapolation_limit
+    }
+
+    #[must_use]
+    pub fn timed_out(self, stall_seconds: f32) -> bool {
+        stall_seconds > self.timeout_after
     }
 }
 
@@ -2903,9 +2939,9 @@ impl ClientPredictionState {
     #[must_use]
     pub fn correction_plan(error_x: f32, error_y: f32) -> CorrectionPlan {
         let error_squared = error_x.mul_add(error_x, error_y * error_y);
-        if error_squared <= 1.0 {
+        if error_squared <= SMOOTH_CORRECTION_THRESHOLD_SQUARED {
             CorrectionPlan::None
-        } else if error_squared <= 256.0 {
+        } else if error_squared <= SNAP_CORRECTION_THRESHOLD_SQUARED {
             CorrectionPlan::Smooth
         } else {
             CorrectionPlan::Snap
@@ -3540,6 +3576,7 @@ pub struct GameSession {
     pending_events: Vec<WorldEvent>,
     latest_local_movement_intent: Option<PlayerMovementIntent>,
     latest_local_authoritative_commands: Vec<PlayerCommand>,
+    remote_timing: RemoteTimingTuning,
 }
 
 impl GameSession {
@@ -3666,6 +3703,7 @@ impl GameSession {
             pending_events: Vec::new(),
             latest_local_movement_intent: None,
             latest_local_authoritative_commands: Vec::new(),
+            remote_timing: RemoteTimingTuning::from_latency_loss(0.0, 0.0),
         }
     }
 
@@ -3773,6 +3811,23 @@ impl GameSession {
         self.local_client_mut()
             .prediction
             .note_save_session_transition();
+    }
+
+    pub fn update_remote_timing_from_network_sample(&mut self, ping_seconds: f32, loss_ratio: f32) {
+        self.remote_timing = RemoteTimingTuning::from_latency_loss(ping_seconds, loss_ratio);
+        let stall_seconds = self.remote_timing.timeout_after + FIXED_DELTA_SECONDS;
+        let _within_extrapolation_window =
+            self.remote_timing.allows_extrapolation(ping_seconds * 0.5);
+        if self.remote_timing.timed_out(stall_seconds) {
+            self.local_client_mut()
+                .prediction
+                .note_prediction_failure(PredictionFailure::HazardOrRescueChangedState);
+        }
+    }
+
+    #[must_use]
+    pub const fn remote_timing(&self) -> RemoteTimingTuning {
+        self.remote_timing
     }
 
     #[must_use]
@@ -6042,14 +6097,40 @@ mod tests {
             (super::ClientPredictionState::interpolation_delay_seconds(1.0) - 0.25).abs()
                 < f32::EPSILON
         );
-        assert!(super::ClientPredictionState::should_extrapolate(0.12));
-        assert!(!super::ClientPredictionState::should_extrapolate(0.13));
+        assert!(super::ClientPredictionState::should_extrapolate(0.16));
+        assert!(!super::ClientPredictionState::should_extrapolate(0.17));
         assert!(
             session
                 .local_client()
                 .prediction()
                 .predicted_input_lag_seconds()
                 > 0.0
+        );
+    }
+
+    #[test]
+    fn prediction_high_ping_tuning_derives_latency_loss_timing() {
+        let mut session = GameSession::new();
+        session.update_remote_timing_from_network_sample(0.18, 0.1);
+        let timing = session.remote_timing();
+
+        assert!(timing.interpolation_delay <= 0.25);
+        assert!(timing.allows_extrapolation(0.09));
+        assert!(timing.timed_out(timing.timeout_after + 0.01));
+        assert_eq!(
+            super::ClientPredictionState::correction_plan(8.0, 0.0),
+            super::CorrectionPlan::Smooth
+        );
+        assert_eq!(
+            super::ClientPredictionState::correction_plan(24.0, 0.0),
+            super::CorrectionPlan::Snap
+        );
+        assert!(
+            session
+                .local_client()
+                .prediction()
+                .prediction_failures()
+                .contains(&super::PredictionFailure::HazardOrRescueChangedState)
         );
     }
 
