@@ -870,7 +870,7 @@ impl SelectedTransportBackend {
     pub const fn rationale(self) -> &'static str {
         match self {
             Self::InMemoryFaithfulAdapter => {
-                "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable before a real socket backend is required"
+                "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable without requiring OS sockets in every test"
             }
             Self::QuinnQuic => {
                 "selected production direction: Quinn/QUIC can carry reliable control streams and unreliable datagrams under one connection with reconnect-friendly session identity"
@@ -2167,7 +2167,7 @@ pub enum LobbySessionUxState {
 
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "networking limitation policy intentionally records independent deferred capabilities"
+    reason = "networking limitation policy intentionally records independent platform and transport capabilities"
 )]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UnsupportedProductionNetworkingItems {
@@ -2175,7 +2175,7 @@ pub struct UnsupportedProductionNetworkingItems {
     pub matchmaking_deferred: bool,
     pub platform_invites_deferred: bool,
     pub host_migration_deferred: bool,
-    pub real_socket_backend_deferred: bool,
+    pub real_socket_backend_available: bool,
     pub notes: Vec<String>,
 }
 
@@ -2186,7 +2186,7 @@ impl UnsupportedProductionNetworkingItems {
             && self.matchmaking_deferred
             && self.platform_invites_deferred
             && self.host_migration_deferred
-            && self.real_socket_backend_deferred
+            && self.real_socket_backend_available
             && self.notes.len() >= 2
     }
 }
@@ -2198,9 +2198,9 @@ pub fn unsupported_production_networking_items() -> UnsupportedProductionNetwork
         matchmaking_deferred: true,
         platform_invites_deferred: true,
         host_migration_deferred: true,
-        real_socket_backend_deferred: true,
+        real_socket_backend_available: true,
         notes: vec![
-            "Direct host/join UX is the only online flow productized before real socket IO."
+            "Direct host/join UX is the only online flow being productized now; real Quinn socket IO is implemented for localhost direct connect."
                 .to_owned(),
             "NAT traversal, matchmaking, platform invites, and host migration require backend/platform choices."
                 .to_owned(),
@@ -3525,7 +3525,13 @@ mod tests {
         assert!(unsupported.matchmaking_deferred);
         assert!(unsupported.platform_invites_deferred);
         assert!(unsupported.host_migration_deferred);
-        assert!(unsupported.real_socket_backend_deferred);
+        assert!(unsupported.real_socket_backend_available);
+        assert!(
+            unsupported
+                .notes
+                .iter()
+                .any(|note| note.contains("real Quinn socket IO is implemented"))
+        );
     }
 
     #[test]

@@ -1514,7 +1514,7 @@ impl GameState {
             }
             4 => {
                 self.online_session_state = OnlineSessionUxState::Error;
-                "Connection error: production socket backend unavailable."
+                "Connection error: direct Quinn connection task failed."
                     .clone_into(&mut self.online_session_status_message);
             }
             5 => {
