@@ -517,6 +517,22 @@ impl PlayerSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplayedPlayerState {
+    pub snapshot: PlayerSnapshot,
+    pub replayed_command_count: usize,
+}
+
+impl ReplayedPlayerState {
+    #[must_use]
+    pub const fn from_snapshot(snapshot: PlayerSnapshot) -> Self {
+        Self {
+            snapshot,
+            replayed_command_count: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PerPlayerHudSnapshot {
     pub player_id: PlayerId,
@@ -2591,6 +2607,7 @@ pub enum PredictionFailure {
     EconomyChangedState,
     ProgressionChangedState,
     CommandRejected,
+    SaveSessionTransition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2643,6 +2660,7 @@ pub struct PredictionPolishCoverageSummary {
     pub progression_failure_handled: bool,
     pub hazard_or_rescue_failure_handled: bool,
     pub rejected_command_handled: bool,
+    pub save_session_transition_handled: bool,
     pub debug_instrumentation_available: bool,
 }
 
@@ -2657,6 +2675,7 @@ impl PredictionPolishCoverageSummary {
             && self.progression_failure_handled
             && self.hazard_or_rescue_failure_handled
             && self.rejected_command_handled
+            && self.save_session_transition_handled
             && self.debug_instrumentation_available
     }
 }
@@ -2949,29 +2968,55 @@ impl ClientPredictionState {
     }
 
     #[must_use]
+    pub fn replay_unacknowledged_player_state(
+        authoritative: &PlayerSnapshot,
+        commands: &[SequencedPlayerCommand],
+    ) -> ReplayedPlayerState {
+        let mut replayed = ReplayedPlayerState::from_snapshot(authoritative.clone());
+        for command in commands {
+            match command.command {
+                PlayerCommand::Movement {
+                    horizontal, thrust, ..
+                } => {
+                    replayed.replayed_command_count += 1;
+                    replayed.snapshot.velocity_x = horizontal;
+                    if thrust {
+                        replayed.snapshot.velocity_y -= 1.0;
+                    }
+                    replayed.snapshot.x += replayed.snapshot.velocity_x;
+                    replayed.snapshot.y += replayed.snapshot.velocity_y;
+                }
+                PlayerCommand::UseScanner => {
+                    replayed.replayed_command_count += 1;
+                    replayed.snapshot.scanner_cooldown_seconds = 1.0;
+                }
+                PlayerCommand::BuyUpgrade { .. }
+                | PlayerCommand::Refuel
+                | PlayerCommand::Repair
+                | PlayerCommand::SellCargo
+                | PlayerCommand::Rescue => {
+                    replayed.replayed_command_count += 1;
+                }
+                PlayerCommand::Interact
+                | PlayerCommand::Cancel
+                | PlayerCommand::Confirm
+                | PlayerCommand::PlaceBomb
+                | PlayerCommand::PlaceInfrastructure { .. }
+                | PlayerCommand::SelectUpgrade { .. } => {}
+            }
+        }
+        replayed
+    }
+
+    #[must_use]
     pub fn replay_unacknowledged_movement(
         authoritative: &PlayerSnapshot,
         commands: &[SequencedPlayerCommand],
     ) -> ReplayedPrediction {
-        let mut predicted = PredictedMovement::from_snapshot(authoritative);
-        let mut replayed_command_count = 0;
-        for command in commands {
-            if let PlayerCommand::Movement {
-                horizontal, thrust, ..
-            } = command.command
-            {
-                replayed_command_count += 1;
-                predicted.velocity_x = horizontal;
-                if thrust {
-                    predicted.velocity_y -= 1.0;
-                }
-                predicted.x += predicted.velocity_x;
-                predicted.y += predicted.velocity_y;
-            }
-        }
+        let replayed_state = Self::replay_unacknowledged_player_state(authoritative, commands);
         ReplayedPrediction {
-            predicted,
-            replayed_command_count,
+            predicted: PredictedMovement::from_snapshot(&replayed_state.snapshot),
+            replayed_command_count: replayed_state.replayed_command_count,
         }
     }
 
@@ -3024,6 +3069,10 @@ impl ClientPredictionState {
 
     pub fn note_prediction_failure(&mut self, failure: PredictionFailure) {
         self.prediction_failures.push(failure);
+    }
+
+    pub fn note_save_session_transition(&mut self) {
+        self.note_prediction_failure(PredictionFailure::SaveSessionTransition);
     }
 
     pub fn clear_prediction_failures(&mut self) {
@@ -3079,6 +3128,8 @@ impl ClientPredictionState {
         &self,
         ping_seconds: f32,
         dropped_packets: usize,
+        snapshot_recoveries: usize,
+        chunk_recoveries: usize,
     ) -> NetworkDebugInstrumentationSnapshot {
         NetworkDebugInstrumentationSnapshot {
             ping_seconds,
@@ -3089,8 +3140,8 @@ impl ClientPredictionState {
                     Self::correction_plan(offset.x, offset.y)
                 }),
             dropped_packets,
-            snapshot_recoveries: 1,
-            chunk_recoveries: 1,
+            snapshot_recoveries,
+            chunk_recoveries,
         }
     }
 
@@ -3140,7 +3191,7 @@ impl ClientPredictionState {
             terrain_position,
             0,
         );
-        let debug = self.prediction_debug_snapshot(0.1, 1);
+        let debug = self.prediction_debug_snapshot(0.1, 1, 1, 1);
 
         PredictionPolishCoverageSummary {
             replayed_unacknowledged_commands: replay.replayed_command_count
@@ -3177,6 +3228,12 @@ impl ClientPredictionState {
                 })
                 .count()
                 >= 2,
+            save_session_transition_handled: actions.iter().any(|action| {
+                matches!(
+                    action,
+                    PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+                )
+            }),
             debug_instrumentation_available: debug.visible_to_debug_overlay(),
         }
     }
@@ -3190,7 +3247,8 @@ impl ClientPredictionState {
                     PredictionFailureResolution::RequestTerrainChunk
                 }
                 PredictionFailure::HazardOrRescueChangedState
-                | PredictionFailure::CommandRejected => {
+                | PredictionFailure::CommandRejected
+                | PredictionFailure::SaveSessionTransition => {
                     PredictionFailureResolution::RequestAuthoritativeSnapshot
                 }
                 PredictionFailure::EconomyChangedState => {
@@ -3223,7 +3281,8 @@ impl ClientPredictionState {
                     ))
                 }
                 PredictionFailure::HazardOrRescueChangedState
-                | PredictionFailure::CommandRejected => {
+                | PredictionFailure::CommandRejected
+                | PredictionFailure::SaveSessionTransition => {
                     PredictionRecoveryAction::RequestAuthoritativeSnapshot { player_id }
                 }
                 PredictionFailure::EconomyChangedState => {
@@ -3708,6 +3767,12 @@ impl GameSession {
             &snapshot,
             delta_seconds,
         ))
+    }
+
+    pub fn note_save_session_transition_for_prediction(&mut self) {
+        self.local_client_mut()
+            .prediction
+            .note_save_session_transition();
     }
 
     #[must_use]
@@ -5017,6 +5082,7 @@ mod tests {
         prediction.note_prediction_failure(super::PredictionFailure::ProgressionChangedState);
         prediction.note_prediction_failure(super::PredictionFailure::HazardOrRescueChangedState);
         prediction.note_prediction_failure(super::PredictionFailure::CommandRejected);
+        prediction.note_save_session_transition();
         prediction.set_correction_offset(super::CorrectionOffset::new(8.0, 0.0));
 
         let summary = prediction.prediction_polish_coverage_summary(
@@ -5025,7 +5091,7 @@ mod tests {
             SimulationTick::new(7),
             super::TerrainChunkPosition { x: 0, y: 0 },
         );
-        let debug = prediction.prediction_debug_snapshot(0.12, 2);
+        let debug = prediction.prediction_debug_snapshot(0.12, 2, 1, 1);
 
         assert!(summary.complete());
         assert_eq!(debug.correction_plan, super::CorrectionPlan::Smooth);
@@ -6026,6 +6092,26 @@ mod tests {
         );
         assert_eq!(replayed.replayed_command_count, 1);
         assert!((replayed.predicted.x - 13.0).abs() < f32::EPSILON);
+        let replayed_full_state = super::ClientPredictionState::replay_unacknowledged_player_state(
+            &previous,
+            &[
+                SequencedPlayerCommand {
+                    player_id: LOCAL_PLAYER_ID,
+                    sequence: InputSequence::new(2),
+                    target_tick: SimulationTick::new(1),
+                    command: PlayerCommand::UseScanner,
+                },
+                SequencedPlayerCommand {
+                    player_id: LOCAL_PLAYER_ID,
+                    sequence: InputSequence::new(3),
+                    target_tick: SimulationTick::new(1),
+                    command: PlayerCommand::SellCargo,
+                },
+            ],
+        );
+        assert_eq!(replayed_full_state.replayed_command_count, 2);
+        assert!((replayed_full_state.snapshot.scanner_cooldown_seconds - 1.0).abs() < f32::EPSILON);
+
         let replayed_reconciliation = super::ReplayedReconciliation::from_authoritative_snapshot(
             &previous,
             &[SequencedPlayerCommand {

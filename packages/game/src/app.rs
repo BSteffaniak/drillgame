@@ -81,10 +81,11 @@ pub fn run() {
         if input.fullscreen {
             raylib.toggle_fullscreen();
         }
-        if (input.fullscreen
-            || input.volume_up
-            || input.volume_down
-            || session.take_settings_dirty())
+        let settings_dirty = session.take_settings_dirty();
+        if settings_dirty {
+            session.note_save_session_transition_for_prediction();
+        }
+        if (input.fullscreen || input.volume_up || input.volume_down || settings_dirty)
             && let Err(error) = save_settings(session.current_settings())
         {
             eprintln!("Settings save failed: {error}");
