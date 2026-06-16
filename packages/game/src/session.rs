@@ -3573,6 +3573,10 @@ impl GameSession {
         &self.game
     }
 
+    pub const fn game_mut(&mut self) -> &mut GameState {
+        &mut self.game
+    }
+
     #[must_use]
     pub const fn world(&self) -> &WorldState {
         &self.world
@@ -6927,7 +6931,14 @@ mod tests {
         assert_eq!(plan.primary_client_id, LOCAL_CLIENT_ID);
         assert_eq!(plan.secondary_client_id, ClientId::new(2));
         assert!(session.enable_default_local_split_screen());
+        let player_slots = u8::try_from(session.client_count()).unwrap_or(u8::MAX);
+        session
+            .game_mut()
+            .mark_local_multiplayer_active(player_slots);
         assert_eq!(session.client_count(), 2);
+        assert!(session.game().local_multiplayer_active);
+        assert_eq!(session.game().local_multiplayer_player_slots, 2);
+        assert!(session.game().message.contains("Player 2"));
         assert!(session.world().player(plan.secondary_player_id).is_some());
         assert!(!session.enable_default_local_split_screen());
     }

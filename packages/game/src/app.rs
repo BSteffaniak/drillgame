@@ -59,7 +59,20 @@ pub fn run() {
             .client_actions
             .contains(&crate::multiplayer::ClientAction::ToggleLocalMultiplayer)
         {
-            let _enabled_split_screen = session.enable_default_local_split_screen();
+            let enabled_split_screen = session.enable_default_local_split_screen();
+            if enabled_split_screen {
+                let player_slots = u8::try_from(session.client_count()).unwrap_or(u8::MAX);
+                session
+                    .game_mut()
+                    .mark_local_multiplayer_active(player_slots);
+            }
+        }
+        if session.game_mut().take_local_multiplayer_request() {
+            let _ = session.enable_default_local_split_screen();
+            let player_slots = u8::try_from(session.client_count()).unwrap_or(u8::MAX);
+            session
+                .game_mut()
+                .mark_local_multiplayer_active(player_slots);
         }
         let secondary_input =
             (session.client_count() > 1).then(|| read_secondary_keyboard_input(&raylib));

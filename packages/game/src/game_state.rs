@@ -6,7 +6,7 @@
     reason = "world coordinates intentionally cross integer tile and floating render spaces"
 )]
 
-use std::fmt::Write as _;
+use std::{fmt::Write as _, mem};
 
 use serde::{Deserialize, Serialize};
 
@@ -305,6 +305,7 @@ pub enum TitleOption {
     Resume,
     NewGame,
     OnlineMultiplayer,
+    LocalMultiplayer,
     LoadSlot,
     Options,
     Exit,
@@ -317,6 +318,7 @@ impl TitleOption {
             Self::Resume => "Resume Saved Session",
             Self::NewGame => "New Game",
             Self::OnlineMultiplayer => "Online Multiplayer",
+            Self::LocalMultiplayer => "Local Split-Screen",
             Self::LoadSlot => "Load Slot",
             Self::Options => "Options",
             Self::Exit => "Exit",
@@ -764,6 +766,14 @@ pub struct GameState {
     #[serde(default = "current_save_version")]
     pub save_version: u32,
     pub message: String,
+    #[serde(default)]
+    pub local_multiplayer_requested: bool,
+    #[serde(default)]
+    pub local_multiplayer_active: bool,
+    #[serde(default)]
+    pub local_multiplayer_player_slots: u8,
+    #[serde(default)]
+    pub local_multiplayer_status_message: String,
     pub current_zone: Option<SurfaceZone>,
     #[serde(default)]
     pub interior_zone: Option<SurfaceZone>,
@@ -978,6 +988,10 @@ impl GameState {
             save_version: current_save_version(),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
+            local_multiplayer_requested: false,
+            local_multiplayer_active: false,
+            local_multiplayer_player_slots: 1,
+            local_multiplayer_status_message: String::new(),
             current_zone: None,
             interior_zone: None,
             interior_x: 88.0,
@@ -1302,6 +1316,7 @@ impl GameState {
                 self.modal = Some(ModalScreen::OnlineMultiplayer);
                 self.selected_menu_item = 0;
             }
+            TitleOption::LocalMultiplayer => self.start_local_multiplayer_request(),
             TitleOption::LoadSlot => {
                 self.modal = Some(ModalScreen::LoadSlots);
                 self.selected_menu_item = 0;
@@ -1320,6 +1335,7 @@ impl GameState {
             vec![
                 TitleOption::Resume,
                 TitleOption::NewGame,
+                TitleOption::LocalMultiplayer,
                 TitleOption::OnlineMultiplayer,
                 TitleOption::LoadSlot,
                 TitleOption::Options,
@@ -1328,6 +1344,7 @@ impl GameState {
         } else {
             vec![
                 TitleOption::NewGame,
+                TitleOption::LocalMultiplayer,
                 TitleOption::OnlineMultiplayer,
                 TitleOption::Options,
                 TitleOption::Exit,
@@ -1345,6 +1362,27 @@ impl GameState {
         self.save_dirty = true;
         self.sound_cues.push(SoundCue::Milestone);
         "Welcome to the dig site. Visit the depot for contracts.".clone_into(&mut self.message);
+    }
+
+    fn start_local_multiplayer_request(&mut self) {
+        self.start_new_game();
+        self.local_multiplayer_requested = true;
+        "Local split-screen starting: Player 1 uses WASD, Player 2 uses arrow keys."
+            .clone_into(&mut self.local_multiplayer_status_message);
+        self.message = self.local_multiplayer_status_message.clone();
+    }
+
+    pub fn take_local_multiplayer_request(&mut self) -> bool {
+        mem::take(&mut self.local_multiplayer_requested)
+    }
+
+    pub fn mark_local_multiplayer_active(&mut self, player_slots: u8) {
+        self.local_multiplayer_active = true;
+        self.local_multiplayer_player_slots = player_slots;
+        self.local_multiplayer_status_message = format!(
+            "Local split-screen active with {player_slots} players: Player 1 WASD, Player 2 arrow keys."
+        );
+        self.message = self.local_multiplayer_status_message.clone();
     }
 
     fn load_latest_into_self(&mut self) {
@@ -5352,6 +5390,33 @@ fn input_changes_game(input: PlayerInput) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_menu_exposes_local_split_screen_entrypoint() {
+        assert!(GameState::title_options().contains(&TitleOption::LocalMultiplayer));
+    }
+
+    #[test]
+    fn selecting_local_split_screen_starts_game_and_requests_session_activation() {
+        let mut game = GameState::new();
+        let options = GameState::title_options();
+        game.selected_title_item = options
+            .iter()
+            .position(|option| *option == TitleOption::LocalMultiplayer)
+            .expect("local split-screen option exists");
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert!(game.take_local_multiplayer_request());
+        assert!(game.message.contains("Player 2"));
+    }
 
     #[test]
     fn title_menu_exposes_online_multiplayer_entrypoint() {
