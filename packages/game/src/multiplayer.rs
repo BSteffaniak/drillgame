@@ -974,6 +974,49 @@ pub enum LobbySessionUxState {
     Closed,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "networking limitation policy intentionally records independent deferred capabilities"
+)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UnsupportedProductionNetworkingItems {
+    pub nat_traversal_deferred: bool,
+    pub matchmaking_deferred: bool,
+    pub platform_invites_deferred: bool,
+    pub host_migration_deferred: bool,
+    pub real_socket_backend_deferred: bool,
+    pub notes: Vec<String>,
+}
+
+impl UnsupportedProductionNetworkingItems {
+    #[must_use]
+    pub const fn documented(&self) -> bool {
+        self.nat_traversal_deferred
+            && self.matchmaking_deferred
+            && self.platform_invites_deferred
+            && self.host_migration_deferred
+            && self.real_socket_backend_deferred
+            && self.notes.len() >= 2
+    }
+}
+
+#[must_use]
+pub fn unsupported_production_networking_items() -> UnsupportedProductionNetworkingItems {
+    UnsupportedProductionNetworkingItems {
+        nat_traversal_deferred: true,
+        matchmaking_deferred: true,
+        platform_invites_deferred: true,
+        host_migration_deferred: true,
+        real_socket_backend_deferred: true,
+        notes: vec![
+            "Direct host/join UX is the only online flow productized before real socket IO."
+                .to_owned(),
+            "NAT traversal, matchmaking, platform invites, and host migration require backend/platform choices."
+                .to_owned(),
+        ],
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConnectionLifecycleSummary {
     pub steps: Vec<ConnectionLifecycleStep>,
@@ -2224,7 +2267,7 @@ mod tests {
         selected_transport_backend, session_continuity_decision, session_shutdown_decision,
         terrain_recovery_decision, transport_fault_coverage_summary,
         transport_implementation_decision, transport_integration_status,
-        transport_reliability_mapping,
+        transport_reliability_mapping, unsupported_production_networking_items,
     };
 
     #[test]
@@ -2277,6 +2320,18 @@ mod tests {
         let status = io.status();
         assert_eq!(status.reliable_sent, 1);
         assert_eq!(status.unreliable_sent, 1);
+    }
+
+    #[test]
+    fn unsupported_production_networking_items_are_documented_in_runtime_policy() {
+        let unsupported = unsupported_production_networking_items();
+
+        assert!(unsupported.documented());
+        assert!(unsupported.nat_traversal_deferred);
+        assert!(unsupported.matchmaking_deferred);
+        assert!(unsupported.platform_invites_deferred);
+        assert!(unsupported.host_migration_deferred);
+        assert!(unsupported.real_socket_backend_deferred);
     }
 
     #[test]

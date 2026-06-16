@@ -786,7 +786,15 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
 
 fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Online Multiplayer", 330, 150, 30, Color::SKYBLUE);
-    let options = ["Host session", "Join session", "Reconnect", "Back"];
+    let options = [
+        "Host session",
+        "Join session",
+        "Reconnect",
+        "Simulate timeout",
+        "Show error",
+        "Shutdown session",
+        "Back",
+    ];
     draw_options_list(
         draw,
         game.selected_menu_item,
@@ -808,6 +816,29 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+    draw.draw_text(
+        &format!(
+            "State: {:?} | Host owns save: {} | Slot: {}",
+            game.online_session_state,
+            game.online_host_owns_save,
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        ),
+        330,
+        520,
+        18,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &game.online_session_status_message,
+        330,
+        550,
+        18,
+        Color::YELLOW,
+    );
+    if let Some(limit) = game.online_session_limitations.first() {
+        draw.draw_text(limit, 330, 580, 16, Color::GRAY);
+    }
 }
 
 fn draw_options_list(

@@ -264,6 +264,23 @@ pub enum RunMode {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OnlineSessionUxState {
+    Idle,
+    Hosting,
+    Joining,
+    Connected,
+    Reconnecting,
+    Timeout,
+    Error,
+    Disconnected,
+    Shutdown,
+}
+
+const fn default_online_session_state() -> OnlineSessionUxState {
+    OnlineSessionUxState::Idle
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ModalScreen {
     Fuel,
     FuelConfirm,
@@ -766,6 +783,16 @@ pub struct GameState {
     #[serde(default = "current_save_version")]
     pub save_version: u32,
     pub message: String,
+    #[serde(default = "default_online_session_state")]
+    pub online_session_state: OnlineSessionUxState,
+    #[serde(default)]
+    pub online_session_status_message: String,
+    #[serde(default)]
+    pub online_host_owns_save: bool,
+    #[serde(default)]
+    pub online_player_slot: Option<u8>,
+    #[serde(default)]
+    pub online_session_limitations: Vec<String>,
     #[serde(default)]
     pub local_multiplayer_requested: bool,
     #[serde(default)]
@@ -988,6 +1015,11 @@ impl GameState {
             save_version: current_save_version(),
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
+            online_session_state: OnlineSessionUxState::Idle,
+            online_session_status_message: String::new(),
+            online_host_owns_save: false,
+            online_player_slot: None,
+            online_session_limitations: Self::online_session_limitations(),
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
             local_multiplayer_player_slots: 1,
@@ -1350,6 +1382,61 @@ impl GameState {
                 TitleOption::Exit,
             ]
         }
+    }
+
+    #[must_use]
+    pub fn online_session_limitations() -> Vec<String> {
+        vec![
+            "Production socket IO is deferred; QUIC packet contracts are validated in code.".to_owned(),
+            "NAT traversal, matchmaking, invites, and host migration are intentionally unsupported.".to_owned(),
+        ]
+    }
+
+    fn confirm_online_multiplayer(&mut self) {
+        match self.selected_menu_item {
+            0 => {
+                self.online_session_state = OnlineSessionUxState::Hosting;
+                self.online_host_owns_save = true;
+                self.online_player_slot = Some(1);
+                "Hosting lobby locally. Host owns save/session authority."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            1 => {
+                self.online_session_state = OnlineSessionUxState::Joining;
+                self.online_host_owns_save = false;
+                self.online_player_slot = Some(2);
+                "Joining by direct address. Waiting for host assignment."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            2 => {
+                self.online_session_state = OnlineSessionUxState::Reconnecting;
+                "Reconnect requested with previous session token."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            3 => {
+                self.online_session_state = OnlineSessionUxState::Timeout;
+                "Connection timed out; retry or go back."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            4 => {
+                self.online_session_state = OnlineSessionUxState::Error;
+                "Connection error: production socket backend unavailable."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            5 => {
+                self.online_session_state = OnlineSessionUxState::Shutdown;
+                "Online session shutdown acknowledged."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+            _ => {
+                self.online_session_state = OnlineSessionUxState::Idle;
+                self.modal = None;
+                "Closed online multiplayer menu."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+        }
+        self.message = self.online_session_status_message.clone();
+        self.sound_cues.push(SoundCue::Ui);
     }
 
     fn start_new_game(&mut self) {
@@ -2140,6 +2227,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
+                ModalScreen::OnlineMultiplayer => 6,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -2183,8 +2271,8 @@ impl GameState {
                 | ModalScreen::UnsavedExitConfirm
                 | ModalScreen::Map
                 | ModalScreen::Help
-                | ModalScreen::ResearchLog
-                | ModalScreen::OnlineMultiplayer => {}
+                | ModalScreen::ResearchLog => {}
+                ModalScreen::OnlineMultiplayer => self.confirm_online_multiplayer(),
             }
         }
 
@@ -5416,6 +5504,81 @@ mod tests {
         assert_eq!(game.run_mode, RunMode::Playing);
         assert!(game.take_local_multiplayer_request());
         assert!(game.message.contains("Player 2"));
+    }
+
+    #[test]
+    fn online_multiplayer_modal_drives_host_join_reconnect_error_and_shutdown_ux_state() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+
+        game.selected_menu_item = 0;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Hosting);
+        assert!(game.online_host_owns_save);
+        assert_eq!(game.online_player_slot, Some(1));
+
+        game.selected_menu_item = 1;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Joining);
+        assert!(!game.online_host_owns_save);
+        assert_eq!(game.online_player_slot, Some(2));
+
+        game.selected_menu_item = 2;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.online_session_state,
+            OnlineSessionUxState::Reconnecting
+        );
+
+        game.selected_menu_item = 3;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Timeout);
+
+        game.selected_menu_item = 4;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+
+        game.selected_menu_item = 5;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+        assert!(game.message.contains("shutdown"));
+        assert!(!game.online_session_limitations.is_empty());
     }
 
     #[test]
