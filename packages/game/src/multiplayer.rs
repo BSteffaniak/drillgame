@@ -1509,13 +1509,12 @@ pub async fn connect_split_localhost_quinn_session(
     snapshot_tick: SimulationTick,
 ) -> Result<QuinnOnlineSession, QuinnOnlineSessionError> {
     let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())?;
-    let host_addr = host
-        .local_addr()
-        .ok_or(QuinnOnlineSessionError::MissingEndpoint("host address"))?;
-    let server_name = host.server_name.clone();
-    let client = QuinnClientConnector::bind_with_server_certificate(
+    let descriptor = host.connection_descriptor()?;
+    let host_addr = descriptor.host_addr;
+    let server_name = descriptor.server_name.clone();
+    let client = QuinnClientConnector::bind_from_host_descriptor(
         QuinnEndpointConfig::localhost_ephemeral(),
-        host.certificate.clone(),
+        &descriptor,
     )?;
     let client_addr = client
         .local_addr()
@@ -1770,6 +1769,13 @@ impl QuinnEndpointConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct QuinnHostConnectionDescriptor {
+    pub host_addr: SocketAddr,
+    pub server_name: String,
+    pub certificate_der: Vec<u8>,
+}
+
 #[derive(Debug)]
 pub struct QuinnHostListener {
     pub backend: QuinnSocketBackend,
@@ -1808,6 +1814,23 @@ impl QuinnHostListener {
     #[must_use]
     pub const fn local_addr(&self) -> Option<SocketAddr> {
         self.backend.local_addr()
+    }
+
+    /// Return a serializable direct-connect descriptor suitable for a separate client process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the listener has no local address.
+    pub fn connection_descriptor(
+        &self,
+    ) -> Result<QuinnHostConnectionDescriptor, QuinnOnlineSessionError> {
+        Ok(QuinnHostConnectionDescriptor {
+            host_addr: self
+                .local_addr()
+                .ok_or(QuinnOnlineSessionError::MissingEndpoint("host address"))?,
+            server_name: self.server_name.clone(),
+            certificate_der: self.certificate.as_ref().to_vec(),
+        })
     }
 
     /// Accept one incoming Quinn connection and wrap it as packet IO.
@@ -1863,6 +1886,21 @@ impl QuinnClientConnector {
         Ok(Self {
             backend: QuinnSocketBackend::from_bound_endpoint(endpoint)?,
         })
+    }
+
+    /// Bind a Quinn client endpoint from a serializable host descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when client TLS configuration or UDP endpoint binding fails.
+    pub fn bind_from_host_descriptor(
+        config: QuinnEndpointConfig,
+        descriptor: &QuinnHostConnectionDescriptor,
+    ) -> Result<Self, QuinnBackendError> {
+        Self::bind_with_server_certificate(
+            config,
+            quinn::rustls::pki_types::CertificateDer::from(descriptor.certificate_der.clone()),
+        )
     }
 
     #[must_use]
@@ -3596,14 +3634,15 @@ mod tests {
     async fn quinn_host_listener_and_client_connector_join_through_separate_entrypoints() {
         let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
             .expect("host listener binds");
-        let host_addr = host.local_addr().expect("host address");
-        let client = QuinnClientConnector::bind_with_server_certificate(
+        let descriptor = host.connection_descriptor().expect("host descriptor");
+        let host_addr = descriptor.host_addr;
+        let client = QuinnClientConnector::bind_from_host_descriptor(
             QuinnEndpointConfig::localhost_ephemeral(),
-            host.certificate.clone(),
+            &descriptor,
         )
         .expect("client connector binds");
         let client_addr = client.local_addr().expect("client address");
-        let server_name = host.server_name.clone();
+        let server_name = descriptor.server_name.clone();
         let join_packet = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
             client_id: LOCAL_CLIENT_ID,
             session_token: None,
@@ -3628,6 +3667,49 @@ mod tests {
             join_packet
         );
         assert_ne!(host_addr, client_addr);
+    }
+
+    #[tokio::test]
+    async fn quinn_host_connection_descriptor_round_trips_for_separate_process_handoff() {
+        let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
+            .expect("host listener binds");
+        let descriptor = host.connection_descriptor().expect("descriptor exists");
+        let encoded = serde_json::to_string(&descriptor).expect("descriptor serializes");
+        let decoded: super::QuinnHostConnectionDescriptor =
+            serde_json::from_str(&encoded).expect("descriptor deserializes");
+        let client = QuinnClientConnector::bind_from_host_descriptor(
+            QuinnEndpointConfig::localhost_ephemeral(),
+            &decoded,
+        )
+        .expect("client connector binds from descriptor");
+        let server_name = decoded.server_name.clone();
+        let join_packet = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+
+        let (client_io, host_io) = tokio::join!(
+            async move {
+                client
+                    .connect_packet_io(decoded.host_addr, &server_name)
+                    .await
+            },
+            async { host.accept_packet_io().await }
+        );
+        let client_io = client_io.expect("client connects");
+        let host_io = host_io.expect("host accepts");
+        client_io
+            .send_packet(join_packet.clone())
+            .await
+            .expect("join sends");
+
+        assert_eq!(
+            host_io
+                .receive_reliable_packet()
+                .await
+                .expect("join receives"),
+            join_packet
+        );
     }
 
     #[tokio::test]
