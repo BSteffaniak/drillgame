@@ -279,6 +279,127 @@ pub enum OnlineSessionUxState {
 
 #[allow(
     dead_code,
+    reason = "real online controller is exercised by tests until desktop async UI ownership calls it"
+)]
+pub struct RealOnlineSessionController {
+    session: crate::multiplayer::QuinnOnlineSession,
+    player_slot: Option<u8>,
+}
+
+#[allow(
+    dead_code,
+    reason = "real online controller is exercised by tests until desktop async UI ownership calls it"
+)]
+impl RealOnlineSessionController {
+    /// Connect a localhost split Quinn session and apply joined UX state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Quinn endpoint setup, connect/accept, or join handshake fails.
+    pub async fn connect_localhost(
+        game: &mut GameState,
+    ) -> Result<Self, crate::multiplayer::QuinnOnlineSessionError> {
+        let client_config = crate::multiplayer::default_local_client_runtime();
+        let session = crate::multiplayer::connect_split_localhost_quinn_session(
+            crate::multiplayer::HostRuntimeConfig::default(),
+            client_config,
+            crate::multiplayer::SimulationTick::new(300),
+        )
+        .await?;
+        let controller = Self {
+            session,
+            player_slot: Some(1),
+        };
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_joined_session(
+            controller.player_slot,
+        ));
+        Ok(controller)
+    }
+
+    /// Drive one real network telemetry tick and apply online UX state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the real Quinn tick driver fails.
+    pub async fn drive_telemetry_tick(
+        &mut self,
+        game: &mut GameState,
+    ) -> Result<
+        crate::multiplayer::QuinnSessionTickTelemetry,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let player_id = self
+            .session
+            .joined_player_id()
+            .unwrap_or(crate::multiplayer::LOCAL_PLAYER_ID);
+        let client_id = self.session.client_runtime.config.client_id;
+        let telemetry = self
+            .session
+            .drive_tick_with_telemetry(crate::multiplayer::QuinnSessionTickInput {
+                command_packet: Some(crate::multiplayer::CommandPacket {
+                    client_id,
+                    commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                        player_id,
+                        sequence: crate::multiplayer::InputSequence::new(30),
+                        target_tick: crate::multiplayer::SimulationTick::new(301),
+                        command: crate::multiplayer::PlayerCommand::UseScanner,
+                    }],
+                }),
+                snapshot: Some(crate::multiplayer::NetworkWorldSnapshot {
+                    tick: crate::multiplayer::SimulationTick::new(302),
+                    players: Vec::new(),
+                }),
+                delta: Some((
+                    crate::multiplayer::SimulationTick::new(303),
+                    crate::multiplayer::NetworkDeltaPayload::Noop,
+                )),
+                terrain_chunk_request: Some((30, 31, 1, 2)),
+                correction_probe: Some((
+                    60.0,
+                    60.0,
+                    crate::multiplayer::NetworkPlayerSnapshot {
+                        player_id,
+                        x: 6.0,
+                        y: 7.0,
+                        velocity_x: 0.0,
+                        velocity_y: 0.0,
+                        fuel: 35.0,
+                        hull: 45.0,
+                        credits: 8,
+                        cargo_used: 0,
+                        scanner_cooldown_seconds: 0.0,
+                    },
+                    crate::multiplayer::SimulationTick::new(304),
+                )),
+            })
+            .await?;
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
+            &telemetry.summary,
+            self.player_slot,
+        ));
+        Ok(telemetry)
+    }
+
+    /// Reconnect the owned real Quinn session and apply reconnect UX state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when reconnect setup or handshake fails.
+    pub async fn reconnect(
+        &mut self,
+        game: &mut GameState,
+        token: crate::multiplayer::SessionToken,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        self.session.reconnect_with_token(token).await?;
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_reconnect(
+            self.player_slot,
+        ));
+        Ok(())
+    }
+}
+
+#[allow(
+    dead_code,
     reason = "real online UX bridge is exercised by tests until desktop async UI ownership calls it"
 )]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5598,6 +5719,38 @@ mod tests {
         assert_eq!(game.run_mode, RunMode::Playing);
         assert!(game.take_local_multiplayer_request());
         assert!(game.message.contains("Player 2"));
+    }
+
+    #[tokio::test]
+    async fn real_online_session_controller_applies_join_tick_and_reconnect_ux() {
+        let mut game = GameState::new();
+        let mut controller = RealOnlineSessionController::connect_localhost(&mut game)
+            .await
+            .expect("real session connects");
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(
+            game.message
+                .contains("Connected through real localhost Quinn")
+        );
+
+        let telemetry = controller
+            .drive_telemetry_tick(&mut game)
+            .await
+            .expect("telemetry tick runs");
+        assert!(telemetry.local_smoke_passed());
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(game.message.contains("Real Quinn tick"));
+
+        controller
+            .reconnect(&mut game, crate::multiplayer::SessionToken::new(301))
+            .await
+            .expect("session reconnects");
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(
+            game.message
+                .contains("Reconnected through real localhost Quinn")
+        );
     }
 
     #[test]
