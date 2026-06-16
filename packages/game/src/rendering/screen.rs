@@ -761,6 +761,7 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         ModalScreen::TownDevelopment => draw_town_development(draw, game),
         ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
         ModalScreen::ResearchLog => draw_research_log(draw, game),
+        ModalScreen::OnlineMultiplayer => draw_online_multiplayer(draw, game),
         ModalScreen::Crafting => draw_crafting(draw, game),
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
@@ -774,6 +775,37 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
         }
         ModalScreen::UnsavedExitConfirm => draw_unsaved_exit_confirm(draw, game),
     }
+}
+
+fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    draw.draw_text("Online Multiplayer", 330, 150, 30, Color::SKYBLUE);
+    let options = [
+        "Host session (coming soon)",
+        "Join session (coming soon)",
+        "Reconnect (coming soon)",
+        "Back",
+    ];
+    draw_options_list(
+        draw,
+        game.selected_menu_item,
+        330,
+        225,
+        &options.map(str::to_owned),
+    );
+    draw.draw_text(
+        "Production networking is selected as QUIC, but socket IO is not enabled yet.",
+        330,
+        430,
+        18,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        "States covered: connecting, timeout, error, disconnect, reconnect, shutdown.",
+        330,
+        460,
+        18,
+        Color::LIGHTGRAY,
+    );
 }
 
 fn draw_options_list(

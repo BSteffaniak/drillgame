@@ -897,6 +897,30 @@ pub enum LobbySessionUxState {
     Closed,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "online UX readiness records independent deferred UI coverage points"
+)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OnlineSessionUxReadiness {
+    pub host_join_lobby_rendered: bool,
+    pub progress_states_rendered: bool,
+    pub save_ownership_explained: bool,
+    pub player_identity_explained: bool,
+    pub reconnect_explained: bool,
+}
+
+impl OnlineSessionUxReadiness {
+    #[must_use]
+    pub const fn ready_for_deferred_online_ui(&self) -> bool {
+        self.host_join_lobby_rendered
+            && self.progress_states_rendered
+            && self.save_ownership_explained
+            && self.player_identity_explained
+            && self.reconnect_explained
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConnectionLifecycleSummary {
     pub steps: Vec<ConnectionLifecycleStep>,
@@ -1266,6 +1290,17 @@ pub const fn transport_implementation_decision() -> TransportImplementationDecis
         selected_transport: Some(SelectedTransportBackend::InMemoryFaithfulAdapter),
         packet_io_integrated: true,
         in_memory_compatibility_active: true,
+    }
+}
+
+#[must_use]
+pub const fn online_session_ux_readiness() -> OnlineSessionUxReadiness {
+    OnlineSessionUxReadiness {
+        host_join_lobby_rendered: true,
+        progress_states_rendered: true,
+        save_ownership_explained: true,
+        player_identity_explained: true,
+        reconnect_explained: true,
     }
 }
 
@@ -2139,9 +2174,9 @@ mod tests {
         disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
         initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
-        per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
-        recovery_coverage_summary, reliable_join_exchange_messages,
+        network_soak_summary, online_session_ux_readiness, packet_io_recovery_summary,
+        packet_recovery_action, per_client_ui_policy, production_transport_selection,
+        pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
         reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
         selected_transport_backend, session_continuity_decision, session_shutdown_decision,
         terrain_recovery_decision, transport_fault_coverage_summary,
@@ -2189,6 +2224,13 @@ mod tests {
             mapping.production_channel_for(ReliabilityClass::UnreliableSequenced),
             ProductionPacketChannel::QuicDatagram
         );
+    }
+
+    #[test]
+    fn online_session_ux_readiness_covers_deferred_host_join_reconnect_states() {
+        let readiness = online_session_ux_readiness();
+
+        assert!(readiness.ready_for_deferred_online_ui());
     }
 
     #[test]

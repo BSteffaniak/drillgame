@@ -287,6 +287,7 @@ pub enum ModalScreen {
     TownDevelopment,
     ExpeditionBoard,
     ResearchLog,
+    OnlineMultiplayer,
     Crafting,
 }
 
@@ -303,6 +304,7 @@ pub enum PauseOption {
 pub enum TitleOption {
     Resume,
     NewGame,
+    OnlineMultiplayer,
     LoadSlot,
     Options,
     Exit,
@@ -314,6 +316,7 @@ impl TitleOption {
         match self {
             Self::Resume => "Resume Saved Session",
             Self::NewGame => "New Game",
+            Self::OnlineMultiplayer => "Online Multiplayer",
             Self::LoadSlot => "Load Slot",
             Self::Options => "Options",
             Self::Exit => "Exit",
@@ -1295,6 +1298,10 @@ impl GameState {
         match options[self.selected_title_item] {
             TitleOption::Resume => self.load_latest_into_self(),
             TitleOption::NewGame => self.start_new_game(),
+            TitleOption::OnlineMultiplayer => {
+                self.modal = Some(ModalScreen::OnlineMultiplayer);
+                self.selected_menu_item = 0;
+            }
             TitleOption::LoadSlot => {
                 self.modal = Some(ModalScreen::LoadSlots);
                 self.selected_menu_item = 0;
@@ -1313,6 +1320,7 @@ impl GameState {
             vec![
                 TitleOption::Resume,
                 TitleOption::NewGame,
+                TitleOption::OnlineMultiplayer,
                 TitleOption::LoadSlot,
                 TitleOption::Options,
                 TitleOption::Exit,
@@ -1320,6 +1328,7 @@ impl GameState {
         } else {
             vec![
                 TitleOption::NewGame,
+                TitleOption::OnlineMultiplayer,
                 TitleOption::Options,
                 TitleOption::Exit,
             ]
@@ -2136,7 +2145,8 @@ impl GameState {
                 | ModalScreen::UnsavedExitConfirm
                 | ModalScreen::Map
                 | ModalScreen::Help
-                | ModalScreen::ResearchLog => {}
+                | ModalScreen::ResearchLog
+                | ModalScreen::OnlineMultiplayer => {}
             }
         }
 
@@ -5342,6 +5352,31 @@ fn input_changes_game(input: PlayerInput) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_menu_exposes_online_multiplayer_entrypoint() {
+        assert!(GameState::title_options().contains(&TitleOption::OnlineMultiplayer));
+    }
+
+    #[test]
+    fn selecting_online_multiplayer_opens_deferred_online_modal() {
+        let mut game = GameState::new();
+        let options = GameState::title_options();
+        game.selected_title_item = options
+            .iter()
+            .position(|option| *option == TitleOption::OnlineMultiplayer)
+            .expect("online multiplayer option exists");
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+
+        assert_eq!(game.modal, Some(ModalScreen::OnlineMultiplayer));
+    }
 
     #[test]
     fn hq_briefing_changes_with_depth() {
