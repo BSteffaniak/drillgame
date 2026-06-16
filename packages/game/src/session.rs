@@ -2157,34 +2157,6 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "readiness report intentionally records independent split-screen proof dimensions"
-)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SplitScreenReadinessReport {
-    pub client_count: usize,
-    pub clipped_viewports: usize,
-    pub independent_viewports: bool,
-    pub independent_players: bool,
-    pub per_player_hud: bool,
-    pub remote_players_visible_per_view: bool,
-    pub correction_and_feedback_available: bool,
-}
-
-impl SplitScreenReadinessReport {
-    #[must_use]
-    pub const fn ready_for_live_render_path(&self) -> bool {
-        self.client_count >= 2
-            && self.clipped_viewports == self.client_count
-            && self.independent_viewports
-            && self.independent_players
-            && self.per_player_hud
-            && self.remote_players_visible_per_view
-            && self.correction_and_feedback_available
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderViewportPlan {
     pub client_id: ClientId,
@@ -2219,7 +2191,7 @@ impl LiveRenderFrameOutput {
     }
 
     #[must_use]
-    pub fn split_screen_readiness_report(&self) -> SplitScreenReadinessReport {
+    pub fn ready_for_live_render_path(&self) -> bool {
         let client_count = self.viewport_plans.len();
         let mut viewports = BTreeSet::new();
         let mut players = BTreeSet::new();
@@ -2234,25 +2206,23 @@ impl LiveRenderFrameOutput {
                 players.insert(player.player_id);
             }
         }
-        SplitScreenReadinessReport {
-            client_count,
-            clipped_viewports: self.clipped_viewport_count(),
-            independent_viewports: viewports.len() == client_count,
-            independent_players: players.len() == client_count,
-            per_player_hud: self.hud_snapshots.len() == client_count,
-            remote_players_visible_per_view: self
+        client_count >= 2
+            && self.clipped_viewport_count() == client_count
+            && viewports.len() == client_count
+            && players.len() == client_count
+            && self.hud_snapshots.len() == client_count
+            && (self
                 .viewport_plans
                 .iter()
                 .all(|plan| plan.remote_player_count + 1 >= client_count)
                 || self
                     .world_players_by_view
                     .iter()
-                    .all(|(_, players)| players.len() >= client_count),
-            correction_and_feedback_available: self
+                    .all(|(_, players)| players.len() >= client_count))
+            && self
                 .viewport_plans
                 .iter()
-                .any(|plan| plan.correction_frame.is_some() || !plan.feedback_outputs.is_empty()),
-        }
+                .any(|plan| plan.correction_frame.is_some() || !plan.feedback_outputs.is_empty())
     }
 }
 
@@ -2679,40 +2649,6 @@ impl RemoteTimingTuning {
     #[must_use]
     pub fn timed_out(self, stall_seconds: f32) -> bool {
         stall_seconds > self.timeout_after
-    }
-}
-
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "prediction polish summary intentionally records phase checklist coverage"
-)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PredictionPolishCoverageSummary {
-    pub replayed_unacknowledged_commands: bool,
-    pub smoothing_and_snap_thresholds: bool,
-    pub remote_interpolation_and_extrapolation: bool,
-    pub terrain_failure_handled: bool,
-    pub economy_failure_handled: bool,
-    pub progression_failure_handled: bool,
-    pub hazard_or_rescue_failure_handled: bool,
-    pub rejected_command_handled: bool,
-    pub save_session_transition_handled: bool,
-    pub debug_instrumentation_available: bool,
-}
-
-impl PredictionPolishCoverageSummary {
-    #[must_use]
-    pub const fn complete(&self) -> bool {
-        self.replayed_unacknowledged_commands
-            && self.smoothing_and_snap_thresholds
-            && self.remote_interpolation_and_extrapolation
-            && self.terrain_failure_handled
-            && self.economy_failure_handled
-            && self.progression_failure_handled
-            && self.hazard_or_rescue_failure_handled
-            && self.rejected_command_handled
-            && self.save_session_transition_handled
-            && self.debug_instrumentation_available
     }
 }
 
@@ -3182,13 +3118,7 @@ impl ClientPredictionState {
     }
 
     #[must_use]
-    pub fn prediction_polish_coverage_summary(
-        &self,
-        player_id: PlayerId,
-        terrain_revisions: &TerrainRevisionTracker,
-        tick: SimulationTick,
-        terrain_position: TerrainChunkPosition,
-    ) -> PredictionPolishCoverageSummary {
+    pub fn unacknowledged_replay_is_complete(&self, player_id: PlayerId) -> bool {
         let authoritative = PlayerSnapshot {
             player_id,
             x: 10.0,
@@ -3202,76 +3132,7 @@ impl ClientPredictionState {
             scanner_cooldown_seconds: 0.0,
         };
         let replay = Self::replay_unacknowledged_movement(&authoritative, self.replay_commands());
-        let previous = PlayerSnapshot {
-            player_id,
-            x: 0.0,
-            y: 0.0,
-            velocity_x: 4.0,
-            velocity_y: 0.0,
-            fuel: 1.0,
-            hull: 1.0,
-            credits: 0,
-            cargo_used: 0,
-            scanner_cooldown_seconds: 0.0,
-        };
-        let next = PlayerSnapshot {
-            x: 10.0,
-            ..previous
-        };
-        let interpolated = Self::remote_player_presentation(&previous, Some(&next), 0.5, 0.0);
-        let extrapolated = Self::remote_player_presentation(&previous, None, 0.0, 0.1);
-        let actions = self.prediction_recovery_actions(
-            player_id,
-            terrain_revisions,
-            tick,
-            terrain_position,
-            0,
-        );
-        let debug = self.prediction_debug_snapshot(0.1, 1, 1, 1);
-
-        PredictionPolishCoverageSummary {
-            replayed_unacknowledged_commands: replay.replayed_command_count
-                == self.replay_commands().len(),
-            smoothing_and_snap_thresholds: PredictionCorrectionTuning::classifies_expected_offsets(
-            ),
-            remote_interpolation_and_extrapolation: !interpolated.extrapolated
-                && extrapolated.extrapolated,
-            terrain_failure_handled: actions
-                .iter()
-                .any(|action| matches!(action, PredictionRecoveryAction::RequestTerrainDelta(_))),
-            economy_failure_handled: actions.iter().any(|action| {
-                matches!(
-                    action,
-                    PredictionRecoveryAction::RollBackLocalEconomy { .. }
-                )
-            }),
-            progression_failure_handled: actions.iter().any(|action| {
-                matches!(action, PredictionRecoveryAction::RollBackProgression { .. })
-            }),
-            hazard_or_rescue_failure_handled: actions.iter().any(|action| {
-                matches!(
-                    action,
-                    PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
-                )
-            }),
-            rejected_command_handled: actions
-                .iter()
-                .filter(|action| {
-                    matches!(
-                        action,
-                        PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
-                    )
-                })
-                .count()
-                >= 2,
-            save_session_transition_handled: actions.iter().any(|action| {
-                matches!(
-                    action,
-                    PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
-                )
-            }),
-            debug_instrumentation_available: debug.visible_to_debug_overlay(),
-        }
+        replay.replayed_command_count == self.replay_commands().len()
     }
 
     #[must_use]
@@ -5090,7 +4951,7 @@ mod tests {
     }
 
     #[test]
-    fn split_screen_readiness_report_covers_camera_viewport_hud_remote_correction_and_feedback() {
+    fn split_screen_render_output_covers_camera_viewport_hud_remote_correction_and_feedback() {
         let mut session = GameSession::new();
         let second_client = ClientId::new(2);
         let second_player = PlayerId::new(2);
@@ -5104,20 +4965,21 @@ mod tests {
         let prediction_plan = session.live_prediction_presentation_plan(0.0, 0.5, 0.2);
 
         let output = session.live_render_frame_output(&prediction_plan);
-        let report = output.split_screen_readiness_report();
 
-        assert_eq!(report.client_count, 2);
-        assert_eq!(report.clipped_viewports, 2);
-        assert!(report.independent_viewports);
-        assert!(report.independent_players);
-        assert!(report.per_player_hud);
-        assert!(report.remote_players_visible_per_view);
-        assert!(report.correction_and_feedback_available);
-        assert!(report.ready_for_live_render_path());
+        assert_eq!(output.viewport_plans.len(), 2);
+        assert_eq!(output.clipped_viewport_count(), 2);
+        assert!(
+            output
+                .viewport_plans
+                .iter()
+                .all(|plan| plan.local_player.is_some())
+        );
+        assert_eq!(output.hud_count(), 2);
+        assert!(output.ready_for_live_render_path());
     }
 
     #[test]
-    fn prediction_polish_summary_covers_replay_correction_remote_failure_and_debug_paths() {
+    fn prediction_runtime_paths_cover_replay_correction_remote_failure_and_debug_paths() {
         let mut prediction = super::ClientPredictionState::default();
         let player_id = LOCAL_PLAYER_ID;
         let terrain_revisions = super::TerrainRevisionTracker::default();
@@ -5140,15 +5002,65 @@ mod tests {
         prediction.note_save_session_transition();
         prediction.set_correction_offset(super::CorrectionOffset::new(8.0, 0.0));
 
-        let summary = prediction.prediction_polish_coverage_summary(
+        let previous = super::PlayerSnapshot {
+            player_id,
+            x: 0.0,
+            y: 0.0,
+            velocity_x: 4.0,
+            velocity_y: 0.0,
+            fuel: 1.0,
+            hull: 1.0,
+            credits: 0,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
+        };
+        let next = super::PlayerSnapshot {
+            x: 10.0,
+            ..previous
+        };
+        let interpolated = super::ClientPredictionState::remote_player_presentation(
+            &previous,
+            Some(&next),
+            0.5,
+            0.0,
+        );
+        let extrapolated =
+            super::ClientPredictionState::remote_player_presentation(&previous, None, 0.0, 0.1);
+        let actions = prediction.prediction_recovery_actions(
             player_id,
             &terrain_revisions,
             SimulationTick::new(7),
             super::TerrainChunkPosition { x: 0, y: 0 },
+            0,
         );
         let debug = prediction.prediction_debug_snapshot(0.12, 2, 1, 1);
 
-        assert!(summary.complete());
+        assert!(prediction.unacknowledged_replay_is_complete(player_id));
+        assert!(super::PredictionCorrectionTuning::classifies_expected_offsets());
+        assert!(!interpolated.extrapolated);
+        assert!(extrapolated.extrapolated);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            super::PredictionRecoveryAction::RequestTerrainDelta(_)
+        )));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            super::PredictionRecoveryAction::RollBackLocalEconomy { .. }
+        )));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            super::PredictionRecoveryAction::RollBackProgression { .. }
+        )));
+        assert!(
+            actions
+                .iter()
+                .filter(|action| matches!(
+                    action,
+                    super::PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+                ))
+                .count()
+                >= 3
+        );
         assert_eq!(debug.correction_plan, super::CorrectionPlan::Smooth);
         assert!(debug.visible_to_debug_overlay());
     }
@@ -6964,11 +6876,7 @@ mod tests {
                 .iter()
                 .all(|(_, players)| players.len() == 2)
         );
-        assert!(
-            output
-                .split_screen_readiness_report()
-                .ready_for_live_render_path()
-        );
+        assert!(output.ready_for_live_render_path());
     }
 
     #[test]

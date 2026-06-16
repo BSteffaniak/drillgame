@@ -343,8 +343,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     });
     let _render_viewport_plans = render_frame_plan.viewport_plans(&prediction_presentation_plan);
     let live_render_output = session.live_render_frame_output(&prediction_presentation_plan);
-    let split_screen_readiness = live_render_output.split_screen_readiness_report();
-    let _split_screen_ready = split_screen_readiness.ready_for_live_render_path();
+    let _split_screen_ready = live_render_output.ready_for_live_render_path();
     let _live_render_counts = (
         live_render_output.clipped_viewport_count(),
         live_render_output.hud_count(),
@@ -407,13 +406,20 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
     prediction_probe.note_prediction_failure(PredictionFailure::ProgressionChangedState);
     prediction_probe.note_prediction_failure(PredictionFailure::CommandRejected);
     let _prediction_failure_resolutions = prediction_probe.prediction_failure_resolutions();
-    let prediction_polish = prediction_probe.prediction_polish_coverage_summary(
+    let _unacknowledged_replay_complete =
+        prediction_probe.unacknowledged_replay_is_complete(crate::multiplayer::LOCAL_PLAYER_ID);
+    let _prediction_recovery_actions = prediction_probe.prediction_recovery_actions(
         crate::multiplayer::LOCAL_PLAYER_ID,
         session.terrain_revisions(),
         session.current_tick(),
         crate::session::TerrainChunkPosition { x: 0, y: 0 },
+        0,
     );
-    let _prediction_polish_complete = prediction_polish.complete();
+    let _prediction_tuning = crate::session::PredictionCorrectionTuning::default_gameplay_feel();
+    let _prediction_tuning_classifies_offsets =
+        crate::session::PredictionCorrectionTuning::classifies_expected_offsets();
+    let prediction_debug_snapshot = prediction_probe.prediction_debug_snapshot(0.0, 0, 1, 1);
+    let _prediction_debug_visible = prediction_debug_snapshot.visible_to_debug_overlay();
     prediction_probe.clear_prediction_failures();
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::MovementIntent);
     prediction_probe.push_feedback(crate::session::LocalTentativeFeedback::DrillContact);
