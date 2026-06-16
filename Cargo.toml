@@ -23,10 +23,18 @@ raylib = { version = "6.0.0", default-features = false, features = [
     "SUPPORT_MODULE_RAUDIO",
     "SUPPORT_FILEFORMAT_WAV",
 ] }
+rcgen = { version = "0.13.2", default-features = false, features = [
+    "crypto",
+    "ring",
+] }
 serde = { version = "1.0.228", default-features = false, features = [
     "derive",
     "std",
 ] }
 serde_json = { version = "1.0.150", default-features = false, features = [
     "std",
+] }
+tokio = { version = "1.48.0", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
 ] }

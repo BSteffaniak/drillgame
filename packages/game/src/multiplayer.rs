@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -967,15 +971,80 @@ impl PacketIo for ProductionQuicPacketIo {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct QuinnEndpointConfig {
+    pub bind_addr: SocketAddr,
+}
+
+impl QuinnEndpointConfig {
+    #[must_use]
+    pub const fn localhost_ephemeral() -> Self {
+        Self {
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct QuinnSocketBackend {
     endpoint: Option<quinn::Endpoint>,
+    local_addr: Option<SocketAddr>,
 }
 
 impl QuinnSocketBackend {
     #[must_use]
     pub const fn new_unbound() -> Self {
-        Self { endpoint: None }
+        Self {
+            endpoint: None,
+            local_addr: None,
+        }
+    }
+
+    /// Bind a client-side Quinn endpoint to the configured local address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the UDP socket cannot bind or report its local address.
+    /// Must be called from a Tokio runtime because Quinn's Tokio runtime backend needs a reactor.
+    pub fn bind_client(config: QuinnEndpointConfig) -> std::io::Result<Self> {
+        let endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            None,
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        let local_addr = Some(endpoint.local_addr()?);
+        Ok(Self {
+            endpoint: Some(endpoint),
+            local_addr,
+        })
+    }
+
+    /// Bind a localhost server-side Quinn endpoint with a generated self-signed certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when certificate generation, TLS configuration, or UDP endpoint binding fails.
+    /// Must be called from a Tokio runtime because Quinn's Tokio runtime backend needs a reactor.
+    pub fn bind_localhost_server(config: QuinnEndpointConfig) -> Result<Self, QuinnBackendError> {
+        let certified_key = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])?;
+        let key = quinn::rustls::pki_types::PrivateKeyDer::Pkcs8(
+            certified_key.key_pair.serialize_der().into(),
+        );
+        let mut server_config =
+            quinn::ServerConfig::with_single_cert(vec![certified_key.cert.der().clone()], key)?;
+        server_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        let endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            UdpSocket::bind(config.bind_addr)?,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        let local_addr = Some(endpoint.local_addr()?);
+        Ok(Self {
+            endpoint: Some(endpoint),
+            local_addr,
+        })
     }
 
     #[must_use]
@@ -984,8 +1053,38 @@ impl QuinnSocketBackend {
     }
 
     #[must_use]
+    pub const fn local_addr(&self) -> Option<SocketAddr> {
+        self.local_addr
+    }
+
+    #[must_use]
     pub const fn real_dependency_linked() -> bool {
         std::mem::size_of::<quinn::Endpoint>() > 0
+    }
+}
+
+#[derive(Debug)]
+pub enum QuinnBackendError {
+    Io(std::io::Error),
+    Certificate(rcgen::Error),
+    Tls(quinn::rustls::Error),
+}
+
+impl From<std::io::Error> for QuinnBackendError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<rcgen::Error> for QuinnBackendError {
+    fn from(error: rcgen::Error) -> Self {
+        Self::Certificate(error)
+    }
+}
+
+impl From<quinn::rustls::Error> for QuinnBackendError {
+    fn from(error: quinn::rustls::Error) -> Self {
+        Self::Tls(error)
     }
 }
 
@@ -993,6 +1092,7 @@ impl QuinnSocketBackend {
 pub struct QuinnSocketBackendStatus {
     pub dependency_linked: bool,
     pub endpoint_bound: bool,
+    pub local_addr: Option<SocketAddr>,
     pub socket_packet_io_ready: bool,
 }
 
@@ -1001,6 +1101,7 @@ impl From<&QuinnSocketBackend> for QuinnSocketBackendStatus {
         Self {
             dependency_linked: QuinnSocketBackend::real_dependency_linked(),
             endpoint_bound: backend.endpoint_bound(),
+            local_addr: backend.local_addr(),
             socket_packet_io_ready: backend.endpoint_bound(),
         }
     }
@@ -2367,11 +2468,11 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
         PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
-        QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
-        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
+        QuinnEndpointConfig, QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand,
+        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
+        command_conflicts, connection_lifecycle_summary, default_local_client_runtime,
+        disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
+        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
         network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
         per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
@@ -2484,7 +2585,25 @@ mod tests {
 
         assert!(status.dependency_linked);
         assert!(!status.endpoint_bound);
+        assert_eq!(status.local_addr, None);
         assert!(!status.socket_packet_io_ready);
+    }
+
+    #[tokio::test]
+    async fn quinn_socket_backend_binds_localhost_client_and_server_endpoints() {
+        let client = QuinnSocketBackend::bind_client(QuinnEndpointConfig::localhost_ephemeral())
+            .expect("client endpoint binds");
+        let server =
+            QuinnSocketBackend::bind_localhost_server(QuinnEndpointConfig::localhost_ephemeral())
+                .expect("server endpoint binds");
+        let client_status = super::QuinnSocketBackendStatus::from(&client);
+        let server_status = super::QuinnSocketBackendStatus::from(&server);
+
+        assert!(client_status.endpoint_bound);
+        assert!(client_status.socket_packet_io_ready);
+        assert!(server_status.endpoint_bound);
+        assert!(server_status.socket_packet_io_ready);
+        assert_ne!(client_status.local_addr, server_status.local_addr);
     }
 
     #[test]
