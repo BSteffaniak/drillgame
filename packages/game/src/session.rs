@@ -3025,14 +3025,14 @@ impl ClientPredictionState {
                 | PlayerCommand::Refuel
                 | PlayerCommand::Repair
                 | PlayerCommand::SellCargo
-                | PlayerCommand::Rescue => {
+                | PlayerCommand::Rescue
+                | PlayerCommand::PlaceBomb
+                | PlayerCommand::PlaceInfrastructure { .. } => {
                     replayed.replayed_command_count += 1;
                 }
                 PlayerCommand::Interact
                 | PlayerCommand::Cancel
                 | PlayerCommand::Confirm
-                | PlayerCommand::PlaceBomb
-                | PlayerCommand::PlaceInfrastructure { .. }
                 | PlayerCommand::SelectUpgrade { .. } => {}
             }
         }
@@ -4879,7 +4879,11 @@ mod tests {
         terrain::{MineResult, TileKind, TilePosition},
     };
 
-    use super::{ClientState, GameSession, WorldState};
+    use super::{
+        ClientPredictionState, ClientState, GameSession, NetworkDebugInstrumentationSnapshot,
+        PlayerSnapshot, PredictionCorrectionTuning, PredictionFailure, PredictionRecoveryAction,
+        RemoteTimingTuning, WorldState,
+    };
 
     #[test]
     fn session_starts_with_single_player_compatibility_client() {
@@ -7675,6 +7679,149 @@ mod tests {
                 .any(|remote| remote.player_id == second_player
                     && (remote.x - 22.0).abs() < f32::EPSILON)
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "broad Phase 6 regression intentionally covers all prediction polish dimensions together"
+    )]
+    fn prediction_reconciliation_polish_covers_replay_timing_failures_debug_and_high_ping() {
+        let player_id = LOCAL_PLAYER_ID;
+        let authoritative = PlayerSnapshot {
+            player_id,
+            x: 10.0,
+            y: 20.0,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            fuel: 10.0,
+            hull: 10.0,
+            credits: 100,
+            cargo_used: 0,
+            scanner_cooldown_seconds: 0.0,
+        };
+        let commands = vec![
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(1),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: true,
+                    drill_down: true,
+                },
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(2),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::UseScanner,
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(3),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::BuyUpgrade { index: 0 },
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(4),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::SellCargo,
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(5),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::Rescue,
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(6),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::PlaceBomb,
+            },
+            SequencedPlayerCommand {
+                player_id,
+                sequence: InputSequence::new(7),
+                target_tick: SimulationTick::new(1),
+                command: PlayerCommand::PlaceInfrastructure { slot: 0 },
+            },
+        ];
+
+        let replayed =
+            ClientPredictionState::replay_unacknowledged_player_state(&authoritative, &commands);
+        assert_eq!(replayed.replayed_command_count, commands.len());
+        assert!((replayed.snapshot.scanner_cooldown_seconds - 1.0).abs() < f32::EPSILON);
+        assert_eq!(
+            ClientPredictionState::correction_plan(0.1, 0.0),
+            super::CorrectionPlan::None
+        );
+        assert_eq!(
+            ClientPredictionState::correction_plan(8.0, 0.0),
+            super::CorrectionPlan::Smooth
+        );
+        assert_eq!(
+            ClientPredictionState::correction_plan(24.0, 0.0),
+            super::CorrectionPlan::Snap
+        );
+        assert!(PredictionCorrectionTuning::classifies_expected_offsets());
+
+        let timing = RemoteTimingTuning::from_latency_loss(0.24, 0.25);
+        assert!(timing.allows_extrapolation(timing.extrapolation_limit));
+        assert!(!timing.allows_extrapolation(timing.timeout_after));
+        assert!(timing.timed_out(timing.timeout_after + FIXED_DELTA_SECONDS));
+
+        let mut prediction = ClientPredictionState::default();
+        for failure in [
+            PredictionFailure::TerrainAlreadyChanged,
+            PredictionFailure::EconomyChangedState,
+            PredictionFailure::ProgressionChangedState,
+            PredictionFailure::HazardOrRescueChangedState,
+            PredictionFailure::CommandRejected,
+            PredictionFailure::SaveSessionTransition,
+        ] {
+            prediction.note_prediction_failure(failure);
+        }
+        let mut terrain_revisions = super::TerrainRevisionTracker::default();
+        let terrain_position = super::TerrainChunkPosition { x: 0, y: 0 };
+        terrain_revisions.mark_tiles_changed([TilePosition { x: 0, y: 0 }]);
+        let actions = prediction.prediction_recovery_actions(
+            player_id,
+            &terrain_revisions,
+            SimulationTick::new(2),
+            terrain_position,
+            0,
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, PredictionRecoveryAction::RequestTerrainDelta(_)))
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            PredictionRecoveryAction::RollBackLocalEconomy { .. }
+        )));
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                PredictionRecoveryAction::RollBackProgression { .. }
+            ))
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            PredictionRecoveryAction::RequestAuthoritativeSnapshot { .. }
+        )));
+
+        let debug = NetworkDebugInstrumentationSnapshot {
+            ping_seconds: 0.24,
+            prediction_buffer_commands: commands.len(),
+            correction_plan: super::CorrectionPlan::Smooth,
+            dropped_packets: 2,
+            snapshot_recoveries: 1,
+            chunk_recoveries: 1,
+        };
+        assert!(debug.visible_to_debug_overlay());
     }
 
     #[test]
