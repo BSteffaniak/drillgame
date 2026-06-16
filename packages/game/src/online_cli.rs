@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{io::Write, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +93,10 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
                     .map_err(format_debug_error)?;
                 let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
                 std::fs::write(&path, json).map_err(|error| error.to_string())?;
+                println!("online host descriptor ready");
+                std::io::stdout()
+                    .flush()
+                    .map_err(|error| error.to_string())?;
                 tokio::time::timeout(Duration::from_secs(5), listener.accept_packet_io())
                     .await
                     .map_err(|_| "timed out waiting for descriptor-file client".to_owned())?

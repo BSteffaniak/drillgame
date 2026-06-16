@@ -1,6 +1,8 @@
 use std::{
+    io::{BufRead, BufReader},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::mpsc,
     time::Duration,
 };
 
@@ -24,6 +26,21 @@ fn temporary_descriptor_path(name: &str) -> PathBuf {
     ))
 }
 
+fn spawn_stdout_line_reader(stdout: std::process::ChildStdout) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
 #[test]
 fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
     let binary = env!("CARGO_BIN_EXE_drillgame");
@@ -36,15 +53,17 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
         .spawn()
         .expect("host descriptor process starts");
 
-    for _ in 0..1500 {
-        if descriptor_path.exists() {
-            break;
-        }
-        if let Some(status) = host.try_wait().expect("host status can be polled") {
-            panic!("host exited before writing descriptor file: {status}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let stdout = host.stdout.take().expect("host stdout is piped");
+    let stdout_lines = spawn_stdout_line_reader(stdout);
+    let readiness_line = stdout_lines
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|error| {
+            if let Some(status) = host.try_wait().expect("host status can be polled") {
+                panic!("host exited before readiness marker: {status}");
+            }
+            panic!("host readiness marker was not emitted: {error}");
+        });
+    assert_eq!(readiness_line, "online host descriptor ready");
     assert!(descriptor_path.exists(), "descriptor file was not written");
 
     let join_output = Command::new(binary)
@@ -67,7 +86,10 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
         "host stderr: {}",
         String::from_utf8_lossy(&host_output.stderr)
     );
-    assert!(String::from_utf8_lossy(&host_output.stdout).contains("connection accepted"));
+    let accepted_line = stdout_lines
+        .recv_timeout(Duration::from_secs(1))
+        .expect("host accepted marker is emitted");
+    assert!(accepted_line.contains("connection accepted"));
 
     let _ignored = std::fs::remove_file(descriptor_path);
 }
