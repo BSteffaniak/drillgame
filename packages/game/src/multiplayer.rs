@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+const PROTOCOL_VERSION: u16 = 1;
+
 /// Stable identity for a player participating in an authoritative simulation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PlayerId(u64);
@@ -319,7 +321,7 @@ impl CommandNetworkSession {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ReliabilityClass {
     Reliable,
     UnreliableSequenced,
@@ -526,6 +528,55 @@ impl ClientRuntimeStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct VersionedProtocolPacket {
+    pub protocol_version: u16,
+    pub message: ProtocolMessage,
+}
+
+impl VersionedProtocolPacket {
+    #[must_use]
+    pub const fn new(message: ProtocolMessage) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
+    #[must_use]
+    pub const fn is_supported(&self) -> bool {
+        self.protocol_version == PROTOCOL_VERSION
+    }
+
+    /// Decode the packet when its protocol version matches this build.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolVersionError`] when the packet was encoded with an unsupported protocol
+    /// version.
+    pub fn decode_supported(self) -> Result<ProtocolMessage, ProtocolVersionError> {
+        if self.is_supported() {
+            Ok(self.message)
+        } else {
+            Err(ProtocolVersionError {
+                expected: PROTOCOL_VERSION,
+                actual: self.protocol_version,
+            })
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolVersionError {
+    pub expected: u16,
+    pub actual: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ClientSessionRuntime {
     pub config: ClientRuntimeConfig,
     pub session_token: Option<SessionToken>,
@@ -599,6 +650,7 @@ impl ClientSessionRuntime {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SelectedTransportBackend {
     InMemoryFaithfulAdapter,
+    QuinnQuic,
     UdpLikeUnreliableSequenced,
     ReliableSocket,
 }
@@ -609,6 +661,9 @@ impl SelectedTransportBackend {
         match self {
             Self::InMemoryFaithfulAdapter => {
                 "faithful adapter keeps protocol, reliability, lifecycle, and failure semantics testable before a real socket backend is required"
+            }
+            Self::QuinnQuic => {
+                "selected production direction: Quinn/QUIC can carry reliable control streams and unreliable datagrams under one connection with reconnect-friendly session identity"
             }
             Self::UdpLikeUnreliableSequenced => {
                 "future gameplay transport candidate for unreliable sequenced snapshots/deltas"
@@ -627,6 +682,20 @@ pub enum TransportChannel {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ProductionPacketChannel {
+    QuicBidirectionalStream,
+    QuicDatagram,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionTransportSelection {
+    pub backend: SelectedTransportBackend,
+    pub reliable_channel: ProductionPacketChannel,
+    pub unreliable_sequenced_channel: ProductionPacketChannel,
+    pub dependency_added: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransportReliabilityMapping {
     pub reliable: TransportChannel,
     pub unreliable_sequenced: TransportChannel,
@@ -640,6 +709,27 @@ impl TransportReliabilityMapping {
                 self.unreliable_sequenced,
                 TransportChannel::UnreliableSequencedSimulation
             )
+    }
+
+    #[must_use]
+    pub const fn production_channel_for(
+        self,
+        reliability: ReliabilityClass,
+    ) -> ProductionPacketChannel {
+        match reliability {
+            ReliabilityClass::Reliable => ProductionPacketChannel::QuicBidirectionalStream,
+            ReliabilityClass::UnreliableSequenced => ProductionPacketChannel::QuicDatagram,
+        }
+    }
+}
+
+#[must_use]
+pub const fn production_transport_selection() -> ProductionTransportSelection {
+    ProductionTransportSelection {
+        backend: SelectedTransportBackend::QuinnQuic,
+        reliable_channel: ProductionPacketChannel::QuicBidirectionalStream,
+        unreliable_sequenced_channel: ProductionPacketChannel::QuicDatagram,
+        dependency_added: false,
     }
 }
 
@@ -1803,15 +1893,15 @@ mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, HostSessionRuntime, InMemoryTransportQueues,
-        InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolMessage,
-        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
-        default_local_client_runtime, disconnect_reservation_policy,
+        InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId, ProductionPacketChannel,
+        ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
+        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        packet_recovery_action, per_client_ui_policy, pump_in_memory_runtime_packets,
-        recovery_coverage_summary, reliable_join_exchange_messages,
+        packet_recovery_action, per_client_ui_policy, production_transport_selection,
+        pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
         reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
         selected_transport_backend, session_continuity_decision, session_shutdown_decision,
         terrain_recovery_decision, transport_fault_coverage_summary,
@@ -1831,6 +1921,61 @@ mod tests {
         let sequence = InputSequence::new(u32::MAX);
 
         assert_eq!(sequence.next().get(), 0);
+    }
+
+    #[test]
+    fn production_transport_selection_maps_reliability_to_quic_channels_without_dependency() {
+        let selection = production_transport_selection();
+        let mapping = transport_reliability_mapping();
+
+        assert_eq!(
+            selection.backend,
+            super::SelectedTransportBackend::QuinnQuic
+        );
+        assert_eq!(
+            selection.reliable_channel,
+            ProductionPacketChannel::QuicBidirectionalStream
+        );
+        assert_eq!(
+            selection.unreliable_sequenced_channel,
+            ProductionPacketChannel::QuicDatagram
+        );
+        assert!(!selection.dependency_added);
+        assert_eq!(
+            mapping.production_channel_for(ReliabilityClass::Reliable),
+            ProductionPacketChannel::QuicBidirectionalStream
+        );
+        assert_eq!(
+            mapping.production_channel_for(ReliabilityClass::UnreliableSequenced),
+            ProductionPacketChannel::QuicDatagram
+        );
+    }
+
+    #[test]
+    fn versioned_protocol_packets_round_trip_supported_messages_and_reject_mismatch() {
+        let message = ProtocolMessage::ReconnectRequest {
+            client_id: ClientId::new(3),
+            session_token: SessionToken::new(9),
+        };
+        let packet = VersionedProtocolPacket::new(message.clone());
+
+        assert_eq!(packet.protocol_version(), 1);
+        assert_eq!(packet.decode_supported(), Ok(message));
+        assert_eq!(
+            VersionedProtocolPacket {
+                protocol_version: 0,
+                message: ProtocolMessage::WorldDelta {
+                    tick: SimulationTick::new(1),
+                    payload: NetworkDeltaPayload::Noop,
+                },
+            }
+            .decode_supported()
+            .expect_err("old protocol version rejected"),
+            super::ProtocolVersionError {
+                expected: 1,
+                actual: 0,
+            }
+        );
     }
 
     #[test]
