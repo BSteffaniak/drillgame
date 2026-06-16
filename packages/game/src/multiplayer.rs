@@ -1020,6 +1020,17 @@ impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
     }
 }
 
+fn decode_quinn_session_packet(
+    packet: VersionedProtocolPacket,
+) -> Result<ProtocolMessage, QuinnOnlineSessionError> {
+    packet.decode_supported().map_err(|error| {
+        QuinnOnlineSessionError::Connect(format!(
+            "unsupported protocol version: expected {}, actual {}",
+            error.expected, error.actual
+        ))
+    })
+}
+
 #[derive(Debug)]
 pub struct QuinnOnlineSession {
     pub host_runtime: HostSessionRuntime,
@@ -1031,6 +1042,103 @@ pub struct QuinnOnlineSession {
 }
 
 impl QuinnOnlineSession {
+    /// Replicate one authoritative snapshot keyframe from host to client through real Quinn packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when packet IO fails or the client receives an unexpected message.
+    pub async fn replicate_snapshot_keyframe(
+        &mut self,
+        snapshot: NetworkWorldSnapshot,
+    ) -> Result<(), QuinnOnlineSessionError> {
+        self.host_io
+            .send_packet(VersionedProtocolPacket::new(
+                ProtocolMessage::SnapshotKeyframe { snapshot },
+            ))
+            .await?;
+        let received = self.client_io.receive_datagram_packet().await?;
+        let message = decode_quinn_session_packet(received)?;
+        match message {
+            ProtocolMessage::SnapshotKeyframe { .. } => {
+                self.client_runtime.handle_message(message);
+                Ok(())
+            }
+            other => Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+    }
+
+    /// Replicate one authoritative world delta from host to client through real Quinn packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when packet IO fails or the client receives an unexpected message.
+    pub async fn replicate_world_delta(
+        &mut self,
+        tick: SimulationTick,
+        payload: NetworkDeltaPayload,
+    ) -> Result<(), QuinnOnlineSessionError> {
+        self.host_io
+            .send_packet(VersionedProtocolPacket::new(ProtocolMessage::WorldDelta {
+                tick,
+                payload,
+            }))
+            .await?;
+        let received = self.client_io.receive_datagram_packet().await?;
+        let message = decode_quinn_session_packet(received)?;
+        match message {
+            ProtocolMessage::WorldDelta { .. } => {
+                self.client_runtime.handle_message(message);
+                Ok(())
+            }
+            other => Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+    }
+
+    /// Exchange one terrain chunk request/response through real Quinn packet IO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when packet IO fails or either side receives an unexpected message.
+    pub async fn exchange_terrain_chunk(
+        &mut self,
+        chunk_x: i32,
+        chunk_y: i32,
+        known_revision: u64,
+        response_revision: u64,
+    ) -> Result<ProtocolMessage, QuinnOnlineSessionError> {
+        self.client_io
+            .send_packet(VersionedProtocolPacket::new(
+                ProtocolMessage::TerrainChunkRequest {
+                    chunk_x,
+                    chunk_y,
+                    known_revision,
+                },
+            ))
+            .await?;
+        let request = decode_quinn_session_packet(self.host_io.receive_reliable_packet().await?)?;
+        match request {
+            ProtocolMessage::TerrainChunkRequest {
+                chunk_x: request_x,
+                chunk_y: request_y,
+                known_revision: _,
+            } if request_x == chunk_x && request_y == chunk_y => {
+                let response = ProtocolMessage::TerrainChunkResponse {
+                    chunk_x,
+                    chunk_y,
+                    revision: response_revision,
+                };
+                self.host_io
+                    .send_packet(VersionedProtocolPacket::new(response.clone()))
+                    .await?;
+                let received =
+                    decode_quinn_session_packet(self.client_io.receive_reliable_packet().await?)?;
+                self.client_runtime.handle_message(received.clone());
+                Ok(received)
+            }
+            other => Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+    }
+
     /// Exchange a client command packet through real Quinn packet IO and apply host responses.
     ///
     /// # Errors
@@ -2833,13 +2941,13 @@ mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
-        InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
-        PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
-        QuinnEndpointConfig, QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend,
-        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connect_localhost_quinn_session, connection_lifecycle_summary,
-        default_local_client_runtime, disconnect_reservation_policy,
+        InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload,
+        NetworkPlayerSnapshot, NetworkWorldSnapshot, PacketIo, PlayerCommand, PlayerId,
+        ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage, QuinnEndpointConfig,
+        QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend, ReliabilityClass,
+        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
+        client_authority_allowed, command_conflicts, connect_localhost_quinn_session,
+        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -3177,6 +3285,72 @@ mod tests {
             session.client_runtime.latest_authoritative_tick,
             SimulationTick::new(55)
         );
+    }
+
+    #[tokio::test]
+    async fn localhost_quinn_session_replicates_snapshot_delta_and_terrain_chunk() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config,
+            SimulationTick::new(55),
+        )
+        .await
+        .expect("localhost quinn session connects");
+        let snapshot_tick = SimulationTick::new(60);
+        let snapshot = NetworkWorldSnapshot {
+            tick: snapshot_tick,
+            players: vec![NetworkPlayerSnapshot {
+                player_id,
+                x: 1.0,
+                y: 2.0,
+                velocity_x: 0.5,
+                velocity_y: -0.25,
+                fuel: 99.0,
+                hull: 88.0,
+                credits: 77,
+                cargo_used: 3,
+                scanner_cooldown_seconds: 0.0,
+            }],
+        };
+
+        session
+            .replicate_snapshot_keyframe(snapshot)
+            .await
+            .expect("snapshot replicates");
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            snapshot_tick
+        );
+
+        session
+            .replicate_world_delta(
+                SimulationTick::new(61),
+                NetworkDeltaPayload::Players {
+                    players: vec![player_id],
+                },
+            )
+            .await
+            .expect("world delta replicates");
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(61)
+        );
+
+        let chunk_response = session
+            .exchange_terrain_chunk(4, 7, 11, 12)
+            .await
+            .expect("terrain chunk exchanges");
+        assert_eq!(
+            chunk_response,
+            ProtocolMessage::TerrainChunkResponse {
+                chunk_x: 4,
+                chunk_y: 7,
+                revision: 12,
+            }
+        );
+        assert_eq!(session.client_runtime.pending_messages.len(), 1);
     }
 
     #[test]
