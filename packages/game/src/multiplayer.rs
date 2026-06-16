@@ -1020,6 +1020,32 @@ impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "runtime driver summary intentionally records checklist-style coverage"
+)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct QuinnSessionDriverSummary {
+    pub join_complete: bool,
+    pub command_acknowledged: bool,
+    pub snapshot_replicated: bool,
+    pub delta_replicated: bool,
+    pub terrain_chunk_exchanged: bool,
+    pub reconnect_complete: bool,
+}
+
+impl QuinnSessionDriverSummary {
+    #[must_use]
+    pub const fn covers_core_runtime_loop(self) -> bool {
+        self.join_complete
+            && self.command_acknowledged
+            && self.snapshot_replicated
+            && self.delta_replicated
+            && self.terrain_chunk_exchanged
+            && self.reconnect_complete
+    }
+}
+
 fn decode_quinn_session_packet(
     packet: VersionedProtocolPacket,
 ) -> Result<ProtocolMessage, QuinnOnlineSessionError> {
@@ -1137,6 +1163,102 @@ impl QuinnOnlineSession {
             }
             other => Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
         }
+    }
+
+    /// Reconnect the client through a newly bound Quinn connection while preserving host session state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when endpoint binding, Quinn connect/accept, packet IO, or host reconnect
+    /// acceptance fails.
+    pub async fn reconnect_with_token(
+        &mut self,
+        session_token: SessionToken,
+    ) -> Result<(), QuinnOnlineSessionError> {
+        let client_id = self.client_runtime.config.client_id;
+        let player_id = self
+            .client_runtime
+            .assigned_player_id
+            .or(self.client_runtime.config.player_id)
+            .ok_or(QuinnOnlineSessionError::JoinRejected)?;
+        self.host_runtime
+            .reserve_reconnect_token(session_token, client_id, player_id);
+        self.client_runtime.set_session_token(session_token);
+
+        let pair = QuinnLocalEndpointPair::bind(QuinnEndpointConfig::localhost_ephemeral())?;
+        let host_addr = pair
+            .server
+            .local_addr()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("host address"))?;
+        let client_addr = pair
+            .client
+            .local_addr()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("client address"))?;
+        let client_endpoint = pair
+            .client
+            .endpoint()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("client endpoint"))?
+            .clone();
+        let server_endpoint = pair
+            .server
+            .endpoint()
+            .ok_or(QuinnOnlineSessionError::MissingEndpoint("server endpoint"))?
+            .clone();
+        let snapshot_tick = self.client_runtime.latest_authoritative_tick;
+
+        let (client_connection, server_connection) = tokio::join!(
+            async move {
+                client_endpoint
+                    .connect(host_addr, "localhost")
+                    .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))?
+                    .await
+                    .map_err(|error| QuinnOnlineSessionError::Connect(error.to_string()))
+            },
+            async move {
+                server_endpoint
+                    .accept()
+                    .await
+                    .ok_or(QuinnOnlineSessionError::Accept(
+                        "endpoint closed".to_owned(),
+                    ))?
+                    .await
+                    .map_err(|error| QuinnOnlineSessionError::Accept(error.to_string()))
+            }
+        );
+        self.client_io = QuinnPacketIo::new(client_connection?);
+        self.host_io = QuinnPacketIo::new(server_connection?);
+        self.host_addr = host_addr;
+        self.client_addr = client_addr;
+
+        self.client_io
+            .send_packet(VersionedProtocolPacket::new(
+                self.client_runtime.connect_request(),
+            ))
+            .await?;
+        let reconnect_request =
+            decode_quinn_session_packet(self.host_io.receive_reliable_packet().await?)?;
+        let reconnect_response = match reconnect_request {
+            ProtocolMessage::JoinRequest {
+                client_id,
+                session_token: Some(token),
+            }
+            | ProtocolMessage::ReconnectRequest {
+                client_id,
+                session_token: token,
+            } => self
+                .host_runtime
+                .reconnect_client(client_id, token, snapshot_tick),
+            other => return Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+        .ok_or(QuinnOnlineSessionError::JoinRejected)?;
+
+        self.host_io
+            .send_packet(VersionedProtocolPacket::new(reconnect_response))
+            .await?;
+        let accepted_message =
+            decode_quinn_session_packet(self.client_io.receive_reliable_packet().await?)?;
+        self.client_runtime.handle_message(accepted_message);
+        Ok(())
     }
 
     /// Exchange a client command packet through real Quinn packet IO and apply host responses.
@@ -3351,6 +3473,94 @@ mod tests {
             }
         );
         assert_eq!(session.client_runtime.pending_messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn localhost_quinn_session_reconnects_with_reserved_token_over_real_packet_io() {
+        let client_config = default_local_client_runtime();
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(70),
+        )
+        .await
+        .expect("localhost quinn session connects");
+        let first_client_addr = session.client_addr;
+        let token = SessionToken::new(909);
+
+        session
+            .reconnect_with_token(token)
+            .await
+            .expect("session reconnects");
+
+        assert_ne!(session.client_addr, first_client_addr);
+        assert_eq!(session.host_connected_client_count(), 1);
+        assert_eq!(session.client_runtime.session_token, Some(token));
+        assert_eq!(session.joined_player_id(), client_config.player_id);
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(70)
+        );
+    }
+
+    #[tokio::test]
+    async fn localhost_quinn_session_driver_summary_covers_core_runtime_loop() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(80),
+        )
+        .await
+        .expect("localhost quinn session connects");
+        let command_summary = session
+            .exchange_command_packet(CommandPacket {
+                client_id: client_config.client_id,
+                commands: vec![SequencedPlayerCommand {
+                    player_id,
+                    sequence: InputSequence::new(8),
+                    target_tick: SimulationTick::new(81),
+                    command: PlayerCommand::Interact,
+                }],
+            })
+            .await
+            .expect("command exchanges");
+        session
+            .replicate_snapshot_keyframe(NetworkWorldSnapshot {
+                tick: SimulationTick::new(82),
+                players: Vec::new(),
+            })
+            .await
+            .expect("snapshot replicates");
+        session
+            .replicate_world_delta(SimulationTick::new(83), NetworkDeltaPayload::Noop)
+            .await
+            .expect("delta replicates");
+        let chunk = session
+            .exchange_terrain_chunk(1, 2, 3, 4)
+            .await
+            .expect("chunk exchanges");
+        session
+            .reconnect_with_token(SessionToken::new(910))
+            .await
+            .expect("session reconnects");
+        let summary = super::QuinnSessionDriverSummary {
+            join_complete: session.host_connected_client_count() == 1,
+            command_acknowledged: command_summary.all_accepted(),
+            snapshot_replicated: session.client_runtime.latest_authoritative_tick
+                >= SimulationTick::new(82),
+            delta_replicated: session.client_runtime.latest_authoritative_tick
+                >= SimulationTick::new(83),
+            terrain_chunk_exchanged: matches!(
+                chunk,
+                ProtocolMessage::TerrainChunkResponse { revision: 4, .. }
+            ),
+            reconnect_complete: session.client_runtime.session_token
+                == Some(SessionToken::new(910)),
+        };
+
+        assert!(summary.covers_core_runtime_loop());
     }
 
     #[test]
