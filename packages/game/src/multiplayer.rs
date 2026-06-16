@@ -893,6 +893,80 @@ pub enum ProductionPacketChannel {
     QuicDatagram,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionQuicPacketIoStatus {
+    pub reliable_stream_packets: usize,
+    pub datagram_packets: usize,
+    pub decoded_packets: usize,
+}
+
+impl ProductionQuicPacketIoStatus {
+    #[must_use]
+    pub const fn packet_io_active(self) -> bool {
+        self.reliable_stream_packets > 0 && self.datagram_packets > 0 && self.decoded_packets > 0
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionQuicPacketIo {
+    reliable_stream_bytes: VecDeque<Vec<u8>>,
+    datagram_bytes: VecDeque<Vec<u8>>,
+    status: ProductionQuicPacketIoStatus,
+}
+
+impl ProductionQuicPacketIo {
+    #[must_use]
+    pub const fn status(&self) -> ProductionQuicPacketIoStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub fn queued_channel_count(&self, channel: ProductionPacketChannel) -> usize {
+        match channel {
+            ProductionPacketChannel::QuicBidirectionalStream => self.reliable_stream_bytes.len(),
+            ProductionPacketChannel::QuicDatagram => self.datagram_bytes.len(),
+        }
+    }
+
+    fn push_encoded_packet(&mut self, channel: ProductionPacketChannel, bytes: Vec<u8>) {
+        match channel {
+            ProductionPacketChannel::QuicBidirectionalStream => {
+                self.status.reliable_stream_packets += 1;
+                self.reliable_stream_bytes.push_back(bytes);
+            }
+            ProductionPacketChannel::QuicDatagram => {
+                self.status.datagram_packets += 1;
+                self.datagram_bytes.push_back(bytes);
+            }
+        }
+    }
+}
+
+impl PacketIo for ProductionQuicPacketIo {
+    fn send_packet(&mut self, packet: VersionedProtocolPacket) -> Result<(), PacketIoError> {
+        let channel = transport_reliability_mapping()
+            .production_channel_for(packet.message.reliability_class());
+        let bytes = packet.encode_bytes()?;
+        self.push_encoded_packet(channel, bytes);
+        Ok(())
+    }
+
+    fn receive_packets(&mut self) -> Result<Vec<VersionedProtocolPacket>, PacketIoError> {
+        let bytes = self
+            .reliable_stream_bytes
+            .drain(..)
+            .chain(self.datagram_bytes.drain(..))
+            .collect::<Vec<_>>();
+        let mut packets = Vec::with_capacity(bytes.len());
+        for payload in bytes {
+            let packet = VersionedProtocolPacket::decode_bytes(&payload)?;
+            self.status.decoded_packets += 1;
+            packets.push(packet);
+        }
+        Ok(packets)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionTransportSelection {
     pub backend: SelectedTransportBackend,
@@ -2253,10 +2327,10 @@ mod tests {
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload, PacketIo,
-        PlayerCommand, PlayerId, ProductionPacketChannel, ProtocolMessage, ReliabilityClass,
-        SequencedPlayerCommand, SessionToken, SimulationTick, VersionedProtocolPacket,
-        client_authority_allowed, command_conflicts, connection_lifecycle_summary,
-        default_local_client_runtime, disconnect_reservation_policy,
+        PlayerCommand, PlayerId, ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage,
+        ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
+        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
+        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -2332,6 +2406,36 @@ mod tests {
         assert!(unsupported.platform_invites_deferred);
         assert!(unsupported.host_migration_deferred);
         assert!(unsupported.real_socket_backend_deferred);
+    }
+
+    #[test]
+    fn production_quic_packet_io_routes_versioned_packets_to_selected_channels() {
+        let mut io = ProductionQuicPacketIo::default();
+        let reliable = VersionedProtocolPacket::new(ProtocolMessage::JoinRequest {
+            client_id: LOCAL_CLIENT_ID,
+            session_token: None,
+        });
+        let unreliable = VersionedProtocolPacket::new(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(12),
+            payload: NetworkDeltaPayload::Noop,
+        });
+
+        PacketIo::send_packet(&mut io, reliable.clone()).expect("reliable packet encodes");
+        PacketIo::send_packet(&mut io, unreliable.clone()).expect("unreliable packet encodes");
+
+        assert_eq!(
+            io.queued_channel_count(ProductionPacketChannel::QuicBidirectionalStream),
+            1
+        );
+        assert_eq!(
+            io.queued_channel_count(ProductionPacketChannel::QuicDatagram),
+            1
+        );
+
+        let packets = PacketIo::receive_packets(&mut io).expect("packets decode");
+
+        assert_eq!(packets, vec![reliable, unreliable]);
+        assert!(io.status().packet_io_active());
     }
 
     #[test]
