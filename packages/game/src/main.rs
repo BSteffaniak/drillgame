@@ -10,6 +10,7 @@ mod game_state;
 mod input;
 mod input_mapping;
 pub mod multiplayer;
+mod online_cli;
 mod player;
 mod rendering;
 mod save;
@@ -20,5 +21,16 @@ mod terrain;
 use app::run;
 
 fn main() {
+    if let Some(action) = online_cli::parse_online_cli_action(std::env::args().skip(1)) {
+        match online_cli::run_online_cli_action(action) {
+            Ok(message) => println!("{message}"),
+            Err(error) => {
+                eprintln!("online CLI action failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     run();
 }
