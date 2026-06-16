@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     sync::Arc,
+    time::Instant,
 };
 
 use serde::{Deserialize, Serialize};
@@ -1062,6 +1063,57 @@ impl QuinnSessionTickSummary {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuinnSessionTickTelemetry {
+    pub summary: QuinnSessionTickSummary,
+    pub elapsed_micros: u128,
+}
+
+impl QuinnSessionTickTelemetry {
+    #[must_use]
+    pub const fn local_smoke_passed(&self) -> bool {
+        self.summary.advanced_authoritative_runtime() && self.elapsed_micros > 0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalOnlineSmokeSummary {
+    pub joined: bool,
+    pub tick: QuinnSessionTickTelemetry,
+    pub reconnected: bool,
+    pub descriptor_handoff_available: bool,
+}
+
+impl LocalOnlineSmokeSummary {
+    #[must_use]
+    pub const fn passed(&self) -> bool {
+        self.joined
+            && self.tick.local_smoke_passed()
+            && self.reconnected
+            && self.descriptor_handoff_available
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ProductionPlatformScope {
+    DirectConnectMvp,
+    NatTraversalDeferred,
+    MatchmakingDeferred,
+    PlatformInvitesDeferred,
+    HostMigrationDeferred,
+}
+
+#[must_use]
+pub const fn production_platform_scope() -> [ProductionPlatformScope; 5] {
+    [
+        ProductionPlatformScope::DirectConnectMvp,
+        ProductionPlatformScope::NatTraversalDeferred,
+        ProductionPlatformScope::MatchmakingDeferred,
+        ProductionPlatformScope::PlatformInvitesDeferred,
+        ProductionPlatformScope::HostMigrationDeferred,
+    ]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SocketDrivenCorrectionSummary {
     pub snapshot_replicated: bool,
@@ -1128,6 +1180,23 @@ pub struct QuinnOnlineSession {
 }
 
 impl QuinnOnlineSession {
+    /// Drive one high-level online tick and report local smoke telemetry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying tick driver fails.
+    pub async fn drive_tick_with_telemetry(
+        &mut self,
+        input: QuinnSessionTickInput,
+    ) -> Result<QuinnSessionTickTelemetry, QuinnOnlineSessionError> {
+        let started = Instant::now();
+        let summary = self.drive_tick(input).await?;
+        Ok(QuinnSessionTickTelemetry {
+            summary,
+            elapsed_micros: started.elapsed().as_micros(),
+        })
+    }
+
     /// Drive one high-level online tick through the real Quinn packet IO helpers.
     ///
     /// # Errors
@@ -1495,6 +1564,71 @@ impl QuinnOnlineSession {
     pub fn host_connected_client_count(&self) -> usize {
         self.host_runtime.connected_client_count()
     }
+}
+
+/// Run a localhost direct-connect smoke path over split Quinn entrypoints.
+///
+/// # Errors
+///
+/// Returns an error when join, tick driving, reconnect, or descriptor setup fails.
+pub async fn local_online_smoke_summary() -> Result<LocalOnlineSmokeSummary, QuinnOnlineSessionError>
+{
+    let client_config = default_local_client_runtime();
+    let player_id = client_config.player_id.unwrap_or(LOCAL_PLAYER_ID);
+    let mut session = connect_split_localhost_quinn_session(
+        HostRuntimeConfig::default(),
+        client_config.clone(),
+        SimulationTick::new(200),
+    )
+    .await?;
+    let telemetry = session
+        .drive_tick_with_telemetry(QuinnSessionTickInput {
+            command_packet: Some(CommandPacket {
+                client_id: client_config.client_id,
+                commands: vec![SequencedPlayerCommand {
+                    player_id,
+                    sequence: InputSequence::new(20),
+                    target_tick: SimulationTick::new(201),
+                    command: PlayerCommand::Interact,
+                }],
+            }),
+            snapshot: Some(NetworkWorldSnapshot {
+                tick: SimulationTick::new(202),
+                players: Vec::new(),
+            }),
+            delta: Some((SimulationTick::new(203), NetworkDeltaPayload::Noop)),
+            terrain_chunk_request: Some((20, 21, 1, 2)),
+            correction_probe: Some((
+                50.0,
+                50.0,
+                NetworkPlayerSnapshot {
+                    player_id,
+                    x: 4.0,
+                    y: 5.0,
+                    velocity_x: 0.0,
+                    velocity_y: 0.0,
+                    fuel: 30.0,
+                    hull: 40.0,
+                    credits: 7,
+                    cargo_used: 0,
+                    scanner_cooldown_seconds: 0.0,
+                },
+                SimulationTick::new(204),
+            )),
+        })
+        .await?;
+    session.reconnect_with_token(SessionToken::new(920)).await?;
+
+    let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())?;
+    let descriptor = host.connection_descriptor()?;
+    let descriptor_handoff_available = !descriptor.certificate_der.is_empty();
+
+    Ok(LocalOnlineSmokeSummary {
+        joined: session.host_connected_client_count() == 1 && session.joined_player_id().is_some(),
+        tick: telemetry,
+        reconnected: session.client_runtime.session_token == Some(SessionToken::new(920)),
+        descriptor_handoff_available,
+    })
 }
 
 /// Start split localhost Quinn host/client entrypoints and complete the join handshake through real packet IO.
@@ -3492,9 +3626,9 @@ mod tests {
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
-        per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
-        recovery_coverage_summary, reliable_join_exchange_messages,
+        local_online_smoke_summary, network_soak_summary, packet_io_recovery_summary,
+        packet_recovery_action, per_client_ui_policy, production_transport_selection,
+        pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
         reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
         selected_transport_backend, session_continuity_decision, session_shutdown_decision,
         terrain_recovery_decision, transport_fault_coverage_summary,
@@ -4236,6 +4370,28 @@ mod tests {
             session.client_runtime.latest_authoritative_tick,
             SimulationTick::new(124)
         );
+    }
+
+    #[tokio::test]
+    async fn local_online_smoke_summary_covers_join_tick_reconnect_and_descriptor_handoff() {
+        let summary = local_online_smoke_summary()
+            .await
+            .expect("local online smoke runs");
+
+        assert!(summary.passed());
+        assert!(summary.tick.elapsed_micros > 0);
+    }
+
+    #[test]
+    fn production_platform_scope_keeps_direct_connect_mvp_and_deferred_platform_features_separate()
+    {
+        let scope = super::production_platform_scope();
+
+        assert!(scope.contains(&super::ProductionPlatformScope::DirectConnectMvp));
+        assert!(scope.contains(&super::ProductionPlatformScope::NatTraversalDeferred));
+        assert!(scope.contains(&super::ProductionPlatformScope::MatchmakingDeferred));
+        assert!(scope.contains(&super::ProductionPlatformScope::PlatformInvitesDeferred));
+        assert!(scope.contains(&super::ProductionPlatformScope::HostMigrationDeferred));
     }
 
     #[test]
