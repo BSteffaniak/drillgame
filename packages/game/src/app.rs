@@ -301,7 +301,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
                 commands: Vec::new(),
             });
         local_multiplayer_probe.observe_live_remote_player_snapshots();
-        let _live_network_integration_plan = local_multiplayer_probe.live_network_integration_plan(
+        let _live_network_integration = local_multiplayer_probe.exercise_live_network_integration(
             crate::multiplayer::ClientId::new(3),
             crate::multiplayer::PlayerId::new(3),
             crate::multiplayer::SessionToken::new(7),
