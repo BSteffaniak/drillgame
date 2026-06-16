@@ -897,30 +897,6 @@ pub enum LobbySessionUxState {
     Closed,
 }
 
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "online UX readiness records independent deferred UI coverage points"
-)]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct OnlineSessionUxReadiness {
-    pub host_join_lobby_rendered: bool,
-    pub progress_states_rendered: bool,
-    pub save_ownership_explained: bool,
-    pub player_identity_explained: bool,
-    pub reconnect_explained: bool,
-}
-
-impl OnlineSessionUxReadiness {
-    #[must_use]
-    pub const fn ready_for_deferred_online_ui(&self) -> bool {
-        self.host_join_lobby_rendered
-            && self.progress_states_rendered
-            && self.save_ownership_explained
-            && self.player_identity_explained
-            && self.reconnect_explained
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConnectionLifecycleSummary {
     pub steps: Vec<ConnectionLifecycleStep>,
@@ -1290,17 +1266,6 @@ pub const fn transport_implementation_decision() -> TransportImplementationDecis
         selected_transport: Some(SelectedTransportBackend::InMemoryFaithfulAdapter),
         packet_io_integrated: true,
         in_memory_compatibility_active: true,
-    }
-}
-
-#[must_use]
-pub const fn online_session_ux_readiness() -> OnlineSessionUxReadiness {
-    OnlineSessionUxReadiness {
-        host_join_lobby_rendered: true,
-        progress_states_rendered: true,
-        save_ownership_explained: true,
-        player_identity_explained: true,
-        reconnect_explained: true,
     }
 }
 
@@ -1880,43 +1845,6 @@ pub const fn initial_transport_policy() -> TransportPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OnlineInfrastructureFeature {
-    NatTraversal,
-    MatchmakingServerBrowser,
-    PlatformInvites,
-    HostMigration,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OnlineInfrastructureDecision {
-    DeferredDesktopDirectConnect,
-}
-
-#[must_use]
-pub const fn online_infrastructure_decision(
-    _feature: OnlineInfrastructureFeature,
-) -> OnlineInfrastructureDecision {
-    OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-}
-
-#[must_use]
-pub const fn online_infrastructure_deferrals_complete() -> bool {
-    matches!(
-        online_infrastructure_decision(OnlineInfrastructureFeature::NatTraversal),
-        OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-    ) && matches!(
-        online_infrastructure_decision(OnlineInfrastructureFeature::MatchmakingServerBrowser),
-        OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-    ) && matches!(
-        online_infrastructure_decision(OnlineInfrastructureFeature::PlatformInvites),
-        OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-    ) && matches!(
-        online_infrastructure_decision(OnlineInfrastructureFeature::HostMigration),
-        OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisconnectReservationPolicy {
     ReserveForReconnect,
     ReleaseImmediately,
@@ -2204,21 +2132,19 @@ mod tests {
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
-        InMemoryTransportQueues, InputSequence, NetworkDeltaPayload, OnlineInfrastructureDecision,
-        OnlineInfrastructureFeature, PlayerCommand, PlayerId, ProductionPacketChannel,
-        ProtocolMessage, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
-        high_latency_simulation_summary, host_save_decision, initial_collision_policy,
-        initial_discovery_sharing_policy, initial_message_routing_policy,
+        InMemoryTransportQueues, InputSequence, NetworkDeltaPayload, PlayerCommand, PlayerId,
+        ProductionPacketChannel, ProtocolMessage, ReliabilityClass, SequencedPlayerCommand,
+        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
+        command_conflicts, connection_lifecycle_summary, default_local_client_runtime,
+        disconnect_reservation_policy, high_latency_simulation_summary, host_save_decision,
+        initial_collision_policy, initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
-        network_soak_summary, online_infrastructure_decision,
-        online_infrastructure_deferrals_complete, online_session_ux_readiness,
-        packet_io_recovery_summary, packet_recovery_action, per_client_ui_policy,
-        production_transport_selection, pump_in_memory_runtime_packets, recovery_coverage_summary,
-        reliable_join_exchange_messages, reliable_reconnect_exchange_messages,
-        scaffolded_edge_case_proof, selected_transport_backend, session_continuity_decision,
-        session_shutdown_decision, terrain_recovery_decision, transport_fault_coverage_summary,
+        network_soak_summary, packet_io_recovery_summary, packet_recovery_action,
+        per_client_ui_policy, production_transport_selection, pump_in_memory_runtime_packets,
+        recovery_coverage_summary, reliable_join_exchange_messages,
+        reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
+        selected_transport_backend, session_continuity_decision, session_shutdown_decision,
+        terrain_recovery_decision, transport_fault_coverage_summary,
         transport_implementation_decision, transport_integration_status,
         transport_reliability_mapping,
     };
@@ -2263,29 +2189,6 @@ mod tests {
             mapping.production_channel_for(ReliabilityClass::UnreliableSequenced),
             ProductionPacketChannel::QuicDatagram
         );
-    }
-
-    #[test]
-    fn online_infrastructure_features_are_explicitly_deferred() {
-        assert!(online_infrastructure_deferrals_complete());
-        for feature in [
-            OnlineInfrastructureFeature::NatTraversal,
-            OnlineInfrastructureFeature::MatchmakingServerBrowser,
-            OnlineInfrastructureFeature::PlatformInvites,
-            OnlineInfrastructureFeature::HostMigration,
-        ] {
-            assert_eq!(
-                online_infrastructure_decision(feature),
-                OnlineInfrastructureDecision::DeferredDesktopDirectConnect
-            );
-        }
-    }
-
-    #[test]
-    fn online_session_ux_readiness_covers_deferred_host_join_reconnect_states() {
-        let readiness = online_session_ux_readiness();
-
-        assert!(readiness.ready_for_deferred_online_ui());
     }
 
     #[test]

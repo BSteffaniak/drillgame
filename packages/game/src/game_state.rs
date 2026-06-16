@@ -5359,7 +5359,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_online_multiplayer_opens_deferred_online_modal() {
+    fn selecting_online_multiplayer_opens_online_modal() {
         let mut game = GameState::new();
         let options = GameState::title_options();
         game.selected_title_item = options
