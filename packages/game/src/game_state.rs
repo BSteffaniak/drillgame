@@ -380,6 +380,14 @@ impl RealOnlineSessionController {
         let client_id = self.session.client_runtime.config.client_id;
         let sequence = self.next_sequence;
         let tick = self.next_tick;
+        let snapshot_tick = crate::multiplayer::SimulationTick::new(tick + 1);
+        let live_snapshot = live_player_network_snapshot(game, player_id, snapshot_tick);
+        let live_player = live_snapshot
+            .players
+            .first()
+            .cloned()
+            .expect("live player snapshot contains local player");
+        let terrain_request = live_player_terrain_request(game);
         let telemetry = self
             .session
             .drive_tick_with_telemetry(crate::multiplayer::QuinnSessionTickInput {
@@ -389,33 +397,21 @@ impl RealOnlineSessionController {
                         player_id,
                         sequence: crate::multiplayer::InputSequence::new(sequence),
                         target_tick: crate::multiplayer::SimulationTick::new(tick),
-                        command: crate::multiplayer::PlayerCommand::UseScanner,
+                        command: live_player_command(&game.player),
                     }],
                 }),
-                snapshot: Some(crate::multiplayer::NetworkWorldSnapshot {
-                    tick: crate::multiplayer::SimulationTick::new(tick + 1),
-                    players: Vec::new(),
-                }),
+                snapshot: Some(live_snapshot),
                 delta: Some((
                     crate::multiplayer::SimulationTick::new(tick + 2),
-                    crate::multiplayer::NetworkDeltaPayload::Noop,
-                )),
-                terrain_chunk_request: Some((30, 31, 1, 2)),
-                correction_probe: Some((
-                    60.0,
-                    60.0,
-                    crate::multiplayer::NetworkPlayerSnapshot {
-                        player_id,
-                        x: 6.0,
-                        y: 7.0,
-                        velocity_x: 0.0,
-                        velocity_y: 0.0,
-                        fuel: 35.0,
-                        hull: 45.0,
-                        credits: 8,
-                        cargo_used: 0,
-                        scanner_cooldown_seconds: 0.0,
+                    crate::multiplayer::NetworkDeltaPayload::Players {
+                        players: vec![player_id],
                     },
+                )),
+                terrain_chunk_request: Some(terrain_request),
+                correction_probe: Some((
+                    live_player.x + 24.0,
+                    live_player.y,
+                    live_player,
                     crate::multiplayer::SimulationTick::new(tick + 3),
                 )),
             })
@@ -445,6 +441,45 @@ impl RealOnlineSessionController {
         ));
         Ok(())
     }
+}
+
+fn live_player_command(player: &Player) -> crate::multiplayer::PlayerCommand {
+    crate::multiplayer::PlayerCommand::Movement {
+        horizontal: player.velocity_x.clamp(-1.0, 1.0),
+        thrust: player.velocity_y < -0.01,
+        drill_down: player.velocity_y > 0.01,
+    }
+}
+
+fn live_player_network_snapshot(
+    game: &GameState,
+    player_id: crate::multiplayer::PlayerId,
+    tick: crate::multiplayer::SimulationTick,
+) -> crate::multiplayer::NetworkWorldSnapshot {
+    crate::multiplayer::NetworkWorldSnapshot {
+        tick,
+        players: vec![crate::multiplayer::NetworkPlayerSnapshot {
+            player_id,
+            x: game.player.x,
+            y: game.player.y,
+            velocity_x: game.player.velocity_x,
+            velocity_y: game.player.velocity_y,
+            fuel: game.player.fuel,
+            hull: game.player.hull,
+            credits: game.player.credits,
+            cargo_used: game.player.cargo.values().copied().sum(),
+            scanner_cooldown_seconds: 0.0,
+        }],
+    }
+}
+
+fn live_player_terrain_request(game: &GameState) -> (i32, i32, u64, u64) {
+    (
+        game.player.x.floor() as i32,
+        game.player.y.floor() as i32,
+        game.update_ticks,
+        u64::from(game.total_resources_refined),
+    )
 }
 
 #[allow(
@@ -5815,6 +5850,15 @@ mod tests {
     #[tokio::test]
     async fn real_online_session_controller_applies_join_tick_and_reconnect_ux() {
         let mut game = GameState::new();
+        game.player.x = 42.75;
+        game.player.y = 17.25;
+        game.player.velocity_x = 0.5;
+        game.player.velocity_y = -0.25;
+        game.player.fuel = 88.0;
+        game.player.hull = 77.0;
+        game.player.credits = 123;
+        game.update_ticks = 9;
+        game.total_resources_refined = 4;
         let mut controller = RealOnlineSessionController::connect_localhost(&mut game)
             .await
             .expect("real session connects");
@@ -5830,6 +5874,22 @@ mod tests {
             .await
             .expect("telemetry tick runs");
         assert!(telemetry.local_smoke_passed());
+        assert_eq!(
+            telemetry.summary.terrain_chunk_response,
+            Some(crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                chunk_x: 42,
+                chunk_y: 17,
+                revision: 4,
+            })
+        );
+        assert!(matches!(
+            telemetry
+                .summary
+                .correction_summary
+                .as_ref()
+                .map(|summary| (summary.correction_plan, summary.snap_applied)),
+            Some((crate::session::CorrectionPlan::Snap, true))
+        ));
         assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
         assert!(game.message.contains("Real Quinn tick"));
 
