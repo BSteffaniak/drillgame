@@ -1497,6 +1497,82 @@ impl QuinnOnlineSession {
     }
 }
 
+/// Start split localhost Quinn host/client entrypoints and complete the join handshake through real packet IO.
+///
+/// # Errors
+///
+/// Returns an error when endpoint binding, Quinn connect/accept, packet IO, or host join acceptance
+/// fails.
+pub async fn connect_split_localhost_quinn_session(
+    host_config: HostRuntimeConfig,
+    client_config: ClientRuntimeConfig,
+    snapshot_tick: SimulationTick,
+) -> Result<QuinnOnlineSession, QuinnOnlineSessionError> {
+    let host = QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())?;
+    let host_addr = host
+        .local_addr()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("host address"))?;
+    let server_name = host.server_name.clone();
+    let client = QuinnClientConnector::bind_with_server_certificate(
+        QuinnEndpointConfig::localhost_ephemeral(),
+        host.certificate.clone(),
+    )?;
+    let client_addr = client
+        .local_addr()
+        .ok_or(QuinnOnlineSessionError::MissingEndpoint("client address"))?;
+
+    let (client_io, host_io) = tokio::join!(
+        async move { client.connect_packet_io(host_addr, &server_name).await },
+        async { host.accept_packet_io().await }
+    );
+    let client_io = client_io?;
+    let host_io = host_io?;
+    let mut host_runtime = HostSessionRuntime::new(host_config, snapshot_tick);
+    let mut client_runtime = ClientSessionRuntime::new(client_config.clone());
+
+    client_io
+        .send_packet(VersionedProtocolPacket::new(
+            client_runtime.connect_request(),
+        ))
+        .await?;
+    let join_packet = host_io.receive_reliable_packet().await?;
+    let join_response = match decode_quinn_session_packet(join_packet)? {
+        ProtocolMessage::JoinRequest {
+            client_id,
+            session_token: None,
+        } => host_runtime.accept_client(
+            client_id,
+            client_config.player_id.unwrap_or(LOCAL_PLAYER_ID),
+            snapshot_tick,
+        ),
+        ProtocolMessage::ReconnectRequest {
+            client_id,
+            session_token,
+        }
+        | ProtocolMessage::JoinRequest {
+            client_id,
+            session_token: Some(session_token),
+        } => host_runtime.reconnect_client(client_id, session_token, snapshot_tick),
+        other => return Err(QuinnOnlineSessionError::UnexpectedMessage(other)),
+    }
+    .ok_or(QuinnOnlineSessionError::JoinRejected)?;
+
+    host_io
+        .send_packet(VersionedProtocolPacket::new(join_response))
+        .await?;
+    let accepted_packet = client_io.receive_reliable_packet().await?;
+    client_runtime.handle_message(decode_quinn_session_packet(accepted_packet)?);
+
+    Ok(QuinnOnlineSession {
+        host_runtime,
+        client_runtime,
+        host_io,
+        client_io,
+        host_addr,
+        client_addr,
+    })
+}
+
 /// Start a localhost Quinn host/client pair and complete the join handshake through real packet IO.
 ///
 /// # Errors
@@ -3373,8 +3449,8 @@ mod tests {
         QuinnEndpointConfig, QuinnHostListener, QuinnLocalEndpointPair, QuinnPacketIo,
         QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
         VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connect_localhost_quinn_session, connection_lifecycle_summary,
-        default_local_client_runtime, disconnect_reservation_policy,
+        connect_localhost_quinn_session, connect_split_localhost_quinn_session,
+        connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
@@ -4011,6 +4087,66 @@ mod tests {
         assert_eq!(
             session.client_runtime.latest_authoritative_tick,
             SimulationTick::new(104)
+        );
+    }
+
+    #[tokio::test]
+    async fn split_quinn_session_entrypoints_drive_join_and_tick_runtime() {
+        let client_config = default_local_client_runtime();
+        let player_id = client_config.player_id.expect("default player id");
+        let mut session = connect_split_localhost_quinn_session(
+            super::HostRuntimeConfig::default(),
+            client_config.clone(),
+            SimulationTick::new(120),
+        )
+        .await
+        .expect("split session connects");
+
+        assert_eq!(session.host_connected_client_count(), 1);
+        assert_eq!(session.joined_player_id(), Some(player_id));
+
+        let summary = session
+            .drive_tick(super::QuinnSessionTickInput {
+                command_packet: Some(CommandPacket {
+                    client_id: client_config.client_id,
+                    commands: vec![SequencedPlayerCommand {
+                        player_id,
+                        sequence: InputSequence::new(12),
+                        target_tick: SimulationTick::new(121),
+                        command: PlayerCommand::SellCargo,
+                    }],
+                }),
+                snapshot: Some(NetworkWorldSnapshot {
+                    tick: SimulationTick::new(122),
+                    players: Vec::new(),
+                }),
+                delta: Some((SimulationTick::new(123), NetworkDeltaPayload::Noop)),
+                terrain_chunk_request: Some((10, 11, 1, 2)),
+                correction_probe: Some((
+                    30.0,
+                    30.0,
+                    NetworkPlayerSnapshot {
+                        player_id,
+                        x: 2.0,
+                        y: 3.0,
+                        velocity_x: 0.0,
+                        velocity_y: 0.0,
+                        fuel: 20.0,
+                        hull: 30.0,
+                        credits: 5,
+                        cargo_used: 0,
+                        scanner_cooldown_seconds: 0.0,
+                    },
+                    SimulationTick::new(124),
+                )),
+            })
+            .await
+            .expect("split tick driver runs");
+
+        assert!(summary.advanced_authoritative_runtime());
+        assert_eq!(
+            session.client_runtime.latest_authoritative_tick,
+            SimulationTick::new(124)
         );
     }
 
