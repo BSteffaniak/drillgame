@@ -315,6 +315,30 @@ fn spawned_online_cli_emits_serialized_host_descriptor() {
 }
 
 #[test]
+fn spawned_online_cli_prints_lan_qa_checklist_markdown() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .arg("--online-lan-qa-checklist-md")
+        .arg("/tmp/drillgame-lan-host.json")
+        .arg("0.0.0.0:4242")
+        .arg("192.0.2.15:4242")
+        .arg("0.0.0.0:0")
+        .arg("60")
+        .output()
+        .expect("LAN QA checklist CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("LAN QA checklist stdout is utf8");
+    assert!(stdout.contains("Drillgame LAN Multiplayer QA Checklist"));
+    assert!(stdout.contains("Host firewall allows the advertised UDP port"));
+}
+
+#[test]
 fn spawned_online_cli_prints_lan_qa_plan_json() {
     let _lock = online_cli_test_lock();
     let binary = env!("CARGO_BIN_EXE_drillgame");

@@ -22,6 +22,13 @@ pub enum OnlineCliAction {
         client_bind_addr: SocketAddr,
         ticks: u32,
     },
+    LanQaChecklistMarkdown {
+        descriptor_path: PathBuf,
+        host_bind_addr: SocketAddr,
+        host_advertise_addr: SocketAddr,
+        client_bind_addr: SocketAddr,
+        ticks: u32,
+    },
     HostDescriptorJson,
     HostDescriptorFile {
         path: PathBuf,
@@ -93,6 +100,23 @@ where
                     return None;
                 }
                 return Some(OnlineCliAction::LanQaPlanJson {
+                    descriptor_path,
+                    host_bind_addr,
+                    host_advertise_addr,
+                    client_bind_addr,
+                    ticks,
+                });
+            }
+            "--online-lan-qa-checklist-md" => {
+                let descriptor_path = PathBuf::from(args.next()?.as_ref());
+                let host_bind_addr = args.next()?.as_ref().parse().ok()?;
+                let host_advertise_addr = args.next()?.as_ref().parse().ok()?;
+                let client_bind_addr = args.next()?.as_ref().parse().ok()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::LanQaChecklistMarkdown {
                     descriptor_path,
                     host_bind_addr,
                     host_advertise_addr,
@@ -250,8 +274,49 @@ pub fn build_lan_qa_command_plan(
 }
 
 #[must_use]
+pub fn build_lan_qa_checklist_markdown(plan: &LanQaCommandPlan) -> String {
+    format!(
+        "# Drillgame LAN Multiplayer QA Checklist\n\n\
+         ## Setup\n\n\
+         - Descriptor path: `{}`\n\
+         - Host bind address: `{}`\n\
+         - Host advertised address: `{}`\n\
+         - Client bind address: `{}`\n\
+         - Gameplay ticks: `{}`\n\n\
+         ## One-shot descriptor exchange\n\n\
+         Host machine:\n\n```bash\n{}\n```\n\n\
+         Client machine after host prints readiness:\n\n```bash\n{}\n```\n\n\
+         Evidence:\n\n\
+         - [ ] Host printed descriptor readiness.\n\
+         - [ ] Client completed command/snapshot/correction/reconnect exchange.\n\
+         - [ ] Host exited successfully after reconnect exchange.\n\n\
+         ## Multi-tick gameplay descriptor exchange\n\n\
+         Host machine:\n\n```bash\n{}\n```\n\n\
+         Client machine after host prints readiness:\n\n```bash\n{}\n```\n\n\
+         Evidence:\n\n\
+         - [ ] Host printed gameplay descriptor readiness.\n\
+         - [ ] Client completed the requested gameplay tick exchange.\n\
+         - [ ] Host reported `ran {} ticks`.\n\n\
+         ## Notes\n\n\
+         - [ ] Host firewall allows the advertised UDP port.\n\
+         - [ ] Both machines are on the intended LAN/VPN.\n\
+         - [ ] Attach stdout/stderr logs or screenshots to the release QA record.\n",
+        plan.descriptor_path.display(),
+        plan.host_bind_addr,
+        plan.host_advertise_addr,
+        plan.client_bind_addr,
+        plan.ticks,
+        plan.one_shot_host_command.join(" "),
+        plan.one_shot_join_command.join(" "),
+        plan.gameplay_host_command.join(" "),
+        plan.gameplay_join_command.join(" "),
+        plan.ticks,
+    )
+}
+
+#[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -273,6 +338,19 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
             client_bind_addr,
             ticks,
         } => run_lan_qa_plan_json_cli_action(
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+            ticks,
+        ),
+        OnlineCliAction::LanQaChecklistMarkdown {
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+            ticks,
+        } => run_lan_qa_checklist_markdown_cli_action(
             descriptor_path,
             host_bind_addr,
             host_advertise_addr,
@@ -385,6 +463,24 @@ fn run_lan_qa_plan_json_cli_action(
     )
     .ok_or_else(|| "LAN QA tick count must be greater than zero".to_owned())?;
     serde_json::to_string_pretty(&plan).map_err(format_debug_error)
+}
+
+fn run_lan_qa_checklist_markdown_cli_action(
+    descriptor_path: PathBuf,
+    host_bind_addr: SocketAddr,
+    host_advertise_addr: SocketAddr,
+    client_bind_addr: SocketAddr,
+    ticks: u32,
+) -> Result<String, String> {
+    let plan = build_lan_qa_command_plan(
+        descriptor_path,
+        host_bind_addr,
+        host_advertise_addr,
+        client_bind_addr,
+        ticks,
+    )
+    .ok_or_else(|| "LAN QA tick count must be greater than zero".to_owned())?;
+    Ok(build_lan_qa_checklist_markdown(&plan))
 }
 
 fn run_host_descriptor_json_cli_action() -> Result<String, String> {
@@ -991,6 +1087,23 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_online_cli_action([
+                "--online-lan-qa-checklist-md",
+                "/tmp/drillgame-host.md.json",
+                "0.0.0.0:4242",
+                "192.0.2.15:4242",
+                "0.0.0.0:0",
+                "60"
+            ]),
+            Some(OnlineCliAction::LanQaChecklistMarkdown {
+                descriptor_path: PathBuf::from("/tmp/drillgame-host.md.json"),
+                host_bind_addr: "0.0.0.0:4242".parse().expect("host bind parses"),
+                host_advertise_addr: "192.0.2.15:4242".parse().expect("host advertise parses"),
+                client_bind_addr: "0.0.0.0:0".parse().expect("client bind parses"),
+                ticks: 60,
+            })
+        );
+        assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-json"]),
             Some(OnlineCliAction::HostDescriptorJson)
         );
@@ -1130,6 +1243,10 @@ mod tests {
                 .contains(&"--online-join-gameplay-descriptor-file-on-addr".to_owned())
         );
         assert_eq!(plan.ticks, 60);
+        let checklist = build_lan_qa_checklist_markdown(&plan);
+        assert!(checklist.contains("Drillgame LAN Multiplayer QA Checklist"));
+        assert!(checklist.contains("--online-host-gameplay-descriptor-file-on-addr"));
+        assert!(checklist.contains("--online-join-gameplay-descriptor-file-on-addr"));
     }
 
     #[test]
