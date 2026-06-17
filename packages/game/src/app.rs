@@ -5,7 +5,10 @@ use crate::{
     game_state::{
         GameState, OnlineNetworkTaskRequest, OnlineNetworkTaskResult, RealOnlineSessionController,
     },
-    input::{read_input, read_primary_keyboard_input, read_secondary_keyboard_input},
+    input::{
+        combine_player_input, read_gamepad_input, read_input, read_primary_keyboard_input,
+        read_secondary_keyboard_input,
+    },
     input_mapping::{
         ai_commands, gamepad_commands, local_keyboard_commands, map_local_input, online_commands,
         replay_commands, split_screen_commands,
@@ -289,8 +292,11 @@ pub fn run() {
             crate::multiplayer::LOCAL_CLIENT_ID,
             &mapped_input.client_actions,
         );
-        let secondary_input =
-            (session.client_count() > 1).then(|| read_secondary_keyboard_input(&raylib));
+        let secondary_input = (session.client_count() > 1).then(|| {
+            let keyboard = read_secondary_keyboard_input(&raylib);
+            read_gamepad_input(&raylib, 0)
+                .map_or(keyboard, |gamepad| combine_player_input(keyboard, gamepad))
+        });
         for local_input in crate::input_mapping::local_split_screen_inputs(
             crate::multiplayer::LOCAL_CLIENT_ID,
             read_primary_keyboard_input(&raylib),
