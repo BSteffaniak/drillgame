@@ -6,7 +6,7 @@
     reason = "world coordinates intentionally cross integer tile and floating render spaces"
 )]
 
-use std::{fmt::Write as _, mem};
+use std::{fmt::Write as _, mem, net::SocketAddr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -567,6 +567,32 @@ const fn default_online_session_state() -> OnlineSessionUxState {
     OnlineSessionUxState::Idle
 }
 
+fn default_online_descriptor_path() -> PathBuf {
+    PathBuf::from("drillgame-online-host.json")
+}
+
+fn default_online_host_bind_addr() -> SocketAddr {
+    "0.0.0.0:4242"
+        .parse()
+        .expect("default online host bind address parses")
+}
+
+fn default_online_host_advertise_addr() -> SocketAddr {
+    "127.0.0.1:4242"
+        .parse()
+        .expect("default online host advertise address parses")
+}
+
+fn default_online_client_bind_addr() -> SocketAddr {
+    "0.0.0.0:0"
+        .parse()
+        .expect("default online client bind address parses")
+}
+
+const fn default_online_gameplay_ticks() -> u32 {
+    60
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ModalScreen {
     Fuel,
@@ -1080,6 +1106,16 @@ pub struct GameState {
     pub online_player_slot: Option<u8>,
     #[serde(default)]
     pub online_session_limitations: Vec<String>,
+    #[serde(default = "default_online_descriptor_path")]
+    pub online_descriptor_path: PathBuf,
+    #[serde(default = "default_online_host_bind_addr")]
+    pub online_host_bind_addr: SocketAddr,
+    #[serde(default = "default_online_host_advertise_addr")]
+    pub online_host_advertise_addr: SocketAddr,
+    #[serde(default = "default_online_client_bind_addr")]
+    pub online_client_bind_addr: SocketAddr,
+    #[serde(default = "default_online_gameplay_ticks")]
+    pub online_gameplay_ticks: u32,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
     #[serde(default)]
@@ -1309,6 +1345,11 @@ impl GameState {
             online_host_owns_save: false,
             online_player_slot: None,
             online_session_limitations: Self::online_session_limitations(),
+            online_descriptor_path: default_online_descriptor_path(),
+            online_host_bind_addr: default_online_host_bind_addr(),
+            online_host_advertise_addr: default_online_host_advertise_addr(),
+            online_client_bind_addr: default_online_client_bind_addr(),
+            online_gameplay_ticks: default_online_gameplay_ticks(),
             online_network_task_request: None,
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
@@ -1756,18 +1797,40 @@ impl GameState {
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
         lines.push(self.online_session_status_message.clone());
-        lines.extend(Self::online_direct_connect_setup_lines());
+        lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
     }
 
     #[must_use]
-    pub fn online_direct_connect_setup_lines() -> Vec<String> {
+    pub fn online_direct_connect_setup_lines(&self) -> Vec<String> {
+        let descriptor = self.online_descriptor_path.display();
         vec![
-            "Direct-connect host setup: choose a UDP port, then share the generated descriptor with the joining player.".to_owned(),
-            "Host CLI helper: drillgame --online-host-gameplay-descriptor-file-on-addr <descriptor.json> 0.0.0.0:<port> <host-lan-ip>:<port> <ticks>".to_owned(),
-            "Join CLI helper: drillgame --online-join-gameplay-descriptor-file-on-addr <descriptor.json> 0.0.0.0:0 <ticks>".to_owned(),
-            "QA helper: drillgame --online-lan-qa-checklist-md <descriptor.json> 0.0.0.0:<port> <host-lan-ip>:<port> 0.0.0.0:0 <ticks>".to_owned(),
+            format!(
+                "Direct-connect config: descriptor `{descriptor}`, host bind {}, advertise {}, client bind {}, ticks {}.",
+                self.online_host_bind_addr,
+                self.online_host_advertise_addr,
+                self.online_client_bind_addr,
+                self.online_gameplay_ticks
+            ),
+            "Host flow: share the generated descriptor with the joining player after hosting starts.".to_owned(),
+            format!(
+                "Host CLI helper: drillgame --online-host-gameplay-descriptor-file-on-addr {descriptor} {} {} {}",
+                self.online_host_bind_addr,
+                self.online_host_advertise_addr,
+                self.online_gameplay_ticks
+            ),
+            format!(
+                "Join CLI helper: drillgame --online-join-gameplay-descriptor-file-on-addr {descriptor} {} {}",
+                self.online_client_bind_addr, self.online_gameplay_ticks
+            ),
+            format!(
+                "QA helper: drillgame --online-lan-qa-checklist-md {descriptor} {} {} {} {}",
+                self.online_host_bind_addr,
+                self.online_host_advertise_addr,
+                self.online_client_bind_addr,
+                self.online_gameplay_ticks
+            ),
         ]
     }
 
@@ -6136,7 +6199,7 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
-                .any(|line| line.contains("Direct-connect host setup"))
+                .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
             pending_lines
@@ -6166,6 +6229,35 @@ mod tests {
             connected_lines
                 .iter()
                 .any(|line| line.contains("Host owns save: false"))
+        );
+    }
+
+    #[test]
+    fn online_direct_connect_setup_lines_use_game_state_configuration() {
+        let mut game = GameState::new();
+        game.online_descriptor_path = PathBuf::from("/tmp/custom-host.json");
+        game.online_host_bind_addr = "0.0.0.0:5252".parse().expect("host bind parses");
+        game.online_host_advertise_addr = "192.0.2.25:5252".parse().expect("host advertise parses");
+        game.online_client_bind_addr = "0.0.0.0:0".parse().expect("client bind parses");
+        game.online_gameplay_ticks = 90;
+
+        let lines = game.online_direct_connect_setup_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/tmp/custom-host.json"))
+        );
+        assert!(lines.iter().any(|line| line.contains("192.0.2.25:5252")));
+        assert!(lines.iter().any(|line| line.contains("90")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("online-host-gameplay-descriptor-file-on-addr"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("online-join-gameplay-descriptor-file-on-addr"))
         );
     }
 
