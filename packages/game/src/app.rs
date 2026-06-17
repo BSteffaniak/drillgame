@@ -36,10 +36,15 @@ enum OnlineTaskCompletion {
     Reconnected(Result<RealOnlineSessionController, String>),
 }
 
+enum OnlineDescriptorAcceptCompletion {
+    Accepted(Result<RealOnlineSessionController, String>),
+}
+
 struct OnlineTaskDispatcher {
     runtime: Option<tokio::runtime::Runtime>,
     controller: Option<RealOnlineSessionController>,
     pending_completion: Option<mpsc::Receiver<OnlineTaskCompletion>>,
+    pending_descriptor_accept: Option<mpsc::Receiver<OnlineDescriptorAcceptCompletion>>,
     tick_accumulator_seconds: f32,
     live_tick_sequence: u32,
 }
@@ -54,8 +59,32 @@ impl OnlineTaskDispatcher {
                 .ok(),
             controller: None,
             pending_completion: None,
+            pending_descriptor_accept: None,
             tick_accumulator_seconds: 0.0,
             live_tick_sequence: 0,
+        }
+    }
+
+    fn poll_descriptor_accept(&mut self, game: &mut GameState) {
+        let Some(receiver) = &self.pending_descriptor_accept else {
+            return;
+        };
+        let Ok(completion) = receiver.try_recv() else {
+            return;
+        };
+        self.pending_descriptor_accept = None;
+        match completion {
+            OnlineDescriptorAcceptCompletion::Accepted(Ok(controller)) => {
+                self.controller = Some(controller);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
+                    crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(
+                        Some(1),
+                    ),
+                ));
+            }
+            OnlineDescriptorAcceptCompletion::Accepted(Err(error)) => {
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(error));
+            }
         }
     }
 
@@ -74,8 +103,8 @@ impl OnlineTaskDispatcher {
                         Some(1),
                         &game.online_descriptor_path,
                     );
-                self.controller = Some(controller);
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(snapshot));
+                self.spawn_descriptor_accept(controller);
             }
             OnlineTaskCompletion::JoinedDescriptor(Ok((controller, path))) => {
                 self.controller = Some(controller);
@@ -105,6 +134,24 @@ impl OnlineTaskDispatcher {
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(error));
             }
         }
+    }
+
+    fn spawn_descriptor_accept(&mut self, mut controller: RealOnlineSessionController) {
+        let Some(runtime) = &self.runtime else {
+            self.controller = Some(controller);
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_descriptor_accept = Some(receiver);
+        runtime.spawn(async move {
+            let mut game = GameState::new();
+            let result = controller
+                .accept_descriptor_client(&mut game)
+                .await
+                .map(|()| controller)
+                .map_err(|error| format!("{error:?}"));
+            let _ignored = sender.send(OnlineDescriptorAcceptCompletion::Accepted(result));
+        });
     }
 
     fn spawn_host_descriptor(
@@ -178,6 +225,7 @@ impl OnlineTaskDispatcher {
     }
 
     fn drain_and_execute(&mut self, game: &mut GameState) {
+        self.poll_descriptor_accept(game);
         self.poll_completions(game);
         let Some(request) = game.take_online_network_task_request() else {
             return;
@@ -221,6 +269,7 @@ impl OnlineTaskDispatcher {
             OnlineNetworkTaskRequest::Shutdown => {
                 self.controller = None;
                 self.pending_completion = None;
+                self.pending_descriptor_accept = None;
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
             }
         }
@@ -854,13 +903,77 @@ mod tests {
                 .expect("descriptor file written")
                 .contains("127.0.0.1:4242")
         );
+        assert!(dispatcher.controller.is_none());
+        assert!(dispatcher.pending_descriptor_accept.is_some());
+        let _ignored = std::fs::remove_file(unique_path);
+    }
+
+    #[test]
+    fn online_task_dispatcher_accepts_descriptor_join_after_host_publish() {
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-ui-host-join-descriptor-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&unique_path);
+        let mut host_game = GameState::new();
+        host_game.online_descriptor_path = unique_path.clone();
+        host_game.online_host_bind_addr = "127.0.0.1:0".parse().expect("bind addr parses");
+        host_game.online_host_advertise_addr =
+            "127.0.0.1:0".parse().expect("advertise addr parses");
+        let mut host_dispatcher = OnlineTaskDispatcher::new();
+        host_game.online_network_task_request =
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                path: unique_path.clone(),
+            });
+        host_dispatcher.drain_and_execute(&mut host_game);
+        wait_for_online_completion(&mut host_dispatcher, &mut host_game);
         assert_eq!(
-            dispatcher
+            host_game.online_session_state,
+            OnlineSessionUxState::Hosting
+        );
+        assert!(host_dispatcher.pending_descriptor_accept.is_some());
+
+        let mut join_game = GameState::new();
+        let mut join_dispatcher = OnlineTaskDispatcher::new();
+        join_game.online_network_task_request =
+            Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+                path: unique_path.clone(),
+            });
+        join_dispatcher.drain_and_execute(&mut join_game);
+        for _ in 0..100 {
+            host_dispatcher.drain_and_execute(&mut host_game);
+            join_dispatcher.drain_and_execute(&mut join_game);
+            if host_dispatcher.pending_descriptor_accept.is_none()
+                && join_dispatcher.pending_completion.is_none()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert_eq!(
+            host_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+        assert_eq!(
+            join_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+        assert_eq!(
+            host_dispatcher
                 .controller
                 .as_ref()
-                .expect("pending host controller")
+                .expect("accepted host controller")
                 .mode_label(),
-            "descriptor-host-pending"
+            "descriptor-host-accepted"
+        );
+        assert_eq!(
+            join_dispatcher
+                .controller
+                .as_ref()
+                .expect("joined client controller")
+                .mode_label(),
+            "descriptor-client-connected"
         );
         let _ignored = std::fs::remove_file(unique_path);
     }
