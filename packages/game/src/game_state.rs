@@ -567,6 +567,10 @@ const fn default_online_session_state() -> OnlineSessionUxState {
     OnlineSessionUxState::Idle
 }
 
+fn default_online_player_name() -> String {
+    "Player".to_owned()
+}
+
 fn default_online_descriptor_path() -> PathBuf {
     PathBuf::from("drillgame-online-host.json")
 }
@@ -1106,6 +1110,14 @@ pub struct GameState {
     pub online_player_slot: Option<u8>,
     #[serde(default)]
     pub online_session_limitations: Vec<String>,
+    #[serde(default = "default_online_player_name")]
+    pub online_player_name: String,
+    #[serde(default)]
+    pub online_remote_player_name: Option<String>,
+    #[serde(default)]
+    pub online_remote_player_ready: bool,
+    #[serde(default)]
+    pub online_remote_player_connected: bool,
     #[serde(default = "default_online_descriptor_path")]
     pub online_descriptor_path: PathBuf,
     #[serde(default = "default_online_host_bind_addr")]
@@ -1347,6 +1359,10 @@ impl GameState {
             online_host_owns_save: false,
             online_player_slot: None,
             online_session_limitations: Self::online_session_limitations(),
+            online_player_name: default_online_player_name(),
+            online_remote_player_name: None,
+            online_remote_player_ready: false,
+            online_remote_player_connected: false,
             online_descriptor_path: default_online_descriptor_path(),
             online_host_bind_addr: default_online_host_bind_addr(),
             online_host_advertise_addr: default_online_host_advertise_addr(),
@@ -1741,6 +1757,8 @@ impl GameState {
                 self.online_session_state = OnlineSessionUxState::Error;
                 self.online_network_task_request = None;
                 self.online_local_ready = false;
+                self.online_remote_player_ready = false;
+                self.online_remote_player_connected = false;
                 self.online_session_status_message = Self::online_failure_status_message(&message);
                 self.message = self.online_session_status_message.clone();
             }
@@ -1748,6 +1766,8 @@ impl GameState {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = None;
                 self.online_local_ready = false;
+                self.online_remote_player_ready = false;
+                self.online_remote_player_connected = false;
                 self.modal = None;
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
@@ -1764,6 +1784,10 @@ impl GameState {
         self.online_session_state = snapshot.state;
         self.online_host_owns_save = snapshot.host_owns_save;
         self.online_player_slot = snapshot.player_slot;
+        self.online_remote_player_connected = snapshot.state == OnlineSessionUxState::Connected;
+        if self.online_remote_player_connected && self.online_remote_player_name.is_none() {
+            self.online_remote_player_name = Some("Remote miner".to_owned());
+        }
         self.online_session_status_message = snapshot.status_message;
         self.message = self.online_session_status_message.clone();
     }
@@ -1852,9 +1876,53 @@ impl GameState {
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
         lines.push(self.online_session_status_message.clone());
+        lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
+    }
+
+    #[must_use]
+    pub fn online_lobby_participant_lines(&self) -> Vec<String> {
+        let local_slot = self
+            .online_player_slot
+            .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
+        let remote_name = self
+            .online_remote_player_name
+            .as_deref()
+            .unwrap_or("Waiting for player");
+        let remote_slot = match self.online_player_slot {
+            Some(1) => "2",
+            Some(2) => "1",
+            _ => "unassigned",
+        };
+        vec![
+            format!(
+                "Local player: {} | slot {} | role {} | ready {} | connected {}",
+                self.online_player_name,
+                local_slot,
+                self.online_role_label(),
+                if self.online_local_ready { "yes" } else { "no" },
+                if self.online_session_state == OnlineSessionUxState::Connected {
+                    "yes"
+                } else {
+                    "pending"
+                }
+            ),
+            format!(
+                "Remote player: {remote_name} | slot {remote_slot} | ready {} | connected {}",
+                if self.online_remote_player_ready {
+                    "yes"
+                } else {
+                    "unknown"
+                },
+                if self.online_remote_player_connected {
+                    "yes"
+                } else {
+                    "pending"
+                }
+            ),
+        ]
     }
 
     #[must_use]
@@ -1912,6 +1980,8 @@ impl GameState {
         self.online_network_task_request = None;
         if self.online_session_state != OnlineSessionUxState::Connected {
             self.online_local_ready = false;
+            self.online_remote_player_ready = false;
+            self.online_remote_player_connected = false;
         }
         self.online_session_state = match self.online_session_state {
             OnlineSessionUxState::Connected => OnlineSessionUxState::Connected,
@@ -1933,6 +2003,9 @@ impl GameState {
                 self.online_host_owns_save = true;
                 self.online_player_slot = Some(1);
                 self.online_local_ready = false;
+                self.online_remote_player_name = None;
+                self.online_remote_player_ready = false;
+                self.online_remote_player_connected = false;
                 "Hosting lobby locally. Host owns save/session authority."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -1943,6 +2016,9 @@ impl GameState {
                 self.online_host_owns_save = false;
                 self.online_player_slot = Some(2);
                 self.online_local_ready = false;
+                self.online_remote_player_name = Some("Host miner".to_owned());
+                self.online_remote_player_ready = false;
+                self.online_remote_player_connected = false;
                 "Joining by direct address. Waiting for host assignment."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -6303,6 +6379,16 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
+                .any(|line| line.contains("Local player: Player"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Remote player: Host miner"))
+        );
+        assert!(
+            pending_lines
+                .iter()
                 .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
@@ -6524,6 +6610,27 @@ mod tests {
         assert_eq!(game.online_session_state, OnlineSessionUxState::Idle);
         assert_eq!(game.modal, None);
         assert!(game.message.contains("no network task queued"));
+    }
+
+    #[test]
+    fn online_lobby_participant_lines_report_names_slots_ready_and_connection() {
+        let mut game = GameState::new();
+        game.online_player_name = "Ada".to_owned();
+        game.online_remote_player_name = Some("Bert".to_owned());
+        game.online_player_slot = Some(1);
+        game.online_host_owns_save = true;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.online_session_state = OnlineSessionUxState::Connected;
+
+        let lines = game.online_lobby_participant_lines();
+        assert!(lines.iter().any(|line| line.contains("Ada")));
+        assert!(lines.iter().any(|line| line.contains("slot 1")));
+        assert!(lines.iter().any(|line| line.contains("role host")));
+        assert!(lines.iter().any(|line| line.contains("Bert")));
+        assert!(lines.iter().any(|line| line.contains("slot 2")));
+        assert!(lines.iter().any(|line| line.contains("connected yes")));
     }
 
     #[test]

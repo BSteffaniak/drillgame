@@ -806,7 +806,7 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     for (index, line) in game
         .online_multiplayer_status_lines()
         .iter()
-        .take(9)
+        .take(11)
         .enumerate()
     {
         let color = if index == 3 {
