@@ -40,6 +40,22 @@ pub struct GameRenderer {
     terrain: TerrainRenderer,
 }
 
+fn centered_camera_for_player(
+    game: &GameState,
+    player_x: f32,
+    player_y: f32,
+    viewport: crate::session::Viewport,
+) -> Vector2 {
+    let screen_width = viewport.width.max(1) as f32;
+    let screen_height = viewport.height.max(1) as f32;
+    let max_x = game.terrain.width() as f32 * crate::game_state::TILE_SIZE - screen_width;
+    let max_y = game.terrain.height() as f32 * crate::game_state::TILE_SIZE - screen_height;
+    Vector2::new(
+        (player_x - screen_width / 2.0).clamp(0.0, max_x.max(0.0)),
+        (player_y - screen_height / 2.0).clamp(-12.0 * crate::game_state::TILE_SIZE, max_y),
+    )
+}
+
 impl GameRenderer {
     #[must_use]
     #[allow(
@@ -165,7 +181,7 @@ impl GameRenderer {
                 }),
             camera: plan.local_player.map_or_else(
                 || world::render_camera(game),
-                |player| Vector2::new(player.x, player.y),
+                |player| centered_camera_for_player(game, player.x, player.y, plan.viewport),
             ),
             viewport: plan.viewport,
             run_mode: game.run_mode,

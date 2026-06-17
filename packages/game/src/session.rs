@@ -220,6 +220,9 @@ impl FrameRateInvarianceProof {
 const AUTHORITATIVE_HORIZONTAL_SPEED: f32 = 140.0;
 const AUTHORITATIVE_THRUST_SPEED: f32 = 120.0;
 const AUTHORITATIVE_GRAVITY: f32 = 160.0;
+const AUTHORITATIVE_PLAYER_RADIUS: f32 = 10.5;
+const AUTHORITATIVE_SKY_FLIGHT_HEIGHT_TILES: f32 = 12.0;
+const AUTHORITATIVE_MIN_PLAYER_Y: f32 = -AUTHORITATIVE_SKY_FLIGHT_HEIGHT_TILES * TILE_SIZE;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AuthoritativeMovementStep {
@@ -1555,8 +1558,24 @@ impl WorldState {
         } else {
             player.velocity_y = AUTHORITATIVE_GRAVITY.mul_add(delta_seconds, player.velocity_y);
         }
-        player.x = player.velocity_x.mul_add(delta_seconds, player.x);
-        player.y = player.velocity_y.mul_add(delta_seconds, player.y);
+
+        let delta_x = player.velocity_x * delta_seconds;
+        let delta_y = player.velocity_y * delta_seconds;
+        let next_x = player.x + delta_x;
+        let next_y = player.y + delta_y;
+
+        if authoritative_player_collides(&self.terrain, next_x, player.y) {
+            player.velocity_x = 0.0;
+        } else {
+            player.x = clamp_authoritative_player_x(&self.terrain, next_x);
+        }
+
+        if authoritative_player_collides(&self.terrain, player.x, next_y) {
+            player.velocity_y = 0.0;
+        } else {
+            player.y = clamp_authoritative_player_y(&self.terrain, next_y);
+        }
+
         Some(AuthoritativeMovementStep {
             player_id,
             x: player.x,
@@ -2462,6 +2481,64 @@ impl RenderFramePlan {
             })
             .collect()
     }
+}
+
+fn authoritative_player_collides(terrain: &Terrain, x: f32, y: f32) -> bool {
+    authoritative_collision_points(x, y)
+        .iter()
+        .any(|position| terrain.is_solid_at(*position))
+}
+
+fn authoritative_collision_points(x: f32, y: f32) -> [TilePosition; 4] {
+    [
+        authoritative_point_to_tile(
+            x - AUTHORITATIVE_PLAYER_RADIUS,
+            y - AUTHORITATIVE_PLAYER_RADIUS,
+        ),
+        authoritative_point_to_tile(
+            x + AUTHORITATIVE_PLAYER_RADIUS,
+            y - AUTHORITATIVE_PLAYER_RADIUS,
+        ),
+        authoritative_point_to_tile(
+            x - AUTHORITATIVE_PLAYER_RADIUS,
+            y + AUTHORITATIVE_PLAYER_RADIUS,
+        ),
+        authoritative_point_to_tile(
+            x + AUTHORITATIVE_PLAYER_RADIUS,
+            y + AUTHORITATIVE_PLAYER_RADIUS,
+        ),
+    ]
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "authoritative collision bridges floating player coordinates to integer terrain tiles"
+)]
+fn authoritative_point_to_tile(x: f32, y: f32) -> TilePosition {
+    TilePosition {
+        x: (x / TILE_SIZE).floor() as i32,
+        y: (y / TILE_SIZE).floor() as i32,
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "authoritative movement clamps integer terrain bounds in floating player space"
+)]
+fn clamp_authoritative_player_x(terrain: &Terrain, x: f32) -> f32 {
+    x.clamp(0.0, (terrain.width() as f32 - 1.0) * TILE_SIZE)
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "authoritative movement clamps integer terrain bounds in floating player space"
+)]
+fn clamp_authoritative_player_y(terrain: &Terrain, y: f32) -> f32 {
+    y.clamp(
+        AUTHORITATIVE_MIN_PLAYER_Y,
+        (terrain.height() as f32 - 1.0) * TILE_SIZE,
+    )
 }
 
 impl ClientView {
@@ -5612,6 +5689,25 @@ mod tests {
         assert_eq!(client.modal, Some(ModalScreen::Help));
         assert_eq!(client.local_message, "Client-local toast");
         assert_eq!(client.local_audio_cues.len(), 1);
+    }
+
+    #[test]
+    fn authoritative_movement_stops_at_solid_ground() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.x = 20.0 * TILE_SIZE;
+        game.player.y = 4.0 * TILE_SIZE;
+        game.player.velocity_y = 0.0;
+        let mut world = WorldState::from_legacy_game(&game);
+
+        for _ in 0..80 {
+            let _step =
+                world.step_authoritative_movement(LOCAL_PLAYER_ID, 0.0, false, FIXED_DELTA_SECONDS);
+        }
+
+        let player = world.player(LOCAL_PLAYER_ID).expect("player exists");
+        assert!(player.y < 5.0 * TILE_SIZE);
+        assert!(player.velocity_y.abs() < f32::EPSILON);
     }
 
     #[test]
