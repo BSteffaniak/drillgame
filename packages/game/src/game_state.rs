@@ -2787,6 +2787,23 @@ impl GameState {
         ]
     }
 
+    fn request_online_gameplay_start(&mut self) {
+        if self.online_session_state != OnlineSessionUxState::Connected {
+            "Start blocked: connect host and client before entering online gameplay."
+                .clone_into(&mut self.online_session_status_message);
+        } else if !self.online_local_ready {
+            "Start blocked: toggle local ready before entering online gameplay."
+                .clone_into(&mut self.online_session_status_message);
+        } else if !self.online_remote_player_connected {
+            "Start blocked: waiting for the remote player connection."
+                .clone_into(&mut self.online_session_status_message);
+        } else {
+            "Starting online gameplay from connected direct-connect session."
+                .clone_into(&mut self.online_session_status_message);
+            self.enter_online_playing_session();
+        }
+    }
+
     fn close_online_multiplayer_menu(&mut self) {
         self.online_network_task_request = None;
         if self.online_session_state != OnlineSessionUxState::Connected {
@@ -2960,6 +2977,9 @@ impl GameState {
                     "Local player not ready."
                 }
                 .clone_into(&mut self.online_session_status_message);
+            }
+            11 => {
+                self.request_online_gameplay_start();
             }
             _ => {
                 self.close_online_multiplayer_menu();
@@ -3771,7 +3791,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 11,
+                ModalScreen::OnlineMultiplayer => 12,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -7899,6 +7919,61 @@ mod tests {
         );
         assert_eq!(game.online_gameplay_ticks, 300);
         assert!(game.message.contains("Gameplay smoke tick count selected"));
+    }
+
+    #[test]
+    fn online_multiplayer_start_gameplay_gates_on_connection_and_ready() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 11;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.modal.is_some());
+        assert!(game.message.contains("Start blocked: connect"));
+
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot: Some(1),
+            status_message: "Descriptor client accepted.".to_owned(),
+        });
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 11;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.modal.is_some());
+        assert!(game.message.contains("toggle local ready"));
+
+        game.selected_menu_item = 10;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        game.selected_menu_item = 11;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert_eq!(game.modal, None);
+        assert!(game.message.contains("Starting online gameplay"));
     }
 
     #[test]

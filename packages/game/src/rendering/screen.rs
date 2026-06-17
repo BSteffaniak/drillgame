@@ -798,6 +798,7 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Show error",
         "Shutdown session",
         "Toggle ready",
+        "Start online gameplay",
         "Back",
     ];
     draw_options_list(
