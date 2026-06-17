@@ -3117,6 +3117,20 @@ impl GameState {
                 self.online_last_terrain_status.as_str()
             }
         ));
+        lines.push(format!(
+            "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
+            self.rig_part_inventory.len(),
+            self.equipped_rig_parts.len(),
+            self.cosmetic_skins.len(),
+            self.challenge_badges.len()
+        ));
+        lines.push(format!(
+            "Online menu boundary: run mode={:?} modal={}",
+            self.run_mode,
+            self.modal
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |modal| format!("{modal:?}"))
+        ));
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
@@ -7904,6 +7918,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn online_multiplayer_status_lines_report_real_lifecycle_state() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
@@ -7972,6 +7987,16 @@ mod tests {
             pending_lines
                 .iter()
                 .any(|line| line.contains("Online terrain sync"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online inventory/upgrades"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online menu boundary"))
         );
         assert!(
             pending_lines
