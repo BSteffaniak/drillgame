@@ -881,7 +881,7 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_state::OnlineSessionUxState;
+    use crate::game_state::{OnlineSessionUxState, RunMode};
 
     fn wait_for_online_completion(dispatcher: &mut OnlineTaskDispatcher, game: &mut GameState) {
         for _ in 0..50 {
@@ -1034,6 +1034,7 @@ mod tests {
         );
         let mut host_session = GameSession::new();
         host_session.game_mut().online_local_ready = true;
+        host_session.game_mut().run_mode = RunMode::Playing;
         host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
         assert!(
             host_session
@@ -1060,6 +1061,7 @@ mod tests {
                 .contains("received")
         );
         assert!(join_session.game().online_remote_player_ready);
+        assert_eq!(join_session.game().run_mode, RunMode::Playing);
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,
             "descriptor-client-connected"

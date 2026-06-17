@@ -576,6 +576,12 @@ impl RealOnlineSessionController {
             .await?;
         self.descriptor_host_try_receive_ready_state(game, Duration::from_millis(1))
             .await?;
+        if game.run_mode == RunMode::Playing
+            && game.online_local_ready
+            && game.online_remote_player_ready
+        {
+            self.descriptor_host_send_start_session().await?;
+        }
         let snapshot_replicated = if let Some(snapshot) = input.snapshot {
             self.descriptor_host_send_snapshot(snapshot).await?;
             true
@@ -697,6 +703,26 @@ impl RealOnlineSessionController {
         }
     }
 
+    pub async fn descriptor_host_send_start_session(
+        &mut self,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::StartSession {
+                    authoritative_tick: crate::multiplayer::SimulationTick::new(0),
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
     pub async fn descriptor_client_send_ready_state(
         &mut self,
         ready: bool,
@@ -783,7 +809,7 @@ impl RealOnlineSessionController {
             );
         };
         let mut received_count = 0;
-        for _ in 0..2 {
+        for _ in 0..3 {
             match tokio::time::timeout(timeout, packet_io.receive_reliable_packet()).await {
                 Ok(Ok(packet)) => {
                     let message = packet.decode_supported().map_err(|error| {
@@ -796,6 +822,16 @@ impl RealOnlineSessionController {
                         crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
                             game.online_remote_player_ready = ready;
                             game.online_remote_player_connected = true;
+                        }
+                        crate::multiplayer::ProtocolMessage::StartSession { .. } => {
+                            game.online_remote_player_connected = true;
+                            game.online_remote_player_ready = true;
+                            game.online_session_state = OnlineSessionUxState::Connected;
+                            "Host started online gameplay session."
+                                .clone_into(&mut game.online_session_status_message);
+                            game.run_mode = RunMode::Playing;
+                            game.modal = None;
+                            game.message.clone_from(&game.online_session_status_message);
                         }
                         other => client_runtime.handle_message(other),
                     }
@@ -2924,6 +2960,9 @@ impl GameState {
                 .clone_into(&mut self.online_session_status_message);
         } else if !self.online_remote_player_connected {
             "Start blocked: waiting for the remote player connection."
+                .clone_into(&mut self.online_session_status_message);
+        } else if !self.online_remote_player_ready {
+            "Start blocked: waiting for the remote player to toggle ready."
                 .clone_into(&mut self.online_session_status_message);
         } else {
             "Starting online gameplay from connected direct-connect session."
@@ -8096,6 +8135,18 @@ mod tests {
             },
             0.0,
         );
+        game.selected_menu_item = 11;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.modal.is_some());
+        assert!(game.message.contains("remote player to toggle ready"));
+
+        game.online_remote_player_ready = true;
         game.selected_menu_item = 11;
         game.update(
             PlayerInput {
