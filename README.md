@@ -55,16 +55,22 @@ Press `E` at a surface building to walk inside its room. Move with `A`/`D`, use 
 
 ## Multiplayer Status
 
-Multiplayer support is under active rearchitecture. Current code has an in-memory faithful transport adapter, host/client runtime scaffolding, player-scoped authoritative command slices, split-screen render planning, prediction/reconciliation coverage, deterministic replay coverage, and save/session metadata tests.
+Multiplayer support now has validated local split-screen and direct-connect online foundations:
 
-This is not yet a production online release. Known limitations:
+- local split-screen routes player 1 keyboard input plus player 2 secondary-keyboard/gamepad input through authoritative command producers
+- host/client runtime paths own player-scoped authoritative command slices, prediction/reconciliation, deterministic replay, and save/session metadata
+- the selected production transport is Quinn/QUIC, with real localhost socket IO for direct-connect host/join/reconnect, commands, snapshots, deltas, terrain chunks, and correction coverage
+- Online Multiplayer UI state reflects real queued host/join/reconnect tasks, Quinn lifecycle outcomes, slot assignment, and host-owned save authority
+- executable online checks are available:
+  - `cargo run --bin drillgame -- --online-local-smoke`
+  - `cargo run --bin drillgame -- --online-latency-loss-playtest`
+  - `cargo run --bin drillgame -- --online-production-acceptance`
 
-- local split-screen still needs manual live-window QA and screenshots/video notes
-- second-player input binding metadata exists, but full multi-controller/keyboard polling needs productization
-- production online transport is planned as a QUIC-style backend, but no socket dependency is integrated yet
-- NAT traversal, matchmaking/server browser, platform invites, and host migration are explicitly deferred
+This is still a desktop-first/direct-connect online MVP, not a backend/platform multiplayer service. Known limitations:
+
+- real multi-machine QA outside localhost/scripted degraded-network coverage still needs to be performed before a production online release
+- NAT traversal, matchmaking/server browser, platform invites, and host migration are deliberately deferred outside the direct-connect MVP
 - legacy `GameState` still participates in live gameplay as compatibility glue while authoritative systems are extracted
-- prediction/reconciliation polish is covered by tests and plans, but still needs live high-ping playtesting
 
 ## Saves and Settings
 
