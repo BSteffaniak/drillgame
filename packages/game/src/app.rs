@@ -30,6 +30,7 @@ const TARGET_FPS: u32 = 60;
 const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
 
 enum OnlineTaskCompletion {
+    Hosted(Result<RealOnlineSessionController, String>),
     Connected(Result<RealOnlineSessionController, String>),
     Reconnected(Result<RealOnlineSessionController, String>),
 }
@@ -66,6 +67,15 @@ impl OnlineTaskDispatcher {
         };
         self.pending_completion = None;
         match completion {
+            OnlineTaskCompletion::Hosted(Ok(controller)) => {
+                let snapshot =
+                    crate::game_state::RealOnlineSessionUxSnapshot::from_host_descriptor_ready(
+                        Some(1),
+                        &game.online_descriptor_path,
+                    );
+                self.controller = Some(controller);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(snapshot));
+            }
             OnlineTaskCompletion::Connected(Ok(controller)) => {
                 self.controller = Some(controller);
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
@@ -78,11 +88,34 @@ impl OnlineTaskDispatcher {
                     crate::game_state::RealOnlineSessionUxSnapshot::from_reconnect(Some(1)),
                 ));
             }
-            OnlineTaskCompletion::Connected(Err(error))
+            OnlineTaskCompletion::Hosted(Err(error))
+            | OnlineTaskCompletion::Connected(Err(error))
             | OnlineTaskCompletion::Reconnected(Err(error)) => {
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(error));
             }
         }
+    }
+
+    fn spawn_host_descriptor(
+        &mut self,
+        path: std::path::PathBuf,
+        bind_addr: std::net::SocketAddr,
+        advertise_addr: std::net::SocketAddr,
+    ) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_completion = Some(receiver);
+        runtime.spawn(async move {
+            let mut game = GameState::new();
+            game.online_host_bind_addr = bind_addr;
+            game.online_host_advertise_addr = advertise_addr;
+            let result =
+                RealOnlineSessionController::host_descriptor_file_pending(&mut game, &path)
+                    .map_err(|error| format!("{error:?}"));
+            let _ignored = sender.send(OnlineTaskCompletion::Hosted(result));
+        });
     }
 
     fn spawn_connect(&mut self) {
@@ -137,10 +170,14 @@ impl OnlineTaskDispatcher {
             }
             OnlineNetworkTaskRequest::HostDescriptorFile { path } => {
                 game.online_session_status_message = format!(
-                    "Host descriptor path selected: {}. Starting local Quinn controller while descriptor hosting is productized.",
+                    "Preparing host descriptor at {}; waiting for remote miner after descriptor is written.",
                     path.display()
                 );
-                self.spawn_connect();
+                self.spawn_host_descriptor(
+                    path,
+                    game.online_host_bind_addr,
+                    game.online_host_advertise_addr,
+                );
             }
             OnlineNetworkTaskRequest::JoinDescriptorFile { path } => {
                 match std::fs::read_to_string(&path)
@@ -757,9 +794,7 @@ mod tests {
         let mut session = GameSession::new();
         let mut dispatcher = OnlineTaskDispatcher::new();
 
-        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
-            path: game.online_descriptor_path.clone(),
-        });
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
         dispatcher.drain_and_execute(&mut game);
         wait_for_online_completion(&mut dispatcher, &mut game);
         dispatcher.drive_scheduled_tick(&mut session, FIXED_DELTA_SECONDS);
@@ -779,6 +814,44 @@ mod tests {
         dispatcher.drain_and_execute(&mut game);
 
         assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+    }
+
+    #[test]
+    fn online_task_dispatcher_hosts_descriptor_file_without_entering_gameplay() {
+        let mut game = GameState::new();
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-ui-host-descriptor-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&unique_path);
+        game.online_descriptor_path = unique_path.clone();
+        game.online_host_bind_addr = "127.0.0.1:0".parse().expect("bind addr parses");
+        game.online_host_advertise_addr = "127.0.0.1:4242".parse().expect("advertise addr parses");
+        let mut dispatcher = OnlineTaskDispatcher::new();
+
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            path: unique_path.clone(),
+        });
+        dispatcher.drain_and_execute(&mut game);
+        wait_for_online_completion(&mut dispatcher, &mut game);
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Hosting);
+        assert_eq!(game.run_mode, crate::game_state::RunMode::Title);
+        assert!(game.message.contains("Host descriptor ready"));
+        assert!(
+            std::fs::read_to_string(&unique_path)
+                .expect("descriptor file written")
+                .contains("127.0.0.1:4242")
+        );
+        assert_eq!(
+            dispatcher
+                .controller
+                .as_ref()
+                .expect("pending host controller")
+                .mode_label(),
+            "descriptor-host-pending"
+        );
+        let _ignored = std::fs::remove_file(unique_path);
     }
 
     #[test]
