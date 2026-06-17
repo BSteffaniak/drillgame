@@ -1062,6 +1062,12 @@ mod tests {
                 .online_last_replication_status
                 .contains("host sent")
         );
+        assert!(
+            host_session
+                .game()
+                .online_last_terrain_status
+                .contains("answered chunk")
+        );
         assert_eq!(
             host_session.game().online_diagnostic_controller_mode,
             "descriptor-host-accepted"
@@ -1096,6 +1102,12 @@ mod tests {
                 .game()
                 .online_last_replicated_player_status
                 .contains("tick")
+        );
+        assert!(
+            join_session
+                .game()
+                .online_last_terrain_status
+                .contains("received chunk")
         );
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,

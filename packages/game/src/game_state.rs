@@ -643,6 +643,24 @@ impl RealOnlineSessionController {
         } else {
             false
         };
+        let terrain_requested = if let Some((chunk_x, chunk_y, known_revision, _desired_revision)) =
+            input.terrain_chunk_request
+        {
+            self.descriptor_client_send_terrain_chunk_request_unacknowledged(
+                chunk_x,
+                chunk_y,
+                known_revision,
+            )
+            .await?;
+            if game.online_last_terrain_status.is_empty() {
+                game.apply_online_terrain_status(format!(
+                    "requested chunk ({chunk_x},{chunk_y}) rev>{known_revision}"
+                ));
+            }
+            true
+        } else {
+            false
+        };
         self.descriptor_client_send_player_identity(&game.online_player_name)
             .await?;
         self.descriptor_client_send_ready_state(game.online_local_ready)
@@ -653,7 +671,7 @@ impl RealOnlineSessionController {
                 host_owns_save: false,
                 player_slot: self.player_slot,
                 status_message: format!(
-                    "Descriptor client sent live command tick; received {received_messages} pending host messages."
+                    "Descriptor client sent live command tick; terrain_request={terrain_requested}; received {received_messages} pending host messages."
                 ),
             });
         }
@@ -738,6 +756,26 @@ impl RealOnlineSessionController {
                 crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
                     game.online_remote_player_ready = ready;
                     game.online_remote_player_connected = true;
+                    received_any = true;
+                }
+                crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                    chunk_x,
+                    chunk_y,
+                    known_revision,
+                } => {
+                    let revision = known_revision.saturating_add(1);
+                    host_io
+                        .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                            crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                                chunk_x,
+                                chunk_y,
+                                revision,
+                            },
+                        ))
+                        .await?;
+                    game.apply_online_terrain_status(format!(
+                        "answered chunk ({chunk_x},{chunk_y}) rev {revision}"
+                    ));
                     received_any = true;
                 }
                 other => {
@@ -929,6 +967,22 @@ impl RealOnlineSessionController {
                             game.modal = None;
                             game.message.clone_from(&game.online_session_status_message);
                         }
+                        crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                            chunk_x,
+                            chunk_y,
+                            revision,
+                        } => {
+                            game.apply_online_terrain_status(format!(
+                                "received chunk ({chunk_x},{chunk_y}) rev {revision}"
+                            ));
+                            client_runtime.handle_message(
+                                crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                                    chunk_x,
+                                    chunk_y,
+                                    revision,
+                                },
+                            );
+                        }
                         crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
                             game.online_remote_player_connected = false;
                             game.online_remote_player_ready = false;
@@ -1031,6 +1085,32 @@ impl RealOnlineSessionController {
             Err(_) => {}
         }
         Ok(received_count)
+    }
+
+    pub async fn descriptor_client_send_terrain_chunk_request_unacknowledged(
+        &mut self,
+        chunk_x: i32,
+        chunk_y: i32,
+        known_revision: u64,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected { packet_io, .. } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                    chunk_x,
+                    chunk_y,
+                    known_revision,
+                },
+            ))
+            .await?;
+        Ok(())
     }
 
     pub async fn descriptor_client_send_command_packet_unacknowledged(
@@ -2203,6 +2283,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_replicated_player_status: String,
     #[serde(default)]
+    pub online_last_terrain_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -2446,6 +2528,7 @@ impl GameState {
             online_diagnostic_last_tick: String::new(),
             online_last_replication_status: String::new(),
             online_last_replicated_player_status: String::new(),
+            online_last_terrain_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -2893,11 +2976,16 @@ impl GameState {
         self.online_last_replicated_player_status = status.into();
     }
 
+    pub fn apply_online_terrain_status(&mut self, status: impl Into<String>) {
+        self.online_last_terrain_status = status.into();
+    }
+
     pub fn clear_online_diagnostics(&mut self) {
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
         self.online_last_replication_status.clear();
         self.online_last_replicated_player_status.clear();
+        self.online_last_terrain_status.clear();
     }
 
     #[must_use]
@@ -3019,6 +3107,14 @@ impl GameState {
                 "none"
             } else {
                 self.online_last_replicated_player_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online terrain sync: {}",
+            if self.online_last_terrain_status.is_empty() {
+                "none"
+            } else {
+                self.online_last_terrain_status.as_str()
             }
         ));
         lines.push(self.online_save_policy_line());
@@ -7871,6 +7967,11 @@ mod tests {
             pending_lines
                 .iter()
                 .any(|line| line.contains("Online replicated player"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online terrain sync"))
         );
         assert!(
             pending_lines
