@@ -790,6 +790,7 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Host descriptor session",
         "Join descriptor session",
         "Reconnect",
+        "Cycle descriptor path",
         "Simulate timeout",
         "Show error",
         "Shutdown session",

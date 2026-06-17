@@ -577,6 +577,14 @@ fn default_online_descriptor_path() -> PathBuf {
     PathBuf::from("drillgame-online-host.json")
 }
 
+fn alternate_online_descriptor_path() -> PathBuf {
+    PathBuf::from("/tmp/drillgame-online-host.json")
+}
+
+fn join_online_descriptor_path() -> PathBuf {
+    PathBuf::from("/tmp/drillgame-online-join.json")
+}
+
 fn default_online_host_bind_addr() -> SocketAddr {
     "0.0.0.0:4242"
         .parse()
@@ -2007,6 +2015,21 @@ impl GameState {
         self.message = self.online_session_status_message.clone();
     }
 
+    fn cycle_online_descriptor_path(&mut self) {
+        self.online_descriptor_path =
+            if self.online_descriptor_path == default_online_descriptor_path() {
+                alternate_online_descriptor_path()
+            } else if self.online_descriptor_path == alternate_online_descriptor_path() {
+                join_online_descriptor_path()
+            } else {
+                default_online_descriptor_path()
+            };
+        self.online_session_status_message = format!(
+            "Descriptor path selected: {}",
+            self.online_descriptor_path.display()
+        );
+    }
+
     fn confirm_online_multiplayer(&mut self) {
         match self.selected_menu_item {
             0 => {
@@ -2051,16 +2074,19 @@ impl GameState {
                     .clone_into(&mut self.online_session_status_message);
             }
             3 => {
+                self.cycle_online_descriptor_path();
+            }
+            4 => {
                 self.online_session_state = OnlineSessionUxState::Timeout;
                 "Connection timed out; retry or go back."
                     .clone_into(&mut self.online_session_status_message);
             }
-            4 => {
+            5 => {
                 self.online_session_state = OnlineSessionUxState::Error;
                 "Connection error: direct Quinn connection task failed."
                     .clone_into(&mut self.online_session_status_message);
             }
-            5 => {
+            6 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 self.online_local_ready = false;
@@ -2068,7 +2094,7 @@ impl GameState {
                 "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
             }
-            6 => {
+            7 => {
                 self.online_local_ready = !self.online_local_ready;
                 if self.online_local_ready {
                     "Local player ready for online session start."
@@ -6572,7 +6598,7 @@ mod tests {
             OnlineSessionUxState::Reconnecting
         );
 
-        game.selected_menu_item = 3;
+        game.selected_menu_item = 4;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -6582,7 +6608,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Timeout);
 
-        game.selected_menu_item = 4;
+        game.selected_menu_item = 5;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -6592,7 +6618,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
 
-        game.selected_menu_item = 5;
+        game.selected_menu_item = 6;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -6674,7 +6700,7 @@ mod tests {
         let mut game = GameState::new();
         game.save_dirty = true;
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 5;
+        game.selected_menu_item = 6;
 
         game.update(
             PlayerInput {
@@ -6718,10 +6744,51 @@ mod tests {
     }
 
     #[test]
+    fn online_multiplayer_cycles_descriptor_path_for_host_join_ui() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 3;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.online_descriptor_path,
+            alternate_online_descriptor_path()
+        );
+        assert!(game.message.contains("Descriptor path selected"));
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_descriptor_path, join_online_descriptor_path());
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.online_descriptor_path,
+            default_online_descriptor_path()
+        );
+    }
+
+    #[test]
     fn online_multiplayer_toggle_ready_updates_lobby_status() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 7;
 
         game.update(
             PlayerInput {
