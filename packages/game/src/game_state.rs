@@ -1718,6 +1718,24 @@ impl GameState {
         self.message = self.online_session_status_message.clone();
     }
 
+    const fn can_write_local_save(&self) -> bool {
+        !matches!(
+            self.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+        ) || self.online_host_owns_save
+    }
+
+    fn block_joined_client_save(&mut self) -> bool {
+        if self.can_write_local_save() {
+            return false;
+        }
+        "Save blocked: host owns the online session save.".clone_into(&mut self.message);
+        true
+    }
+
     #[must_use]
     pub fn online_session_limitations() -> Vec<String> {
         vec![
@@ -1860,15 +1878,20 @@ impl GameState {
                 }
                 if input.confirm {
                     match self.selected_menu_item {
-                        0 => match save_game(self) {
-                            Ok(()) => {
-                                self.save_dirty = false;
-                                self.request_exit = true;
+                        0 => {
+                            if self.block_joined_client_save() {
+                                return true;
                             }
-                            Err(error) => {
-                                self.message = format!("Save before exit failed: {error}");
+                            match save_game(self) {
+                                Ok(()) => {
+                                    self.save_dirty = false;
+                                    self.request_exit = true;
+                                }
+                                Err(error) => {
+                                    self.message = format!("Save before exit failed: {error}");
+                                }
                             }
-                        },
+                        }
                         1 => self.request_exit = true,
                         _ => self.modal = None,
                     }
@@ -2269,6 +2292,9 @@ impl GameState {
 
     fn handle_save_load(&mut self, input: PlayerInput) {
         if input.save {
+            if self.block_joined_client_save() {
+                return;
+            }
             match save_game(self) {
                 Ok(()) => {
                     self.save_dirty = false;
@@ -2644,6 +2670,10 @@ impl GameState {
     }
 
     fn save_slot(&mut self, slot: usize) {
+        if self.block_joined_client_save() {
+            self.modal = Some(ModalScreen::SaveSlots);
+            return;
+        }
         match save_game_slot(self, slot) {
             Ok(()) => {
                 self.save_dirty = false;
@@ -5845,6 +5875,55 @@ mod tests {
         assert_eq!(game.run_mode, RunMode::Playing);
         assert!(game.take_local_multiplayer_request());
         assert!(game.message.contains("Player 2"));
+    }
+
+    #[test]
+    fn joined_online_client_cannot_write_local_saves() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Joined host-owned online session.".to_owned(),
+        });
+
+        assert!(!game.can_write_local_save());
+
+        game.save_dirty = true;
+        game.handle_save_load(PlayerInput {
+            save: true,
+            ..PlayerInput::default()
+        });
+        assert!(game.save_dirty);
+        assert!(game.message.contains("host owns"));
+
+        game.save_slot(0);
+        assert!(matches!(game.modal, Some(ModalScreen::SaveSlots)));
+        assert!(game.message.contains("host owns"));
+
+        game.modal = Some(ModalScreen::UnsavedExitConfirm);
+        game.selected_menu_item = 0;
+        game.request_exit = false;
+        assert!(game.handle_exit_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert!(!game.request_exit);
+        assert!(game.message.contains("host owns"));
+    }
+
+    #[test]
+    fn host_owned_online_session_can_write_local_save_policy() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot: Some(1),
+            status_message: "Hosting online session.".to_owned(),
+        });
+
+        assert!(game.can_write_local_save());
+        assert!(!game.block_joined_client_save());
     }
 
     #[tokio::test]
