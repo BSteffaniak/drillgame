@@ -1741,6 +1741,8 @@ impl GameState {
             }
             OnlineNetworkTaskResult::Shutdown => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
+                self.online_network_task_request = None;
+                self.modal = None;
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
                 self.message = self.online_session_status_message.clone();
@@ -1856,6 +1858,19 @@ impl GameState {
         ]
     }
 
+    fn close_online_multiplayer_menu(&mut self) {
+        self.online_network_task_request = None;
+        self.online_session_state = match self.online_session_state {
+            OnlineSessionUxState::Connected => OnlineSessionUxState::Connected,
+            OnlineSessionUxState::Shutdown => OnlineSessionUxState::Shutdown,
+            _ => OnlineSessionUxState::Idle,
+        };
+        self.modal = None;
+        "Closed online multiplayer menu; no network task queued."
+            .clone_into(&mut self.online_session_status_message);
+        self.message = self.online_session_status_message.clone();
+    }
+
     fn confirm_online_multiplayer(&mut self) {
         match self.selected_menu_item {
             0 => {
@@ -1896,14 +1911,14 @@ impl GameState {
             5 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
-                "Online session shutdown acknowledged."
+                self.modal = None;
+                "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
             }
             _ => {
-                self.online_session_state = OnlineSessionUxState::Idle;
-                self.modal = None;
-                "Closed online multiplayer menu."
-                    .clone_into(&mut self.online_session_status_message);
+                self.close_online_multiplayer_menu();
+                self.sound_cues.push(SoundCue::Ui);
+                return;
             }
         }
         self.message = self.online_session_status_message.clone();
@@ -2675,7 +2690,11 @@ impl GameState {
         };
 
         if input.cancel {
-            self.modal = None;
+            if modal == ModalScreen::OnlineMultiplayer {
+                self.close_online_multiplayer_menu();
+            } else {
+                self.modal = None;
+            }
             return true;
         }
 
@@ -6368,8 +6387,45 @@ mod tests {
             0.0,
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+        assert_eq!(
+            game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::Shutdown)
+        );
+        assert_eq!(game.modal, None);
         assert!(game.message.contains("shutdown"));
         assert!(!game.online_session_limitations.is_empty());
+    }
+
+    #[test]
+    fn online_multiplayer_cancel_clears_queued_network_request() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 0;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::HostDirectConnect)
+        );
+
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.update(
+            PlayerInput {
+                cancel: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+
+        assert_eq!(game.online_network_task_request, None);
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Idle);
+        assert_eq!(game.modal, None);
+        assert!(game.message.contains("no network task queued"));
     }
 
     #[test]
