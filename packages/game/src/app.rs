@@ -1056,6 +1056,12 @@ mod tests {
             host_session.game().online_remote_player_name.as_deref(),
             Some("Client QA")
         );
+        assert!(
+            host_session
+                .game()
+                .online_last_replication_status
+                .contains("host sent")
+        );
         assert_eq!(
             host_session.game().online_diagnostic_controller_mode,
             "descriptor-host-accepted"
@@ -1079,6 +1085,12 @@ mod tests {
             Some("Host QA")
         );
         assert_eq!(join_session.game().run_mode, RunMode::Playing);
+        assert!(
+            join_session
+                .game()
+                .online_last_replication_status
+                .contains("received")
+        );
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,
             "descriptor-client-connected"

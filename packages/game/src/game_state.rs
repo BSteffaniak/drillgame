@@ -596,6 +596,11 @@ impl RealOnlineSessionController {
         } else {
             false
         };
+        if delta_replicated {
+            game.apply_online_replication_status("host sent world delta");
+        } else if snapshot_replicated {
+            game.apply_online_replication_status("host sent snapshot keyframe");
+        }
         let summary = crate::multiplayer::QuinnSessionTickSummary {
             command_summary,
             snapshot_replicated,
@@ -877,6 +882,7 @@ impl RealOnlineSessionController {
         Ok(Some(summary))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn descriptor_client_try_receive_pending_messages(
         &mut self,
         game: &mut GameState,
@@ -962,9 +968,24 @@ impl RealOnlineSessionController {
                     ))
                 })?;
                 match message {
-                    crate::multiplayer::ProtocolMessage::SnapshotKeyframe { .. }
-                    | crate::multiplayer::ProtocolMessage::WorldDelta { .. } => {
-                        client_runtime.handle_message(message);
+                    crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
+                        let tick = snapshot.tick.get();
+                        client_runtime.handle_message(
+                            crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot },
+                        );
+                        game.apply_online_replication_status(format!(
+                            "snapshot keyframe tick {tick} received"
+                        ));
+                        received_count += 1;
+                    }
+                    crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload } => {
+                        let tick_value = tick.get();
+                        client_runtime.handle_message(
+                            crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload },
+                        );
+                        game.apply_online_replication_status(format!(
+                            "world delta tick {tick_value} received"
+                        ));
                         received_count += 1;
                     }
                     other => {
@@ -2146,6 +2167,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_diagnostic_last_tick: String,
     #[serde(default)]
+    pub online_last_replication_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -2387,6 +2410,7 @@ impl GameState {
             online_gameplay_ticks: default_online_gameplay_ticks(),
             online_diagnostic_controller_mode: String::new(),
             online_diagnostic_last_tick: String::new(),
+            online_last_replication_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -2826,9 +2850,14 @@ impl GameState {
         self.online_diagnostic_last_tick = last_tick.into();
     }
 
+    pub fn apply_online_replication_status(&mut self, status: impl Into<String>) {
+        self.online_last_replication_status = status.into();
+    }
+
     pub fn clear_online_diagnostics(&mut self) {
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
+        self.online_last_replication_status.clear();
     }
 
     #[must_use]
@@ -2934,6 +2963,14 @@ impl GameState {
                 "none"
             } else {
                 self.online_diagnostic_last_tick.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online replication: {}",
+            if self.online_last_replication_status.is_empty() {
+                "none"
+            } else {
+                self.online_last_replication_status.as_str()
             }
         ));
         lines.push(self.online_save_policy_line());
@@ -7776,6 +7813,11 @@ mod tests {
             pending_lines
                 .iter()
                 .any(|line| line.contains("Online diagnostics"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online replication"))
         );
         assert!(
             pending_lines
