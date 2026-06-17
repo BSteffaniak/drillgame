@@ -743,6 +743,8 @@ mod tests {
             session.game().message
         );
         assert!(session.game().message.contains("Real Quinn tick"));
+        assert_eq!(game.run_mode, crate::game_state::RunMode::Playing);
+        assert_eq!(game.modal, None);
         assert!(game.online_network_task_request.is_none());
 
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);

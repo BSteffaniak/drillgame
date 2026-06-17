@@ -1732,6 +1732,7 @@ impl GameState {
             OnlineNetworkTaskResult::Connected(snapshot)
             | OnlineNetworkTaskResult::Reconnected(snapshot) => {
                 self.apply_real_online_session_ux(snapshot);
+                self.enter_online_playing_session();
             }
             OnlineNetworkTaskResult::Failed(message) => {
                 self.online_session_state = OnlineSessionUxState::Error;
@@ -1775,6 +1776,19 @@ impl GameState {
         }
         "Save blocked: host owns the online session save.".clone_into(&mut self.message);
         true
+    }
+
+    fn enter_online_playing_session(&mut self) {
+        self.run_mode = RunMode::Playing;
+        self.modal = None;
+        self.selected_menu_item = 0;
+        self.local_multiplayer_requested = false;
+        self.local_multiplayer_active = false;
+        if self.online_session_status_message.is_empty() {
+            "Online session connected; entering gameplay."
+                .clone_into(&mut self.online_session_status_message);
+        }
+        self.message = self.online_session_status_message.clone();
     }
 
     #[must_use]
@@ -6269,6 +6283,9 @@ mod tests {
             RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
         ));
         assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert_eq!(game.modal, None);
+        assert_eq!(game.selected_menu_item, 0);
 
         game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
             "direct Quinn connection task failed".to_owned(),
