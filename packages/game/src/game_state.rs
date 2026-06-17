@@ -1737,9 +1737,33 @@ impl GameState {
     }
 
     #[must_use]
+    pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(5);
+        lines.push(
+            "Transport: Quinn/QUIC real socket IO enabled for direct-connect host/join/reconnect."
+                .to_owned(),
+        );
+        if let Some(request) = self.online_network_task_request {
+            lines.push(format!("Pending network task: {request:?}"));
+        } else {
+            lines.push("Pending network task: none".to_owned());
+        }
+        lines.push(format!(
+            "State: {:?} | Host owns save: {} | Slot: {}",
+            self.online_session_state,
+            self.online_host_owns_save,
+            self.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        ));
+        lines.push(self.online_session_status_message.clone());
+        lines.extend(Self::online_session_limitations());
+        lines
+    }
+
+    #[must_use]
     pub fn online_session_limitations() -> Vec<String> {
         vec![
-            "Real localhost Quinn socket IO is available for host/join/tick/reconnect coverage; desktop UI ownership is still being wired.".to_owned(),
+            "Real localhost Quinn socket IO is available for host/join/tick/reconnect coverage; direct-address game-window UX remains desktop-first.".to_owned(),
             "NAT traversal, matchmaking, invites, and host migration are intentionally unsupported.".to_owned(),
         ]
     }
@@ -6076,6 +6100,51 @@ mod tests {
         assert_eq!(
             game.take_online_network_task_request(),
             Some(OnlineNetworkTaskRequest::ReconnectDirectConnect)
+        );
+    }
+
+    #[test]
+    fn online_multiplayer_status_lines_report_real_lifecycle_state() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 1;
+        game.confirm_online_multiplayer();
+
+        let pending_lines = game.online_multiplayer_status_lines();
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Quinn/QUIC real socket IO enabled"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("JoinDirectConnect"))
+        );
+        assert!(pending_lines.iter().any(|line| line.contains("Joining")));
+        assert!(
+            !pending_lines
+                .iter()
+                .any(|line| line.contains("not enabled yet"))
+        );
+
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Connected through real localhost Quinn as player 2.".to_owned(),
+        });
+        let connected_lines = game.online_multiplayer_status_lines();
+        assert!(
+            connected_lines
+                .iter()
+                .any(|line| line.contains("Connected"))
+        );
+        assert!(connected_lines.iter().any(|line| line.contains("Slot: 2")));
+        assert!(
+            connected_lines
+                .iter()
+                .any(|line| line.contains("Host owns save: false"))
         );
     }
 

@@ -802,42 +802,26 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         225,
         &options.map(str::to_owned),
     );
-    draw.draw_text(
-        "Production networking is selected as QUIC, but socket IO is not enabled yet.",
-        330,
-        430,
-        18,
-        Color::LIGHTGRAY,
-    );
-    draw.draw_text(
-        "States covered: connecting, timeout, error, disconnect, reconnect, shutdown.",
-        330,
-        460,
-        18,
-        Color::LIGHTGRAY,
-    );
-    draw.draw_text(
-        &format!(
-            "State: {:?} | Host owns save: {} | Slot: {}",
-            game.online_session_state,
-            game.online_host_owns_save,
-            game.online_player_slot
-                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
-        ),
-        330,
-        520,
-        18,
-        Color::LIGHTGRAY,
-    );
-    draw.draw_text(
-        &game.online_session_status_message,
-        330,
-        550,
-        18,
-        Color::YELLOW,
-    );
-    if let Some(limit) = game.online_session_limitations.first() {
-        draw.draw_text(limit, 330, 580, 16, Color::GRAY);
+    for (index, line) in game
+        .online_multiplayer_status_lines()
+        .iter()
+        .take(5)
+        .enumerate()
+    {
+        let color = if index == 3 {
+            Color::YELLOW
+        } else if index >= 4 {
+            Color::GRAY
+        } else {
+            Color::LIGHTGRAY
+        };
+        draw.draw_text(
+            line,
+            330,
+            430 + i32::try_from(index).unwrap_or(i32::MAX) * 30,
+            if index >= 4 { 16 } else { 18 },
+            color,
+        );
     }
 }
 
