@@ -315,6 +315,30 @@ fn spawned_online_cli_emits_serialized_host_descriptor() {
 }
 
 #[test]
+fn spawned_online_cli_prints_lan_qa_plan_json() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .arg("--online-lan-qa-plan-json")
+        .arg("/tmp/drillgame-lan-host.json")
+        .arg("0.0.0.0:4242")
+        .arg("192.0.2.15:4242")
+        .arg("0.0.0.0:0")
+        .arg("60")
+        .output()
+        .expect("LAN QA plan CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("LAN QA plan stdout is utf8");
+    assert!(stdout.contains("online-host-gameplay-descriptor-file-on-addr"));
+    assert!(stdout.contains("online-join-gameplay-descriptor-file-on-addr"));
+}
+
+#[test]
 fn spawned_online_cli_prints_help() {
     let _lock = online_cli_test_lock();
     let binary = env!("CARGO_BIN_EXE_drillgame");

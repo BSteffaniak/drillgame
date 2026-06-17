@@ -15,6 +15,13 @@ pub enum OnlineCliAction {
     LatencyLossPlaytest,
     ProductionAcceptance,
     ProductionAcceptanceJson,
+    LanQaPlanJson {
+        descriptor_path: PathBuf,
+        host_bind_addr: SocketAddr,
+        host_advertise_addr: SocketAddr,
+        client_bind_addr: SocketAddr,
+        ticks: u32,
+    },
     HostDescriptorJson,
     HostDescriptorFile {
         path: PathBuf,
@@ -53,6 +60,10 @@ pub enum OnlineCliAction {
 }
 
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "online CLI parser is a flat flag table kept contiguous for discoverability"
+)]
 pub fn parse_online_cli_action<I, S>(args: I) -> Option<OnlineCliAction>
 where
     I: IntoIterator<Item = S>,
@@ -71,6 +82,23 @@ where
             }
             "--online-production-acceptance-json" => {
                 return Some(OnlineCliAction::ProductionAcceptanceJson);
+            }
+            "--online-lan-qa-plan-json" => {
+                let descriptor_path = PathBuf::from(args.next()?.as_ref());
+                let host_bind_addr = args.next()?.as_ref().parse().ok()?;
+                let host_advertise_addr = args.next()?.as_ref().parse().ok()?;
+                let client_bind_addr = args.next()?.as_ref().parse().ok()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::LanQaPlanJson {
+                    descriptor_path,
+                    host_bind_addr,
+                    host_advertise_addr,
+                    client_bind_addr,
+                    ticks,
+                });
             }
             "--online-host-descriptor-json" => return Some(OnlineCliAction::HostDescriptorJson),
             "--online-host-descriptor-file" => {
@@ -159,9 +187,71 @@ where
     None
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LanQaCommandPlan {
+    pub descriptor_path: PathBuf,
+    pub host_bind_addr: SocketAddr,
+    pub host_advertise_addr: SocketAddr,
+    pub client_bind_addr: SocketAddr,
+    pub ticks: u32,
+    pub one_shot_host_command: Vec<String>,
+    pub one_shot_join_command: Vec<String>,
+    pub gameplay_host_command: Vec<String>,
+    pub gameplay_join_command: Vec<String>,
+}
+
+#[must_use]
+pub fn build_lan_qa_command_plan(
+    descriptor_path: PathBuf,
+    host_bind_addr: SocketAddr,
+    host_advertise_addr: SocketAddr,
+    client_bind_addr: SocketAddr,
+    ticks: u32,
+) -> Option<LanQaCommandPlan> {
+    if ticks == 0 {
+        return None;
+    }
+    let descriptor = descriptor_path.display().to_string();
+    Some(LanQaCommandPlan {
+        descriptor_path,
+        host_bind_addr,
+        host_advertise_addr,
+        client_bind_addr,
+        ticks,
+        one_shot_host_command: vec![
+            "drillgame".to_owned(),
+            "--online-host-descriptor-file-on-addr".to_owned(),
+            descriptor.clone(),
+            host_bind_addr.to_string(),
+            host_advertise_addr.to_string(),
+        ],
+        one_shot_join_command: vec![
+            "drillgame".to_owned(),
+            "--online-join-descriptor-file-on-addr".to_owned(),
+            descriptor.clone(),
+            client_bind_addr.to_string(),
+        ],
+        gameplay_host_command: vec![
+            "drillgame".to_owned(),
+            "--online-host-gameplay-descriptor-file-on-addr".to_owned(),
+            descriptor.clone(),
+            host_bind_addr.to_string(),
+            host_advertise_addr.to_string(),
+            ticks.to_string(),
+        ],
+        gameplay_join_command: vec![
+            "drillgame".to_owned(),
+            "--online-join-gameplay-descriptor-file-on-addr".to_owned(),
+            descriptor,
+            client_bind_addr.to_string(),
+            ticks.to_string(),
+        ],
+    })
+}
+
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -176,6 +266,19 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::LatencyLossPlaytest => run_latency_loss_playtest_cli_action(),
         OnlineCliAction::ProductionAcceptance => run_production_acceptance_cli_action(),
         OnlineCliAction::ProductionAcceptanceJson => run_production_acceptance_json_cli_action(),
+        OnlineCliAction::LanQaPlanJson {
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+            ticks,
+        } => run_lan_qa_plan_json_cli_action(
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+            ticks,
+        ),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
         OnlineCliAction::HostDescriptorFileOnAddr {
@@ -264,6 +367,24 @@ fn run_production_acceptance_json_cli_action() -> Result<String, String> {
         .block_on(production_online_acceptance_summary())
         .map_err(format_debug_error)?;
     serde_json::to_string_pretty(&summary).map_err(format_debug_error)
+}
+
+fn run_lan_qa_plan_json_cli_action(
+    descriptor_path: PathBuf,
+    host_bind_addr: SocketAddr,
+    host_advertise_addr: SocketAddr,
+    client_bind_addr: SocketAddr,
+    ticks: u32,
+) -> Result<String, String> {
+    let plan = build_lan_qa_command_plan(
+        descriptor_path,
+        host_bind_addr,
+        host_advertise_addr,
+        client_bind_addr,
+        ticks,
+    )
+    .ok_or_else(|| "LAN QA tick count must be greater than zero".to_owned())?;
+    serde_json::to_string_pretty(&plan).map_err(format_debug_error)
 }
 
 fn run_host_descriptor_json_cli_action() -> Result<String, String> {
@@ -853,6 +974,23 @@ mod tests {
             Some(OnlineCliAction::ProductionAcceptanceJson)
         );
         assert_eq!(
+            parse_online_cli_action([
+                "--online-lan-qa-plan-json",
+                "/tmp/drillgame-host.json",
+                "0.0.0.0:4242",
+                "192.0.2.15:4242",
+                "0.0.0.0:0",
+                "60"
+            ]),
+            Some(OnlineCliAction::LanQaPlanJson {
+                descriptor_path: PathBuf::from("/tmp/drillgame-host.json"),
+                host_bind_addr: "0.0.0.0:4242".parse().expect("host bind parses"),
+                host_advertise_addr: "192.0.2.15:4242".parse().expect("host advertise parses"),
+                client_bind_addr: "0.0.0.0:0".parse().expect("client bind parses"),
+                ticks: 60,
+            })
+        );
+        assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-json"]),
             Some(OnlineCliAction::HostDescriptorJson)
         );
@@ -962,6 +1100,36 @@ mod tests {
             })
         );
         assert_eq!(parse_online_cli_action(["--fullscreen"]), None);
+    }
+
+    #[test]
+    fn lan_qa_command_plan_lists_host_and_join_commands() {
+        let plan = build_lan_qa_command_plan(
+            PathBuf::from("/tmp/drillgame-host.json"),
+            "0.0.0.0:4242".parse().expect("host bind parses"),
+            "192.0.2.15:4242".parse().expect("host advertise parses"),
+            "0.0.0.0:0".parse().expect("client bind parses"),
+            60,
+        )
+        .expect("non-zero ticks build a plan");
+
+        assert!(
+            plan.one_shot_host_command
+                .contains(&"--online-host-descriptor-file-on-addr".to_owned())
+        );
+        assert!(
+            plan.one_shot_join_command
+                .contains(&"--online-join-descriptor-file-on-addr".to_owned())
+        );
+        assert!(
+            plan.gameplay_host_command
+                .contains(&"--online-host-gameplay-descriptor-file-on-addr".to_owned())
+        );
+        assert!(
+            plan.gameplay_join_command
+                .contains(&"--online-join-gameplay-descriptor-file-on-addr".to_owned())
+        );
+        assert_eq!(plan.ticks, 60);
     }
 
     #[test]
