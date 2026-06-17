@@ -6,7 +6,8 @@ use crate::{
         GameState, OnlineNetworkTaskRequest, OnlineNetworkTaskResult, RealOnlineSessionController,
     },
     input::{
-        combine_player_input, read_gamepad_input, read_input, read_primary_keyboard_input,
+        combine_player_input, read_gamepad_input, read_input, read_input_with_arrow_aliases,
+        read_primary_keyboard_input, read_primary_keyboard_input_with_arrow_aliases,
         read_secondary_keyboard_input,
     },
     input_mapping::{
@@ -408,6 +409,10 @@ impl OnlineTaskDispatcher {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "main loop coordinates platform input, session stepping, audio, saving, and rendering"
+)]
 pub fn run() {
     let (mut raylib, thread) = raylib::init()
         .size(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -441,7 +446,12 @@ pub fn run() {
             "large frame delta detected before fixed-tick simulation migration"
         );
         let exit_requested = raylib.window_should_close();
-        let input = read_input(&raylib, exit_requested);
+        let split_screen_active = session.client_count() > 1;
+        let input = if split_screen_active {
+            read_input(&raylib, exit_requested)
+        } else {
+            read_input_with_arrow_aliases(&raylib, exit_requested)
+        };
         let mapped_input = map_local_input(input);
         if mapped_input
             .client_actions
@@ -473,9 +483,14 @@ pub fn run() {
             read_gamepad_input(&raylib, 0)
                 .map_or(keyboard, |gamepad| combine_player_input(keyboard, gamepad))
         });
+        let primary_input = if session.client_count() > 1 {
+            read_primary_keyboard_input(&raylib)
+        } else {
+            read_primary_keyboard_input_with_arrow_aliases(&raylib)
+        };
         for local_input in crate::input_mapping::local_split_screen_inputs(
             crate::multiplayer::LOCAL_CLIENT_ID,
-            read_primary_keyboard_input(&raylib),
+            primary_input,
             session.secondary_local_client_id(),
             secondary_input,
         ) {

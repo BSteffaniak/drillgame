@@ -1849,21 +1849,27 @@ impl WorldState {
                 if thrust {
                     player.velocity_y = -1.0;
                 }
-                if drill_down {
-                    let current_tile = player.tile_position(TILE_SIZE);
-                    let target = TilePosition {
-                        x: current_tile.x,
-                        y: current_tile.y + 1,
-                    };
-                    self.active_drills.entry(player_id).or_insert(DrillState {
-                        target,
-                        direction: DrillDirection::Down,
-                        progress: 0.0,
-                        initial_durability: 1,
-                        seconds_per_chip: FIXED_DELTA_SECONDS,
-                        sound_timer: 0.0,
-                        dust_timer: 0.0,
-                    });
+                if let Some((target, direction)) =
+                    authoritative_mine_target(player, horizontal, drill_down)
+                {
+                    let initial_durability = self
+                        .terrain
+                        .tile(target)
+                        .map_or(1, |tile| tile.durability.max(1));
+                    self.active_drills
+                        .entry(player_id)
+                        .and_modify(|drill| {
+                            if drill.target != target || drill.direction != direction {
+                                *drill = authoritative_drill_state(
+                                    target,
+                                    direction,
+                                    initial_durability,
+                                );
+                            }
+                        })
+                        .or_insert_with(|| {
+                            authoritative_drill_state(target, direction, initial_durability)
+                        });
                 } else {
                     self.active_drills.remove(&player_id);
                 }
@@ -2018,6 +2024,59 @@ impl WorldState {
             .insert(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds);
         self.authoritative_summary =
             AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
+    }
+}
+
+fn authoritative_mine_target(
+    player: &Player,
+    horizontal: f32,
+    drill_down: bool,
+) -> Option<(TilePosition, DrillDirection)> {
+    if !drill_down && horizontal.abs() <= f32::EPSILON {
+        return None;
+    }
+
+    let current_tile = player.tile_position(TILE_SIZE);
+    if drill_down {
+        Some((
+            TilePosition {
+                x: current_tile.x,
+                y: current_tile.y + 1,
+            },
+            DrillDirection::Down,
+        ))
+    } else if horizontal < 0.0 {
+        Some((
+            TilePosition {
+                x: current_tile.x - 1,
+                y: current_tile.y,
+            },
+            DrillDirection::Left,
+        ))
+    } else {
+        Some((
+            TilePosition {
+                x: current_tile.x + 1,
+                y: current_tile.y,
+            },
+            DrillDirection::Right,
+        ))
+    }
+}
+
+const fn authoritative_drill_state(
+    target: TilePosition,
+    direction: DrillDirection,
+    initial_durability: u8,
+) -> DrillState {
+    DrillState {
+        target,
+        direction,
+        progress: 0.0,
+        initial_durability,
+        seconds_per_chip: FIXED_DELTA_SECONDS,
+        sound_timer: 0.0,
+        dust_timer: 0.0,
     }
 }
 
@@ -5708,6 +5767,42 @@ mod tests {
         let player = world.player(LOCAL_PLAYER_ID).expect("player exists");
         assert!(player.y < 5.0 * TILE_SIZE);
         assert!(player.velocity_y.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn authoritative_side_drilling_intent_persists_and_chips_side_tile() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.player.x = 20.0 * TILE_SIZE;
+        game.player.y = 5.0 * TILE_SIZE;
+        let mut world = WorldState::from_legacy_game(&game);
+        let target = TilePosition { x: 21, y: 5 };
+        assert!(world.terrain.set_kind(target, TileKind::Dirt));
+
+        for _ in 0..2 {
+            assert_eq!(
+                world.apply_player_command(
+                    LOCAL_PLAYER_ID,
+                    &PlayerCommand::Movement {
+                        horizontal: 1.0,
+                        thrust: false,
+                        drill_down: false,
+                    },
+                ),
+                super::PlayerScopedCommandOutcome::Applied
+            );
+            let active = world
+                .active_drill(LOCAL_PLAYER_ID)
+                .expect("side drill remains active");
+            assert_eq!(active.target, target);
+            assert_eq!(active.direction, DrillDirection::Right);
+            let _result = world.chip_active_drill_target(LOCAL_PLAYER_ID);
+        }
+
+        assert!(matches!(
+            world.terrain.tile(target).map(|tile| tile.kind),
+            Some(TileKind::Air)
+        ));
     }
 
     #[test]

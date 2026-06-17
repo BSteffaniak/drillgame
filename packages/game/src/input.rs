@@ -65,6 +65,13 @@ pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
 }
 
 #[must_use]
+pub fn read_input_with_arrow_aliases(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
+    let mut input = read_primary_keyboard_input_with_arrow_aliases(raylib);
+    input.exit_requested = exit_requested;
+    input
+}
+
+#[must_use]
 pub fn read_gamepad_input(raylib: &RaylibHandle, gamepad: i32) -> Option<PlayerInput> {
     if !raylib.is_gamepad_available(gamepad) {
         return None;
@@ -147,10 +154,27 @@ pub fn combine_player_input(primary: PlayerInput, secondary: PlayerInput) -> Pla
 
 #[must_use]
 pub fn read_primary_keyboard_input(raylib: &RaylibHandle) -> PlayerInput {
-    let left = raylib.is_key_down(KeyboardKey::KEY_A);
-    let right = raylib.is_key_down(KeyboardKey::KEY_D);
-    let up = raylib.is_key_down(KeyboardKey::KEY_W) || raylib.is_key_down(KeyboardKey::KEY_SPACE);
-    let down = raylib.is_key_down(KeyboardKey::KEY_S);
+    read_primary_keyboard_input_with_options(raylib, false)
+}
+
+#[must_use]
+pub fn read_primary_keyboard_input_with_arrow_aliases(raylib: &RaylibHandle) -> PlayerInput {
+    read_primary_keyboard_input_with_options(raylib, true)
+}
+
+fn read_primary_keyboard_input_with_options(
+    raylib: &RaylibHandle,
+    include_arrow_aliases: bool,
+) -> PlayerInput {
+    let left = raylib.is_key_down(KeyboardKey::KEY_A)
+        || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_LEFT));
+    let right = raylib.is_key_down(KeyboardKey::KEY_D)
+        || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_RIGHT));
+    let up = raylib.is_key_down(KeyboardKey::KEY_W)
+        || raylib.is_key_down(KeyboardKey::KEY_SPACE)
+        || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_UP));
+    let down = raylib.is_key_down(KeyboardKey::KEY_S)
+        || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_DOWN));
 
     PlayerInput {
         horizontal: horizontal_axis(left, right),
