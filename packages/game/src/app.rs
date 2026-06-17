@@ -132,7 +132,9 @@ impl OnlineTaskDispatcher {
 
         match request {
             OnlineNetworkTaskRequest::HostDirectConnect
-            | OnlineNetworkTaskRequest::JoinDirectConnect => {
+            | OnlineNetworkTaskRequest::JoinDirectConnect
+            | OnlineNetworkTaskRequest::HostDescriptorFile { .. }
+            | OnlineNetworkTaskRequest::JoinDescriptorFile { .. } => {
                 self.spawn_connect();
             }
             OnlineNetworkTaskRequest::ReconnectDirectConnect => {
@@ -731,7 +733,9 @@ mod tests {
         let mut session = GameSession::new();
         let mut dispatcher = OnlineTaskDispatcher::new();
 
-        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            path: game.online_descriptor_path.clone(),
+        });
         dispatcher.drain_and_execute(&mut game);
         wait_for_online_completion(&mut dispatcher, &mut game);
         dispatcher.drive_scheduled_tick(&mut session, FIXED_DELTA_SECONDS);

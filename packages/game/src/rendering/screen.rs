@@ -787,8 +787,8 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
 fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Online Multiplayer", 330, 150, 30, Color::SKYBLUE);
     let options = [
-        "Host session",
-        "Join session",
+        "Host descriptor session",
+        "Join descriptor session",
         "Reconnect",
         "Simulate timeout",
         "Show error",

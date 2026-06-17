@@ -277,10 +277,12 @@ pub enum OnlineSessionUxState {
     Shutdown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineNetworkTaskRequest {
     HostDirectConnect,
     JoinDirectConnect,
+    HostDescriptorFile { path: PathBuf },
+    JoinDescriptorFile { path: PathBuf },
     ReconnectDirectConnect,
     Shutdown,
 }
@@ -1861,7 +1863,7 @@ impl GameState {
             "Transport: Quinn/QUIC real socket IO enabled for direct-connect host/join/reconnect."
                 .to_owned(),
         );
-        if let Some(request) = self.online_network_task_request {
+        if let Some(request) = &self.online_network_task_request {
             lines.push(format!("Pending network task: {request:?}"));
         } else {
             lines.push("Pending network task: none".to_owned());
@@ -2010,28 +2012,36 @@ impl GameState {
             0 => {
                 self.online_session_state = OnlineSessionUxState::Hosting;
                 self.online_network_task_request =
-                    Some(OnlineNetworkTaskRequest::HostDirectConnect);
+                    Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                        path: self.online_descriptor_path.clone(),
+                    });
                 self.online_host_owns_save = true;
                 self.online_player_slot = Some(1);
                 self.online_local_ready = false;
                 self.online_remote_player_name = None;
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
-                "Hosting lobby locally. Host owns save/session authority."
-                    .clone_into(&mut self.online_session_status_message);
+                self.online_session_status_message = format!(
+                    "Hosting direct-connect descriptor at {}. Host owns save/session authority.",
+                    self.online_descriptor_path.display()
+                );
             }
             1 => {
                 self.online_session_state = OnlineSessionUxState::Joining;
                 self.online_network_task_request =
-                    Some(OnlineNetworkTaskRequest::JoinDirectConnect);
+                    Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+                        path: self.online_descriptor_path.clone(),
+                    });
                 self.online_host_owns_save = false;
                 self.online_player_slot = Some(2);
                 self.online_local_ready = false;
                 self.online_remote_player_name = Some("Host miner".to_owned());
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
-                "Joining by direct address. Waiting for host assignment."
-                    .clone_into(&mut self.online_session_status_message);
+                self.online_session_status_message = format!(
+                    "Joining with descriptor {}. Waiting for host assignment.",
+                    self.online_descriptor_path.display()
+                );
             }
             2 => {
                 self.online_session_state = OnlineSessionUxState::Reconnecting;
@@ -6332,7 +6342,9 @@ mod tests {
         );
         assert_eq!(
             game.take_online_network_task_request(),
-            Some(OnlineNetworkTaskRequest::HostDirectConnect)
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                path: default_online_descriptor_path()
+            })
         );
 
         game.selected_menu_item = 1;
@@ -6345,7 +6357,9 @@ mod tests {
         );
         assert_eq!(
             game.take_online_network_task_request(),
-            Some(OnlineNetworkTaskRequest::JoinDirectConnect)
+            Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+                path: default_online_descriptor_path()
+            })
         );
 
         game.selected_menu_item = 2;
@@ -6378,7 +6392,7 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
-                .any(|line| line.contains("JoinDirectConnect"))
+                .any(|line| line.contains("JoinDescriptorFile"))
         );
         assert!(pending_lines.iter().any(|line| line.contains("Joining")));
         assert!(
@@ -6610,7 +6624,9 @@ mod tests {
         );
         assert_eq!(
             game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::HostDirectConnect)
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                path: default_online_descriptor_path()
+            })
         );
 
         game.modal = Some(ModalScreen::OnlineMultiplayer);
