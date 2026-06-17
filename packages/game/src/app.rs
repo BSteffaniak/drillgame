@@ -281,6 +281,13 @@ impl OnlineTaskDispatcher {
                 }
             }
             OnlineNetworkTaskRequest::Shutdown => {
+                if let (Some(runtime), Some(controller)) = (&self.runtime, &mut self.controller)
+                    && controller.mode_label() == "descriptor-host-accepted"
+                {
+                    let _ignored = runtime.block_on(
+                        controller.descriptor_host_send_session_ended("host ended the session"),
+                    );
+                }
                 self.controller = None;
                 self.pending_completion = None;
                 self.pending_descriptor_accept = None;
@@ -1065,6 +1072,25 @@ mod tests {
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,
             "descriptor-client-connected"
+        );
+
+        host_session.game_mut().online_network_task_request =
+            Some(OnlineNetworkTaskRequest::Shutdown);
+        host_dispatcher.drain_and_execute(host_session.game_mut());
+        assert_eq!(
+            host_session.game().online_session_state,
+            OnlineSessionUxState::Shutdown
+        );
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        assert_eq!(
+            join_session.game().online_session_state,
+            OnlineSessionUxState::Shutdown
+        );
+        assert!(
+            join_session
+                .game()
+                .online_session_status_message
+                .contains("ended by host")
         );
         let _ignored = std::fs::remove_file(unique_path);
     }

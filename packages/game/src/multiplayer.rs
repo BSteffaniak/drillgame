@@ -841,7 +841,9 @@ impl ClientSessionRuntime {
             ProtocolMessage::SnapshotKeyframe { snapshot } => {
                 self.latest_authoritative_tick = snapshot.tick;
             }
-            ProtocolMessage::ReadyState { .. } | ProtocolMessage::StartSession { .. } => {}
+            ProtocolMessage::ReadyState { .. }
+            | ProtocolMessage::StartSession { .. }
+            | ProtocolMessage::SessionEnded { .. } => {}
             other => self.pending_messages.push(other),
         }
     }
@@ -3439,6 +3441,9 @@ pub enum ProtocolMessage {
     StartSession {
         authoritative_tick: SimulationTick,
     },
+    SessionEnded {
+        reason: String,
+    },
     SnapshotKeyframe {
         snapshot: NetworkWorldSnapshot,
     },
@@ -3472,6 +3477,7 @@ impl ProtocolMessage {
             | Self::CommandRejection(_)
             | Self::ReadyState { .. }
             | Self::StartSession { .. }
+            | Self::SessionEnded { .. }
             | Self::TerrainChunkRequest { .. }
             | Self::TerrainChunkResponse { .. } => ReliabilityClass::Reliable,
         }

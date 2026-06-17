@@ -616,15 +616,6 @@ impl RealOnlineSessionController {
         crate::multiplayer::QuinnSessionTickSummary,
         crate::multiplayer::QuinnOnlineSessionError,
     > {
-        let command_sent = if let Some(packet) = input.command_packet {
-            self.descriptor_client_send_command_packet_unacknowledged(packet)
-                .await?;
-            true
-        } else {
-            false
-        };
-        self.descriptor_client_send_ready_state(game.online_local_ready)
-            .await?;
         let received_messages = self
             .descriptor_client_try_receive_pending_messages(game, Duration::from_millis(1))
             .await?;
@@ -635,6 +626,18 @@ impl RealOnlineSessionController {
             terrain_chunk_response: None,
             correction_summary: None,
         };
+        if game.online_session_state == OnlineSessionUxState::Shutdown {
+            return Ok(summary);
+        }
+        let command_sent = if let Some(packet) = input.command_packet {
+            self.descriptor_client_send_command_packet_unacknowledged(packet)
+                .await?;
+            true
+        } else {
+            false
+        };
+        self.descriptor_client_send_ready_state(game.online_local_ready)
+            .await?;
         if command_sent {
             game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
                 state: OnlineSessionUxState::Connected,
@@ -717,6 +720,27 @@ impl RealOnlineSessionController {
             .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
                 crate::multiplayer::ProtocolMessage::StartSession {
                     authoritative_tick: crate::multiplayer::SimulationTick::new(0),
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn descriptor_host_send_session_ended(
+        &mut self,
+        reason: &str,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::SessionEnded {
+                    reason: reason.to_owned(),
                 },
             ))
             .await?;
@@ -809,7 +833,7 @@ impl RealOnlineSessionController {
             );
         };
         let mut received_count = 0;
-        for _ in 0..3 {
+        for _ in 0..8 {
             match tokio::time::timeout(timeout, packet_io.receive_reliable_packet()).await {
                 Ok(Ok(packet)) => {
                     let message = packet.decode_supported().map_err(|error| {
@@ -833,13 +857,35 @@ impl RealOnlineSessionController {
                             game.modal = None;
                             game.message.clone_from(&game.online_session_status_message);
                         }
+                        crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
+                            game.online_remote_player_connected = false;
+                            game.online_remote_player_ready = false;
+                            game.online_session_state = OnlineSessionUxState::Shutdown;
+                            game.modal = None;
+                            game.online_session_status_message =
+                                format!("Online session ended by host: {reason}");
+                            game.message.clone_from(&game.online_session_status_message);
+                        }
                         other => client_runtime.handle_message(other),
                     }
                     received_count += 1;
                 }
-                Ok(Err(error)) => return Err(error.into()),
+                Ok(Err(error)) => {
+                    game.online_remote_player_connected = false;
+                    game.online_remote_player_ready = false;
+                    game.online_session_state = OnlineSessionUxState::Shutdown;
+                    game.modal = None;
+                    game.online_session_status_message = format!(
+                        "Online session ended by host: reliable channel closed ({error:?})"
+                    );
+                    game.message.clone_from(&game.online_session_status_message);
+                    return Ok(received_count);
+                }
                 Err(_) => break,
             }
+        }
+        if game.online_session_state == OnlineSessionUxState::Shutdown {
+            return Ok(received_count);
         }
         match tokio::time::timeout(timeout, packet_io.receive_datagram_packet()).await {
             Ok(Ok(packet)) => {
