@@ -1,0 +1,8 @@
+[profile.default]
+
+[test-groups]
+online-cli = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(online_cli)'
+test-group = 'online-cli'

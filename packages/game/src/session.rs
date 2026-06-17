@@ -5685,7 +5685,7 @@ mod tests {
         let mut game = GameState::new();
         game.player.fuel = 1.0;
         game.player.hull = 1.0;
-        game.player.credits = 500;
+        game.player.credits = 1_000;
         game.player.add_cargo(crate::terrain::MineralKind::Copper);
         let mut world = WorldState::from_legacy_game(&game);
 
@@ -5883,13 +5883,15 @@ mod tests {
 
     #[test]
     fn compatibility_world_summarizes_inventory_and_applies_upgrade_intent() {
-        let mut world = WorldState::from_legacy_game(&GameState::new());
+        let mut game = GameState::new();
+        game.player.credits = 420;
+        let mut world = WorldState::from_legacy_game(&game);
         let before = world
             .player_inventory_summary(LOCAL_PLAYER_ID)
             .expect("player summary");
 
         assert_eq!(before.cargo_used, 0);
-        assert_eq!(before.credits, 0);
+        assert_eq!(before.credits, 420);
         assert_eq!(
             world.apply_player_command(LOCAL_PLAYER_ID, &PlayerCommand::BuyUpgrade { index: 0 }),
             super::PlayerScopedCommandOutcome::Applied
