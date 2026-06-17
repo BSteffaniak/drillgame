@@ -303,8 +303,26 @@ pub enum OnlineNetworkTaskResult {
     dead_code,
     reason = "real online controller is exercised by tests until desktop async UI ownership calls it"
 )]
+pub enum RealOnlineSessionMode {
+    CombinedLocalhost(crate::multiplayer::QuinnOnlineSession),
+}
+
+impl RealOnlineSessionMode {
+    const fn session_mut(&mut self) -> &mut crate::multiplayer::QuinnOnlineSession {
+        match self {
+            Self::CombinedLocalhost(session) => session,
+        }
+    }
+
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::CombinedLocalhost(_) => "combined-localhost",
+        }
+    }
+}
+
 pub struct RealOnlineSessionController {
-    session: crate::multiplayer::QuinnOnlineSession,
+    mode: RealOnlineSessionMode,
     player_slot: Option<u8>,
     next_sequence: u32,
     next_tick: u64,
@@ -331,7 +349,7 @@ impl RealOnlineSessionController {
         )
         .await?;
         let controller = Self {
-            session,
+            mode: RealOnlineSessionMode::CombinedLocalhost(session),
             player_slot: Some(1),
             next_sequence: 30,
             next_tick: 301,
@@ -340,6 +358,11 @@ impl RealOnlineSessionController {
             controller.player_slot,
         ));
         Ok(controller)
+    }
+
+    #[must_use]
+    pub const fn mode_label(&self) -> &'static str {
+        self.mode.label()
     }
 
     /// Drive one real network tick from a caller-provided payload and apply online UX state.
@@ -355,7 +378,11 @@ impl RealOnlineSessionController {
         crate::multiplayer::QuinnSessionTickTelemetry,
         crate::multiplayer::QuinnOnlineSessionError,
     > {
-        let telemetry = self.session.drive_tick_with_telemetry(input).await?;
+        let telemetry = self
+            .mode
+            .session_mut()
+            .drive_tick_with_telemetry(input)
+            .await?;
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
             &telemetry.summary,
             self.player_slot,
@@ -376,10 +403,11 @@ impl RealOnlineSessionController {
         crate::multiplayer::QuinnOnlineSessionError,
     > {
         let player_id = self
-            .session
+            .mode
+            .session_mut()
             .joined_player_id()
             .unwrap_or(crate::multiplayer::LOCAL_PLAYER_ID);
-        let client_id = self.session.client_runtime.config.client_id;
+        let client_id = self.mode.session_mut().client_runtime.config.client_id;
         let sequence = self.next_sequence;
         let tick = self.next_tick;
         let snapshot_tick = crate::multiplayer::SimulationTick::new(tick + 1);
@@ -391,7 +419,8 @@ impl RealOnlineSessionController {
             .expect("live player snapshot contains local player");
         let terrain_request = live_player_terrain_request(game);
         let telemetry = self
-            .session
+            .mode
+            .session_mut()
             .drive_tick_with_telemetry(crate::multiplayer::QuinnSessionTickInput {
                 command_packet: Some(crate::multiplayer::CommandPacket {
                     client_id,
@@ -437,7 +466,7 @@ impl RealOnlineSessionController {
         game: &mut GameState,
         token: crate::multiplayer::SessionToken,
     ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
-        self.session.reconnect_with_token(token).await?;
+        self.mode.session_mut().reconnect_with_token(token).await?;
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_reconnect(
             self.player_slot,
         ));
@@ -6261,6 +6290,7 @@ mod tests {
             .await
             .expect("real session connects");
 
+        assert_eq!(controller.mode_label(), "combined-localhost");
         assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
         assert!(
             game.message
