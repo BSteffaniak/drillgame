@@ -31,6 +31,12 @@ pub enum OnlineCliAction {
         path: PathBuf,
         ticks: u32,
     },
+    HostGameplayDescriptorFileOnAddr {
+        path: PathBuf,
+        bind_addr: SocketAddr,
+        advertise_addr: SocketAddr,
+        ticks: u32,
+    },
     JoinGameplayDescriptorFile {
         path: PathBuf,
         ticks: u32,
@@ -91,6 +97,21 @@ where
                     ticks,
                 });
             }
+            "--online-host-gameplay-descriptor-file-on-addr" => {
+                let path = args.next()?;
+                let bind_addr = args.next()?.as_ref().parse().ok()?;
+                let advertise_addr = args.next()?.as_ref().parse().ok()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::HostGameplayDescriptorFileOnAddr {
+                    path: PathBuf::from(path.as_ref()),
+                    bind_addr,
+                    advertise_addr,
+                    ticks,
+                });
+            }
             "--online-join-gameplay-descriptor-file" => {
                 let path = args.next()?;
                 let ticks = args.next()?.as_ref().parse().ok()?;
@@ -110,7 +131,7 @@ where
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -136,6 +157,17 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::HostGameplayDescriptorFile { path, ticks } => {
             run_host_gameplay_descriptor_file_cli_action(path, ticks)
         }
+        OnlineCliAction::HostGameplayDescriptorFileOnAddr {
+            path,
+            bind_addr,
+            advertise_addr,
+            ticks,
+        } => run_host_gameplay_descriptor_file_on_addr_cli_action(
+            path,
+            bind_addr,
+            advertise_addr,
+            ticks,
+        ),
         OnlineCliAction::JoinGameplayDescriptorFile { path, ticks } => {
             run_join_gameplay_descriptor_file_cli_action(path, ticks)
         }
@@ -287,14 +319,43 @@ fn run_host_gameplay_descriptor_file_cli_action(
     path: PathBuf,
     ticks: u32,
 ) -> Result<String, String> {
+    run_host_gameplay_descriptor_file_with_config(
+        path,
+        QuinnEndpointConfig::localhost_ephemeral(),
+        None,
+        ticks,
+    )
+}
+
+fn run_host_gameplay_descriptor_file_on_addr_cli_action(
+    path: PathBuf,
+    bind_addr: SocketAddr,
+    advertise_addr: SocketAddr,
+    ticks: u32,
+) -> Result<String, String> {
+    run_host_gameplay_descriptor_file_with_config(
+        path,
+        QuinnEndpointConfig { bind_addr },
+        Some(advertise_addr),
+        ticks,
+    )
+}
+
+fn run_host_gameplay_descriptor_file_with_config(
+    path: PathBuf,
+    config: QuinnEndpointConfig,
+    advertise_addr: Option<SocketAddr>,
+    ticks: u32,
+) -> Result<String, String> {
     let runtime = build_current_thread_runtime()?;
     runtime.block_on(async move {
-        let listener =
-            QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
-                .map_err(format_debug_error)?;
-        let descriptor = listener
+        let listener = QuinnHostListener::bind_localhost(config).map_err(format_debug_error)?;
+        let mut descriptor = listener
             .connection_descriptor()
             .map_err(format_debug_error)?;
+        if let Some(addr) = advertise_addr {
+            descriptor.host_addr = addr;
+        }
         let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
         std::fs::write(&path, json).map_err(|error| error.to_string())?;
         println!("online gameplay host descriptor ready");
@@ -700,6 +761,10 @@ mod tests {
     use crate::multiplayer::QuinnHostConnectionDescriptor;
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "parser table coverage is easiest to audit in one contiguous test"
+    )]
     fn online_cli_parser_recognizes_local_smoke_and_descriptor_actions() {
         assert_eq!(
             parse_online_cli_action(["--online-help"]),
@@ -759,6 +824,21 @@ mod tests {
             Some(OnlineCliAction::HostGameplayDescriptorFile {
                 path: PathBuf::from("/tmp/gameplay-host.json"),
                 ticks: 3,
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-host-gameplay-descriptor-file-on-addr",
+                "/tmp/gameplay-lan-host.json",
+                "0.0.0.0:0",
+                "192.0.2.11:5252",
+                "4"
+            ]),
+            Some(OnlineCliAction::HostGameplayDescriptorFileOnAddr {
+                path: PathBuf::from("/tmp/gameplay-lan-host.json"),
+                bind_addr: "0.0.0.0:0".parse().expect("bind addr parses"),
+                advertise_addr: "192.0.2.11:5252".parse().expect("advertise addr parses"),
+                ticks: 4,
             })
         );
         assert_eq!(
