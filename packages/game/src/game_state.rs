@@ -3050,6 +3050,7 @@ impl GameState {
         self.message = self.online_session_status_message.clone();
     }
 
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(10);
@@ -3070,6 +3071,18 @@ impl GameState {
             self.online_host_owns_save,
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        ));
+        lines.push(format!(
+            "Reconnect ownership: identity={} slot={} authority={} save_owner={}",
+            self.online_player_name,
+            self.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            self.online_role_label(),
+            if self.online_host_owns_save {
+                "local-host"
+            } else {
+                "remote-host"
+            }
         ));
         lines.push(format!(
             "Role guidance: {}",
@@ -8016,6 +8029,11 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
+                .any(|line| line.contains("Reconnect ownership"))
+        );
+        assert!(
+            pending_lines
+                .iter()
                 .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
@@ -8264,6 +8282,51 @@ mod tests {
             status_message: "Connected as host.".to_owned(),
         });
         assert!(game.online_save_policy_line().contains("allowed"));
+    }
+
+    #[test]
+    fn reconnect_failure_and_ownership_diagnostics_are_player_facing() {
+        let mut game = GameState::new();
+        game.online_player_name = "Tunnel Guest".to_owned();
+        game.online_player_slot = Some(2);
+        game.online_host_owns_save = false;
+        game.online_session_state = OnlineSessionUxState::Connected;
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(|line| {
+            line.contains("Reconnect ownership")
+                && line.contains("Tunnel Guest")
+                && line.contains("slot=2")
+                && line.contains("remote-host")
+        }));
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+            "reconnect failed: session token rejected".to_owned(),
+        ));
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert!(game.message.contains("Reconnect failed"));
+        assert!(!game.online_remote_player_connected);
+    }
+
+    #[test]
+    fn reconnect_ownership_diagnostics_survive_shutdown_acknowledgement() {
+        let mut game = GameState::new();
+        game.online_player_name = "Host Keeper".to_owned();
+        game.online_player_slot = Some(1);
+        game.online_host_owns_save = true;
+        game.online_session_state = OnlineSessionUxState::Connected;
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(|line| {
+            line.contains("Reconnect ownership")
+                && line.contains("Host Keeper")
+                && line.contains("slot=1")
+                && line.contains("local-host")
+        }));
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+        assert!(game.message.contains("shutdown acknowledged"));
     }
 
     #[test]
