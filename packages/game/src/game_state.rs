@@ -2632,7 +2632,7 @@ impl GameState {
 
     #[must_use]
     pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
-        let mut lines = Vec::with_capacity(5);
+        let mut lines = Vec::with_capacity(10);
         lines.push(
             "Transport: Quinn/QUIC real socket IO enabled for direct-connect host/join/reconnect."
                 .to_owned(),
@@ -2651,12 +2651,31 @@ impl GameState {
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
+        lines.push(format!(
+            "Role guidance: {}",
+            self.online_role_guidance_line()
+        ));
+        lines.push(format!(
+            "Descriptor file: {} | inspect before join: yes | share after host publish: yes",
+            self.online_descriptor_path.display()
+        ));
         lines.push(self.online_session_status_message.clone());
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
+    }
+
+    #[must_use]
+    pub const fn online_role_guidance_line(&self) -> &'static str {
+        if self.online_host_owns_save {
+            "You are the authoritative host: keep this app running, share the descriptor, and write saves from here."
+        } else if self.online_player_slot.is_some() {
+            "You are a joined client: play through the host, do not write local saves, and reconnect with host approval."
+        } else {
+            "Choose Host to own the session/save or Join to connect with a descriptor from the host."
+        }
     }
 
     #[must_use]
@@ -2697,7 +2716,12 @@ impl GameState {
                 }
             ),
             format!(
-                "Remote player: {remote_name} | slot {remote_slot} | ready {} | connected {}",
+                "Remote player: {remote_name} | slot {remote_slot} | role {} | ready {} | connected {}",
+                if self.online_host_owns_save {
+                    "client"
+                } else {
+                    "host"
+                },
                 if self.online_remote_player_ready {
                     "yes"
                 } else {
@@ -7404,7 +7428,17 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
-                .any(|line| line.contains("Remote player: Host miner"))
+                .any(|line| line.contains("joined client: play through the host"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Descriptor file:"))
+        );
+        assert!(
+            pending_lines.iter().any(
+                |line| line.contains("Remote player: Host miner") && line.contains("role host")
+            )
         );
         assert!(
             pending_lines
