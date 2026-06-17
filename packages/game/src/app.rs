@@ -76,6 +76,10 @@ impl OnlineTaskDispatcher {
         match completion {
             OnlineDescriptorAcceptCompletion::Accepted(Ok(controller)) => {
                 self.controller = Some(controller);
+                game.apply_online_diagnostics(
+                    "descriptor-host-accepted",
+                    "client accepted; awaiting ticks",
+                );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(
                         Some(1),
@@ -104,10 +108,18 @@ impl OnlineTaskDispatcher {
                         &game.online_descriptor_path,
                     );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(snapshot));
+                game.apply_online_diagnostics(
+                    "descriptor-host-pending",
+                    "waiting for descriptor client",
+                );
                 self.spawn_descriptor_accept(controller);
             }
             OnlineTaskCompletion::JoinedDescriptor(Ok((controller, path))) => {
                 self.controller = Some(controller);
+                game.apply_online_diagnostics(
+                    "descriptor-client-connected",
+                    "join accepted; awaiting ticks",
+                );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::JoinedDescriptor(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
                         Some(2),
@@ -117,12 +129,14 @@ impl OnlineTaskDispatcher {
             }
             OnlineTaskCompletion::Connected(Ok(controller)) => {
                 self.controller = Some(controller);
+                game.apply_online_diagnostics("combined-localhost", "connected; awaiting ticks");
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
                 ));
             }
             OnlineTaskCompletion::Reconnected(Ok(controller)) => {
                 self.controller = Some(controller);
+                game.apply_online_diagnostics("combined-localhost", "reconnected; awaiting ticks");
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Reconnected(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_reconnect(Some(1)),
                 ));
@@ -318,6 +332,17 @@ impl OnlineTaskDispatcher {
         }
     }
 
+    fn tick_diagnostic(summary: &crate::multiplayer::QuinnSessionTickSummary) -> String {
+        format!(
+            "command={}, snapshot={}, delta={}, chunk={}, correction={}",
+            summary.command_summary.is_some(),
+            summary.snapshot_replicated,
+            summary.delta_replicated,
+            summary.terrain_chunk_response.is_some(),
+            summary.correction_summary.is_some()
+        )
+    }
+
     fn drive_scheduled_tick(&mut self, session: &mut GameSession, delta_seconds: f32) {
         if self.controller.is_none() {
             self.tick_accumulator_seconds = 0.0;
@@ -363,12 +388,15 @@ impl OnlineTaskDispatcher {
                 .block_on(controller.drive_tick_input(session.game_mut(), input))
                 .map(|telemetry| telemetry.summary),
         };
-        if let Err(error) = result {
-            session
+        match result {
+            Ok(summary) => session
                 .game_mut()
-                .apply_online_network_task_result(OnlineNetworkTaskResult::Failed(format!(
-                    "{error:?}"
-                )));
+                .apply_online_diagnostics(mode_label, Self::tick_diagnostic(&summary)),
+            Err(error) => {
+                session.game_mut().apply_online_network_task_result(
+                    OnlineNetworkTaskResult::Failed(format!("{error:?}")),
+                );
+            }
         }
     }
 }
@@ -926,6 +954,7 @@ mod tests {
         let _ignored = std::fs::remove_file(unique_path);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn online_task_dispatcher_accepts_descriptor_join_after_host_publish() {
         let unique_path = std::env::temp_dir().join(format!(
@@ -1010,12 +1039,26 @@ mod tests {
                 .online_session_status_message
                 .contains("command=true")
         );
+        assert_eq!(
+            host_session.game().online_diagnostic_controller_mode,
+            "descriptor-host-accepted"
+        );
+        assert!(
+            host_session
+                .game()
+                .online_diagnostic_last_tick
+                .contains("command=true")
+        );
         join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
         assert!(
             join_session
                 .game()
                 .online_session_status_message
                 .contains("received")
+        );
+        assert_eq!(
+            join_session.game().online_diagnostic_controller_mode,
+            "descriptor-client-connected"
         );
         let _ignored = std::fs::remove_file(unique_path);
     }

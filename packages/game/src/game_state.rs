@@ -1901,6 +1901,10 @@ pub struct GameState {
     #[serde(default = "default_online_gameplay_ticks")]
     pub online_gameplay_ticks: u32,
     #[serde(default)]
+    pub online_diagnostic_controller_mode: String,
+    #[serde(default)]
+    pub online_diagnostic_last_tick: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -2140,6 +2144,8 @@ impl GameState {
             online_host_advertise_addr: default_online_host_advertise_addr(),
             online_client_bind_addr: default_online_client_bind_addr(),
             online_gameplay_ticks: default_online_gameplay_ticks(),
+            online_diagnostic_controller_mode: String::new(),
+            online_diagnostic_last_tick: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -2535,6 +2541,7 @@ impl GameState {
                 self.online_local_ready = false;
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
+                self.clear_online_diagnostics();
                 self.online_session_status_message = Self::online_failure_status_message(&message);
                 self.message = self.online_session_status_message.clone();
             }
@@ -2545,6 +2552,7 @@ impl GameState {
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
                 self.modal = None;
+                self.clear_online_diagnostics();
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
                 self.message = self.online_session_status_message.clone();
@@ -2566,6 +2574,20 @@ impl GameState {
         }
         self.online_session_status_message = snapshot.status_message;
         self.message = self.online_session_status_message.clone();
+    }
+
+    pub fn apply_online_diagnostics(
+        &mut self,
+        controller_mode: impl Into<String>,
+        last_tick: impl Into<String>,
+    ) {
+        self.online_diagnostic_controller_mode = controller_mode.into();
+        self.online_diagnostic_last_tick = last_tick.into();
+    }
+
+    pub fn clear_online_diagnostics(&mut self) {
+        self.online_diagnostic_controller_mode.clear();
+        self.online_diagnostic_last_tick.clear();
     }
 
     #[must_use]
@@ -2660,6 +2682,19 @@ impl GameState {
             self.online_descriptor_path.display()
         ));
         lines.push(self.online_session_status_message.clone());
+        lines.push(format!(
+            "Online diagnostics: controller={}, last tick={}",
+            if self.online_diagnostic_controller_mode.is_empty() {
+                "none"
+            } else {
+                self.online_diagnostic_controller_mode.as_str()
+            },
+            if self.online_diagnostic_last_tick.is_empty() {
+                "none"
+            } else {
+                self.online_diagnostic_last_tick.as_str()
+            }
+        ));
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
@@ -7464,6 +7499,11 @@ mod tests {
             pending_lines
                 .iter()
                 .any(|line| line.contains("host owns the online save"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online diagnostics"))
         );
         assert!(
             pending_lines
