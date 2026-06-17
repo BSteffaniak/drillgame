@@ -315,6 +315,34 @@ fn spawned_online_cli_emits_serialized_host_descriptor() {
 }
 
 #[test]
+fn spawned_online_cli_inspects_descriptor_file() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let descriptor_path = temporary_descriptor_path("inspect-descriptor");
+    std::fs::write(
+        &descriptor_path,
+        r#"{"host_addr":"127.0.0.1:4242","server_name":"localhost","certificate_der":[1,2,3,4]}"#,
+    )
+    .expect("descriptor fixture writes");
+
+    let output = Command::new(binary)
+        .arg("--online-inspect-descriptor-file")
+        .arg(&descriptor_path)
+        .output()
+        .expect("descriptor inspection CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("descriptor inspection stdout is utf8");
+    assert!(stdout.contains("127.0.0.1:4242"));
+    assert!(stdout.contains("certificate_der_bytes"));
+    let _ignored = std::fs::remove_file(descriptor_path);
+}
+
+#[test]
 fn spawned_online_cli_prints_lan_qa_checklist_markdown() {
     let _lock = online_cli_test_lock();
     let binary = env!("CARGO_BIN_EXE_drillgame");

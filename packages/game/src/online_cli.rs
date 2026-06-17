@@ -1,4 +1,9 @@
-use std::{io::Write, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    io::Write,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +33,9 @@ pub enum OnlineCliAction {
         host_advertise_addr: SocketAddr,
         client_bind_addr: SocketAddr,
         ticks: u32,
+    },
+    InspectDescriptorFile {
+        path: PathBuf,
     },
     HostDescriptorJson,
     HostDescriptorFile {
@@ -125,6 +133,12 @@ where
                 });
             }
             "--online-host-descriptor-json" => return Some(OnlineCliAction::HostDescriptorJson),
+            "--online-inspect-descriptor-file" => {
+                let path = args.next()?;
+                return Some(OnlineCliAction::InspectDescriptorFile {
+                    path: PathBuf::from(path.as_ref()),
+                });
+            }
             "--online-host-descriptor-file" => {
                 let path = args.next()?;
                 return Some(OnlineCliAction::HostDescriptorFile {
@@ -224,6 +238,25 @@ pub struct LanQaCommandPlan {
     pub gameplay_join_command: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HostDescriptorInspection {
+    pub host_addr: SocketAddr,
+    pub server_name: String,
+    pub certificate_der_bytes: usize,
+    pub has_certificate_material: bool,
+}
+
+impl From<QuinnHostConnectionDescriptor> for HostDescriptorInspection {
+    fn from(descriptor: QuinnHostConnectionDescriptor) -> Self {
+        Self {
+            host_addr: descriptor.host_addr,
+            server_name: descriptor.server_name,
+            certificate_der_bytes: descriptor.certificate_der.len(),
+            has_certificate_material: !descriptor.certificate_der.is_empty(),
+        }
+    }
+}
+
 #[must_use]
 pub fn build_lan_qa_command_plan(
     descriptor_path: PathBuf,
@@ -316,7 +349,7 @@ pub fn build_lan_qa_checklist_markdown(plan: &LanQaCommandPlan) -> String {
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-inspect-descriptor-file <path>\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -358,6 +391,9 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
             ticks,
         ),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
+        OnlineCliAction::InspectDescriptorFile { path } => {
+            run_inspect_descriptor_file_cli_action(&path)
+        }
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
         OnlineCliAction::HostDescriptorFileOnAddr {
             path,
@@ -492,6 +528,14 @@ fn run_host_descriptor_json_cli_action() -> Result<String, String> {
         .connection_descriptor()
         .map_err(format_debug_error)?;
     serde_json::to_string(&descriptor).map_err(|error| error.to_string())
+}
+
+fn run_inspect_descriptor_file_cli_action(path: &Path) -> Result<String, String> {
+    let json = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let descriptor: QuinnHostConnectionDescriptor =
+        serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    let inspection = HostDescriptorInspection::from(descriptor);
+    serde_json::to_string_pretty(&inspection).map_err(format_debug_error)
 }
 
 fn run_host_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> {
@@ -1108,6 +1152,12 @@ mod tests {
             Some(OnlineCliAction::HostDescriptorJson)
         );
         assert_eq!(
+            parse_online_cli_action(["--online-inspect-descriptor-file", "/tmp/host.json"]),
+            Some(OnlineCliAction::InspectDescriptorFile {
+                path: PathBuf::from("/tmp/host.json")
+            })
+        );
+        assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-file", "/tmp/host.json"]),
             Some(OnlineCliAction::HostDescriptorFile {
                 path: PathBuf::from("/tmp/host.json")
@@ -1247,6 +1297,20 @@ mod tests {
         assert!(checklist.contains("Drillgame LAN Multiplayer QA Checklist"));
         assert!(checklist.contains("--online-host-gameplay-descriptor-file-on-addr"));
         assert!(checklist.contains("--online-join-gameplay-descriptor-file-on-addr"));
+    }
+
+    #[test]
+    fn descriptor_inspection_reports_address_and_certificate_size() {
+        let inspection = HostDescriptorInspection::from(QuinnHostConnectionDescriptor {
+            host_addr: "127.0.0.1:4242".parse().expect("host addr parses"),
+            server_name: "localhost".to_owned(),
+            certificate_der: vec![1, 2, 3],
+        });
+
+        assert_eq!(inspection.host_addr.to_string(), "127.0.0.1:4242");
+        assert_eq!(inspection.server_name, "localhost");
+        assert_eq!(inspection.certificate_der_bytes, 3);
+        assert!(inspection.has_certificate_material);
     }
 
     #[test]
