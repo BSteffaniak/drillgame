@@ -1450,6 +1450,10 @@ impl WorldState {
         self.active_drills.get(&player_id)
     }
 
+    pub fn active_drill_mut(&mut self, player_id: PlayerId) -> Option<&mut DrillState> {
+        self.active_drills.get_mut(&player_id)
+    }
+
     pub fn set_active_drill(&mut self, player_id: PlayerId, drill: Option<DrillState>) {
         if let Some(drill) = drill {
             self.active_drills.insert(player_id, drill);
@@ -1852,10 +1856,20 @@ impl WorldState {
                 if let Some((target, direction)) =
                     authoritative_mine_target(player, horizontal, drill_down)
                 {
-                    let initial_durability = self
-                        .terrain
-                        .tile(target)
-                        .map_or(1, |tile| tile.durability.max(1));
+                    let Some(tile) = self.terrain.tile(target) else {
+                        self.active_drills.remove(&player_id);
+                        return PlayerScopedCommandOutcome::Applied;
+                    };
+                    if tile.kind == TileKind::Air {
+                        self.active_drills.remove(&player_id);
+                        return PlayerScopedCommandOutcome::Applied;
+                    }
+                    let initial_durability = tile.durability.max(1);
+                    let seconds_per_chip = authoritative_drill_seconds_per_chip(
+                        tile.kind,
+                        player.drill_strength,
+                        direction,
+                    );
                     self.active_drills
                         .entry(player_id)
                         .and_modify(|drill| {
@@ -1864,11 +1878,20 @@ impl WorldState {
                                     target,
                                     direction,
                                     initial_durability,
+                                    seconds_per_chip,
                                 );
+                            } else {
+                                drill.initial_durability = initial_durability;
+                                drill.seconds_per_chip = seconds_per_chip;
                             }
                         })
                         .or_insert_with(|| {
-                            authoritative_drill_state(target, direction, initial_durability)
+                            authoritative_drill_state(
+                                target,
+                                direction,
+                                initial_durability,
+                                seconds_per_chip,
+                            )
                         });
                 } else {
                     self.active_drills.remove(&player_id);
@@ -2064,17 +2087,46 @@ fn authoritative_mine_target(
     }
 }
 
+fn authoritative_drill_seconds_per_chip(
+    kind: TileKind,
+    drill_strength: u8,
+    direction: DrillDirection,
+) -> f32 {
+    let base = match kind {
+        TileKind::Air => 0.0,
+        TileKind::Dirt => 0.09,
+        TileKind::Clay => 0.12,
+        TileKind::Stone => 0.15,
+        TileKind::HardRock | TileKind::Foundation => 0.19,
+        TileKind::Lava
+        | TileKind::Gas
+        | TileKind::ExplosivePocket
+        | TileKind::PressurePocket
+        | TileKind::MagmaVent => 0.08,
+        TileKind::Ore(_) => 0.16,
+        TileKind::Artifact(_) => 0.21,
+    };
+    let drill_bonus = 1.0 + f32::from(drill_strength.saturating_sub(1)) * 0.4;
+    let direction_penalty = if direction == DrillDirection::Down {
+        1.0
+    } else {
+        1.45
+    };
+    (base * direction_penalty / drill_bonus).max(0.045)
+}
+
 const fn authoritative_drill_state(
     target: TilePosition,
     direction: DrillDirection,
     initial_durability: u8,
+    seconds_per_chip: f32,
 ) -> DrillState {
     DrillState {
         target,
         direction,
         progress: 0.0,
         initial_durability,
-        seconds_per_chip: FIXED_DELTA_SECONDS,
+        seconds_per_chip,
         sound_timer: 0.0,
         dust_timer: 0.0,
     }
@@ -2281,6 +2333,14 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderWorldPlayerPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub local_to_view: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderViewportPlan {
     pub client_id: ClientId,
@@ -2370,14 +2430,6 @@ pub struct RenderFramePlan {
     pub players: Vec<PlayerSnapshot>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderWorldPlayerPresentation {
-    pub player_id: PlayerId,
-    pub x: f32,
-    pub y: f32,
-    pub local_to_view: bool,
-}
-
 impl RenderFramePlan {
     #[must_use]
     pub fn from_world_and_clients(
@@ -2456,14 +2508,22 @@ impl RenderFramePlan {
     pub fn world_player_presentations_for_view(
         &self,
         view: &ClientView,
+        prediction_plan: &PredictionPresentationPlan,
     ) -> Vec<RenderWorldPlayerPresentation> {
         self.players
             .iter()
-            .map(|player| RenderWorldPlayerPresentation {
-                player_id: player.player_id,
-                x: player.x,
-                y: player.y,
-                local_to_view: player.player_id == view.controlled_player_id,
+            .map(|player| {
+                let local_to_view = player.player_id == view.controlled_player_id;
+                let predicted = local_to_view
+                    .then_some(prediction_plan.local_movement)
+                    .flatten()
+                    .filter(|movement| movement.player_id == player.player_id);
+                RenderWorldPlayerPresentation {
+                    player_id: player.player_id,
+                    x: predicted.map_or(player.x, |movement| movement.x),
+                    y: predicted.map_or(player.y, |movement| movement.y),
+                    local_to_view,
+                }
             })
             .collect()
     }
@@ -3035,7 +3095,7 @@ pub struct RemotePlayerPresentation {
     pub extrapolated: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PredictionPresentationPlan {
     pub local_movement: Option<PredictedMovement>,
     pub correction: Option<ReconciledMovement>,
@@ -3631,6 +3691,7 @@ pub struct GameSession {
     pending_commands: BTreeMap<SimulationTick, Vec<SequencedPlayerCommand>>,
     pending_events: Vec<WorldEvent>,
     latest_local_movement_intent: Option<PlayerMovementIntent>,
+    latest_movement_intents: BTreeMap<PlayerId, PlayerMovementIntent>,
     latest_local_authoritative_commands: Vec<PlayerCommand>,
     remote_timing: RemoteTimingTuning,
 }
@@ -3758,6 +3819,7 @@ impl GameSession {
             pending_commands: BTreeMap::new(),
             pending_events: Vec::new(),
             latest_local_movement_intent: None,
+            latest_movement_intents: BTreeMap::new(),
             latest_local_authoritative_commands: Vec::new(),
             remote_timing: RemoteTimingTuning::from_latency_loss(0.0, 0.0),
         }
@@ -3835,7 +3897,7 @@ impl GameSession {
             .map(|view| {
                 (
                     view.client_id,
-                    frame_plan.world_player_presentations_for_view(view),
+                    frame_plan.world_player_presentations_for_view(view, prediction_plan),
                 )
             })
             .collect();
@@ -4161,7 +4223,9 @@ impl GameSession {
     pub fn accumulate_frame_delta(&mut self, delta_seconds: f32) -> u32 {
         self.simulation_accumulator += Duration::from_secs_f32(delta_seconds.max(0.0));
         let fixed_delta = Duration::from_nanos(1_000_000_000 / u64::from(SIMULATION_HZ));
-        let steps = self.simulation_accumulator.as_nanos() / fixed_delta.as_nanos();
+        let fixed_nanos = fixed_delta.as_nanos();
+        let tolerance_nanos = fixed_nanos / 1_000;
+        let steps = (self.simulation_accumulator.as_nanos() + tolerance_nanos) / fixed_nanos;
         let capped_steps = u32::try_from(steps).unwrap_or(u32::MAX);
         self.simulation_accumulator -= fixed_delta.saturating_mul(capped_steps);
         capped_steps
@@ -4414,25 +4478,37 @@ impl GameSession {
         self.sequence_client_commands(self.local_client_id, commands)
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "public command routing API takes ownership from input mapping producers"
+    )]
     pub fn route_local_player_commands(
         &mut self,
         commands: Vec<PlayerCommand>,
     ) -> Vec<SequencedPlayerCommand> {
+        let sequenced = self.sequence_local_commands(commands.clone());
+        self.remember_latest_movement_intents(&sequenced);
         self.latest_local_movement_intent = commands
             .iter()
             .rev()
             .find_map(PlayerMovementIntent::from_command);
         self.latest_local_authoritative_commands
             .clone_from(&commands);
-        self.sequence_local_commands(commands)
+        sequenced
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "public command routing API takes ownership from input mapping producers"
+    )]
     pub fn route_client_player_commands(
         &mut self,
         client_id: ClientId,
         source: CommandSource,
         commands: Vec<PlayerCommand>,
     ) -> SequencedCommandBatch {
+        let batch = self.sequence_client_commands_from_source(client_id, source, commands.clone());
+        self.remember_latest_movement_intents(&batch.commands);
         if client_id == self.local_client_id {
             self.latest_local_movement_intent = commands
                 .iter()
@@ -4441,7 +4517,7 @@ impl GameSession {
             self.latest_local_authoritative_commands
                 .clone_from(&commands);
         }
-        self.sequence_client_commands_from_source(client_id, source, commands)
+        batch
     }
 
     pub fn route_split_screen_player_commands(
@@ -4706,6 +4782,15 @@ impl GameSession {
     fn process_authoritative_drill_progress(&mut self) {
         let active_players: Vec<PlayerId> = self.world.active_drills.keys().copied().collect();
         for player_id in active_players {
+            let Some(drill) = self.world.active_drill_mut(player_id) else {
+                continue;
+            };
+            drill.progress += FIXED_DELTA_SECONDS / drill.seconds_per_chip;
+            if drill.progress < 1.0 {
+                continue;
+            }
+            drill.progress -= 1.0;
+
             let Some(target) = self.world.active_drill(player_id).map(|drill| drill.target) else {
                 continue;
             };
@@ -4793,11 +4878,11 @@ impl GameSession {
 
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
-        self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
         for _ in 0..fixed_steps {
             let tick = self.current_tick;
             self.command_network_session.set_current_tick(tick);
             self.process_authoritative_commands_for_tick(tick);
+            self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
             self.process_authoritative_drill_progress();
             self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
             self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
@@ -4853,35 +4938,26 @@ impl GameSession {
         input
     }
 
+    fn remember_latest_movement_intents(&mut self, commands: &[SequencedPlayerCommand]) {
+        for command in commands {
+            if let Some(intent) = PlayerMovementIntent::from_command(&command.command) {
+                self.latest_movement_intents
+                    .insert(command.player_id, intent);
+            }
+        }
+    }
+
     fn step_authoritative_movement_from_latest_intents(&mut self, delta_seconds: f32) {
-        let intents: Vec<(PlayerId, f32, bool)> = self
-            .clients
-            .values()
-            .filter_map(|client| {
-                let prediction = client.prediction();
-                prediction
-                    .unacknowledged_commands()
-                    .iter()
-                    .rev()
-                    .find_map(|command| {
-                        if let PlayerCommand::Movement {
-                            horizontal,
-                            thrust,
-                            drill_down: _,
-                        } = command.command
-                        {
-                            Some((command.player_id, horizontal, thrust))
-                        } else {
-                            None
-                        }
-                    })
-            })
+        let intents: Vec<(PlayerId, PlayerMovementIntent)> = self
+            .latest_movement_intents
+            .iter()
+            .map(|(player_id, intent)| (*player_id, *intent))
             .collect();
-        for (player_id, horizontal, thrust) in intents {
+        for (player_id, intent) in intents {
             let _step = self.world.step_authoritative_movement(
                 player_id,
-                horizontal,
-                thrust,
+                intent.horizontal,
+                intent.thrust,
                 delta_seconds,
             );
         }
@@ -6837,7 +6913,9 @@ mod tests {
             .iter()
             .find(|view| view.controlled_player_id == second_player)
             .expect("second player view exists");
-        let world_players = frame_plan.world_player_presentations_for_view(second_view);
+        let prediction_plan = super::PredictionPresentationPlan::default();
+        let world_players =
+            frame_plan.world_player_presentations_for_view(second_view, &prediction_plan);
         assert_eq!(world_players.len(), 2);
         assert!(
             world_players

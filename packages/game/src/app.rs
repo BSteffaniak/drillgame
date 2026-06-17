@@ -776,10 +776,9 @@ fn observe_multiplayer_scaffolding(session: &mut GameSession, delta_seconds: f32
         live_render_output.clipped_viewport_count(),
         live_render_output.hud_count(),
     );
-    let _world_player_presentations = render_frame_plan
-        .views
-        .first()
-        .map(|view| render_frame_plan.world_player_presentations_for_view(view));
+    let _world_player_presentations = render_frame_plan.views.first().map(|view| {
+        render_frame_plan.world_player_presentations_for_view(view, &prediction_presentation_plan)
+    });
     let _render_hud_snapshots = render_frame_plan.hud_snapshots();
     let _client_presentation_snapshots = render_frame_plan.client_presentation_snapshots();
     let _survival_snapshots = render_frame_plan.survival_snapshots();

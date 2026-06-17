@@ -347,9 +347,22 @@ pub(super) fn draw_scanner_marks(
     reason = "player rendering includes upgrade visual variants"
 )]
 pub(super) fn draw_player(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
+    draw_player_at(draw, game, game.player.x, game.player.y);
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "player rendering includes upgrade visual variants"
+)]
+pub(super) fn draw_player_at(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+    player_x: f32,
+    player_y: f32,
+) {
     let (offset_x, offset_y) = drill_visual_offset(game);
-    let screen_x = game.player.x + offset_x;
-    let screen_y = game.player.y + offset_y;
+    let screen_x = player_x + offset_x;
+    let screen_y = player_y + offset_y;
 
     let hull_color = if game.player.hull < game.player.max_hull() * 0.3 {
         Color::new(210, 95, 60, 255)

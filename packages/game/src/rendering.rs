@@ -56,6 +56,18 @@ fn centered_camera_for_player(
     )
 }
 
+fn draw_local_player_override(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+    world_players: &[crate::session::RenderWorldPlayerPresentation],
+) {
+    if let Some(player) = world_players.iter().find(|player| player.local_to_view) {
+        world::draw_player_at(draw, game, player.x, player.y);
+    } else {
+        draw_player(draw, game);
+    }
+}
+
 impl GameRenderer {
     #[must_use]
     #[allow(
@@ -222,7 +234,7 @@ impl GameRenderer {
                 );
             }
 
-            draw_player(&mut world_draw, game);
+            draw_local_player_override(&mut world_draw, game, world_players);
             for player in world_players {
                 if !player.local_to_view {
                     world::draw_remote_player(&mut world_draw, player.x, player.y);
