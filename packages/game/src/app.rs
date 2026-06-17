@@ -1031,6 +1031,7 @@ mod tests {
         );
 
         let mut join_session = GameSession::new();
+        join_session.game_mut().online_player_name = "Client QA".to_owned();
         join_session.game_mut().online_local_ready = true;
         join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
         assert!(
@@ -1040,6 +1041,7 @@ mod tests {
                 .contains("Descriptor client sent live command tick")
         );
         let mut host_session = GameSession::new();
+        host_session.game_mut().online_player_name = "Host QA".to_owned();
         host_session.game_mut().online_local_ready = true;
         host_session.game_mut().run_mode = RunMode::Playing;
         host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
@@ -1050,6 +1052,10 @@ mod tests {
                 .contains("command=true")
         );
         assert!(host_session.game().online_remote_player_ready);
+        assert_eq!(
+            host_session.game().online_remote_player_name.as_deref(),
+            Some("Client QA")
+        );
         assert_eq!(
             host_session.game().online_diagnostic_controller_mode,
             "descriptor-host-accepted"
@@ -1068,6 +1074,10 @@ mod tests {
                 .contains("received")
         );
         assert!(join_session.game().online_remote_player_ready);
+        assert_eq!(
+            join_session.game().online_remote_player_name.as_deref(),
+            Some("Host QA")
+        );
         assert_eq!(join_session.game().run_mode, RunMode::Playing);
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,

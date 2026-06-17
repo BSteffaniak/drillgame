@@ -841,7 +841,8 @@ impl ClientSessionRuntime {
             ProtocolMessage::SnapshotKeyframe { snapshot } => {
                 self.latest_authoritative_tick = snapshot.tick;
             }
-            ProtocolMessage::ReadyState { .. }
+            ProtocolMessage::PlayerIdentity { .. }
+            | ProtocolMessage::ReadyState { .. }
             | ProtocolMessage::StartSession { .. }
             | ProtocolMessage::SessionEnded { .. } => {}
             other => self.pending_messages.push(other),
@@ -3434,6 +3435,10 @@ pub enum ProtocolMessage {
     CommandPacket(CommandPacket),
     CommandAcknowledgement(CommandAcknowledgement),
     CommandRejection(CommandRejection),
+    PlayerIdentity {
+        player_id: PlayerId,
+        name: String,
+    },
     ReadyState {
         player_id: PlayerId,
         ready: bool,
@@ -3475,6 +3480,7 @@ impl ProtocolMessage {
             | Self::ReconnectRequest { .. }
             | Self::CommandAcknowledgement(_)
             | Self::CommandRejection(_)
+            | Self::PlayerIdentity { .. }
             | Self::ReadyState { .. }
             | Self::StartSession { .. }
             | Self::SessionEnded { .. }

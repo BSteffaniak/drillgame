@@ -572,6 +572,8 @@ impl RealOnlineSessionController {
         let command_summary = self
             .descriptor_host_try_receive_command_packet(Duration::from_millis(1))
             .await?;
+        self.descriptor_host_send_player_identity(&game.online_player_name)
+            .await?;
         self.descriptor_host_send_ready_state(game.online_local_ready)
             .await?;
         self.descriptor_host_try_receive_ready_state(game, Duration::from_millis(1))
@@ -636,6 +638,8 @@ impl RealOnlineSessionController {
         } else {
             false
         };
+        self.descriptor_client_send_player_identity(&game.online_player_name)
+            .await?;
         self.descriptor_client_send_ready_state(game.online_local_ready)
             .await?;
         if command_sent {
@@ -649,6 +653,28 @@ impl RealOnlineSessionController {
             });
         }
         Ok(summary)
+    }
+
+    pub async fn descriptor_host_send_player_identity(
+        &mut self,
+        name: &str,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::PlayerIdentity {
+                    player_id: crate::multiplayer::PlayerId::new(1),
+                    name: name.to_owned(),
+                },
+            ))
+            .await?;
+        Ok(())
     }
 
     pub async fn descriptor_host_send_ready_state(
@@ -685,25 +711,38 @@ impl RealOnlineSessionController {
                 ),
             );
         };
-        let received = match tokio::time::timeout(timeout, host_io.receive_reliable_packet()).await
-        {
-            Ok(Ok(packet)) => packet,
-            Ok(Err(error)) => return Err(error.into()),
-            Err(_) => return Ok(false),
-        };
-        match received.decode_supported().map_err(|error| {
-            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
-                "unsupported protocol version: expected {}, actual {}",
-                error.expected, error.actual
-            ))
-        })? {
-            crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
-                game.online_remote_player_ready = ready;
-                game.online_remote_player_connected = true;
-                Ok(true)
+        let mut received_any = false;
+        for _ in 0..4 {
+            let received =
+                match tokio::time::timeout(timeout, host_io.receive_reliable_packet()).await {
+                    Ok(Ok(packet)) => packet,
+                    Ok(Err(error)) => return Err(error.into()),
+                    Err(_) => break,
+                };
+            match received.decode_supported().map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })? {
+                crate::multiplayer::ProtocolMessage::PlayerIdentity { name, .. } => {
+                    game.online_remote_player_name = Some(name);
+                    game.online_remote_player_connected = true;
+                    received_any = true;
+                }
+                crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
+                    game.online_remote_player_ready = ready;
+                    game.online_remote_player_connected = true;
+                    received_any = true;
+                }
+                other => {
+                    return Err(
+                        crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other),
+                    );
+                }
             }
-            other => Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other)),
         }
+        Ok(received_any)
     }
 
     pub async fn descriptor_host_send_start_session(
@@ -741,6 +780,29 @@ impl RealOnlineSessionController {
             .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
                 crate::multiplayer::ProtocolMessage::SessionEnded {
                     reason: reason.to_owned(),
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn descriptor_client_send_player_identity(
+        &mut self,
+        name: &str,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected { packet_io, .. } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::PlayerIdentity {
+                    player_id: crate::multiplayer::PlayerId::new(2),
+                    name: name.to_owned(),
                 },
             ))
             .await?;
@@ -843,6 +905,10 @@ impl RealOnlineSessionController {
                         ))
                     })?;
                     match message {
+                        crate::multiplayer::ProtocolMessage::PlayerIdentity { name, .. } => {
+                            game.online_remote_player_name = Some(name);
+                            game.online_remote_player_connected = true;
+                        }
                         crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
                             game.online_remote_player_ready = ready;
                             game.online_remote_player_connected = true;
