@@ -202,3 +202,21 @@ fn spawned_online_cli_runs_local_smoke() {
     let stdout = String::from_utf8(output.stdout).expect("smoke stdout is utf8");
     assert!(stdout.contains("local online smoke passed"));
 }
+
+#[test]
+fn spawned_online_cli_runs_latency_loss_playtest() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .arg("--online-latency-loss-playtest")
+        .output()
+        .expect("online latency/loss playtest CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("playtest stdout is utf8");
+    assert!(stdout.contains("scripted latency/loss online playtest passed"));
+}

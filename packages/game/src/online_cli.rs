@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::multiplayer::{
     QuinnClientConnector, QuinnEndpointConfig, QuinnHostConnectionDescriptor, QuinnHostListener,
-    local_online_smoke_summary,
+    local_online_smoke_summary, scripted_latency_loss_online_playtest_summary,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineCliAction {
     LocalSmoke,
+    LatencyLossPlaytest,
     HostDescriptorJson,
     HostDescriptorFile { path: PathBuf },
     JoinDescriptorFile { path: PathBuf },
@@ -27,6 +28,9 @@ where
     while let Some(arg) = args.next() {
         match arg.as_ref() {
             "--online-local-smoke" => return Some(OnlineCliAction::LocalSmoke),
+            "--online-latency-loss-playtest" => {
+                return Some(OnlineCliAction::LatencyLossPlaytest);
+            }
             "--online-host-descriptor-json" => return Some(OnlineCliAction::HostDescriptorJson),
             "--online-host-descriptor-file" => {
                 let path = args.next()?;
@@ -76,6 +80,7 @@ where
 pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> {
     match action {
         OnlineCliAction::LocalSmoke => run_local_smoke_cli_action(),
+        OnlineCliAction::LatencyLossPlaytest => run_latency_loss_playtest_cli_action(),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
         OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
@@ -104,6 +109,18 @@ fn run_local_smoke_cli_action() -> Result<String, String> {
         Ok("local online smoke passed".to_owned())
     } else {
         Err("local online smoke did not satisfy all readiness checks".to_owned())
+    }
+}
+
+fn run_latency_loss_playtest_cli_action() -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    let summary = runtime
+        .block_on(scripted_latency_loss_online_playtest_summary())
+        .map_err(format_debug_error)?;
+    if summary.passed() {
+        Ok("scripted latency/loss online playtest passed".to_owned())
+    } else {
+        Err("scripted latency/loss online playtest did not satisfy all readiness checks".to_owned())
     }
 }
 
@@ -594,6 +611,10 @@ mod tests {
         assert_eq!(
             parse_online_cli_action(["--online-local-smoke"]),
             Some(OnlineCliAction::LocalSmoke)
+        );
+        assert_eq!(
+            parse_online_cli_action(["--online-latency-loss-playtest"]),
+            Some(OnlineCliAction::LatencyLossPlaytest)
         );
         assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-json"]),

@@ -2595,6 +2595,34 @@ impl HighLatencySimulationSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ScriptedLatencyLossCoverage {
+    RealSocketSmoke,
+    LatencyJitterLoss,
+    Soak,
+    Reconnect,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScriptedLatencyLossOnlinePlaytestSummary {
+    pub covered: BTreeSet<ScriptedLatencyLossCoverage>,
+}
+
+impl ScriptedLatencyLossOnlinePlaytestSummary {
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.covered
+            .contains(&ScriptedLatencyLossCoverage::RealSocketSmoke)
+            && self
+                .covered
+                .contains(&ScriptedLatencyLossCoverage::LatencyJitterLoss)
+            && self.covered.contains(&ScriptedLatencyLossCoverage::Soak)
+            && self
+                .covered
+                .contains(&ScriptedLatencyLossCoverage::Reconnect)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransportImplementationDecision {
     pub concrete_need_exists: bool,
@@ -2979,6 +3007,32 @@ pub fn network_soak_summary() -> NetworkSoakSummary {
         dropped_packets: adapter.dropped_count(),
         max_pending_packets,
     }
+}
+
+/// Run the automated latency/loss playtest used to gate the direct-connect MVP.
+///
+/// # Errors
+///
+/// Returns a Quinn session error if the localhost real-socket smoke session cannot be established.
+pub async fn scripted_latency_loss_online_playtest_summary()
+-> Result<ScriptedLatencyLossOnlinePlaytestSummary, QuinnOnlineSessionError> {
+    let smoke = local_online_smoke_summary().await?;
+    let latency = high_latency_simulation_summary();
+    let soak = network_soak_summary();
+    let mut covered = BTreeSet::new();
+    if smoke.passed() {
+        covered.insert(ScriptedLatencyLossCoverage::RealSocketSmoke);
+    }
+    if latency.exercised_latency_jitter_loss() {
+        covered.insert(ScriptedLatencyLossCoverage::LatencyJitterLoss);
+    }
+    if soak.covers_latency_jitter_loss_bandwidth_and_duration() {
+        covered.insert(ScriptedLatencyLossCoverage::Soak);
+    }
+    if smoke.reconnected {
+        covered.insert(ScriptedLatencyLossCoverage::Reconnect);
+    }
+    Ok(ScriptedLatencyLossOnlinePlaytestSummary { covered })
 }
 
 #[must_use]
@@ -3623,9 +3677,9 @@ mod tests {
         NetworkPlayerSnapshot, NetworkWorldSnapshot, PacketIo, PlayerCommand, PlayerId,
         ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage, QuinnClientConnector,
         QuinnEndpointConfig, QuinnHostListener, QuinnLocalEndpointPair, QuinnPacketIo,
-        QuinnSocketBackend, ReliabilityClass, SequencedPlayerCommand, SessionToken, SimulationTick,
-        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
-        connect_localhost_quinn_session, connect_split_localhost_quinn_session,
+        QuinnSocketBackend, ReliabilityClass, ScriptedLatencyLossCoverage, SequencedPlayerCommand,
+        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
+        command_conflicts, connect_localhost_quinn_session, connect_split_localhost_quinn_session,
         connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
@@ -3634,10 +3688,11 @@ mod tests {
         packet_recovery_action, per_client_ui_policy, production_transport_selection,
         pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
         reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
-        selected_transport_backend, session_continuity_decision, session_shutdown_decision,
-        terrain_recovery_decision, transport_fault_coverage_summary,
-        transport_implementation_decision, transport_integration_status,
-        transport_reliability_mapping, unsupported_production_networking_items,
+        scripted_latency_loss_online_playtest_summary, selected_transport_backend,
+        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
+        transport_fault_coverage_summary, transport_implementation_decision,
+        transport_integration_status, transport_reliability_mapping,
+        unsupported_production_networking_items,
     };
 
     #[test]
@@ -4590,6 +4645,31 @@ mod tests {
         assert!(faults.covers_faults());
         assert!(recovery.covers_recovery());
         assert!(latency.exercised_latency_jitter_loss());
+    }
+
+    #[tokio::test]
+    async fn scripted_latency_loss_online_playtest_covers_real_socket_and_degraded_network() {
+        let summary = scripted_latency_loss_online_playtest_summary()
+            .await
+            .expect("scripted online playtest runs");
+
+        assert!(summary.passed());
+        assert!(
+            summary
+                .covered
+                .contains(&ScriptedLatencyLossCoverage::RealSocketSmoke)
+        );
+        assert!(
+            summary
+                .covered
+                .contains(&ScriptedLatencyLossCoverage::LatencyJitterLoss)
+        );
+        assert!(summary.covered.contains(&ScriptedLatencyLossCoverage::Soak));
+        assert!(
+            summary
+                .covered
+                .contains(&ScriptedLatencyLossCoverage::Reconnect)
+        );
     }
 
     #[test]
