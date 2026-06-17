@@ -1756,8 +1756,19 @@ impl GameState {
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
         lines.push(self.online_session_status_message.clone());
+        lines.extend(Self::online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
+    }
+
+    #[must_use]
+    pub fn online_direct_connect_setup_lines() -> Vec<String> {
+        vec![
+            "Direct-connect host setup: choose a UDP port, then share the generated descriptor with the joining player.".to_owned(),
+            "Host CLI helper: drillgame --online-host-gameplay-descriptor-file-on-addr <descriptor.json> 0.0.0.0:<port> <host-lan-ip>:<port> <ticks>".to_owned(),
+            "Join CLI helper: drillgame --online-join-gameplay-descriptor-file-on-addr <descriptor.json> 0.0.0.0:0 <ticks>".to_owned(),
+            "QA helper: drillgame --online-lan-qa-checklist-md <descriptor.json> 0.0.0.0:<port> <host-lan-ip>:<port> 0.0.0.0:0 <ticks>".to_owned(),
+        ]
     }
 
     #[must_use]
@@ -6122,6 +6133,16 @@ mod tests {
                 .any(|line| line.contains("JoinDirectConnect"))
         );
         assert!(pending_lines.iter().any(|line| line.contains("Joining")));
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Direct-connect host setup"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("online-lan-qa-checklist-md"))
+        );
         assert!(
             !pending_lines
                 .iter()
