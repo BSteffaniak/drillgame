@@ -62,6 +62,7 @@ Multiplayer support now has validated local split-screen and direct-connect onli
 - the selected production transport is Quinn/QUIC, with real localhost socket IO for direct-connect host/join/reconnect, commands, snapshots, deltas, terrain chunks, and correction coverage
 - Online Multiplayer UI state reflects real queued host/join/reconnect tasks, Quinn lifecycle outcomes, slot assignment, and host-owned save authority
 - executable online checks are available:
+  - `cargo run --bin drillgame -- --online-help`
   - `cargo run --bin drillgame -- --online-local-smoke`
   - `cargo run --bin drillgame -- --online-latency-loss-playtest`
   - `cargo run --bin drillgame -- --online-production-acceptance`

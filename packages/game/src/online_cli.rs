@@ -10,6 +10,7 @@ use crate::multiplayer::{
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineCliAction {
+    Help,
     LocalSmoke,
     LatencyLossPlaytest,
     ProductionAcceptance,
@@ -30,6 +31,7 @@ where
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_ref() {
+            "--online-help" => return Some(OnlineCliAction::Help),
             "--online-local-smoke" => return Some(OnlineCliAction::LocalSmoke),
             "--online-latency-loss-playtest" => {
                 return Some(OnlineCliAction::LatencyLossPlaytest);
@@ -81,6 +83,11 @@ where
     None
 }
 
+#[must_use]
+pub const fn online_cli_usage() -> &'static str {
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
+}
+
 /// Execute a one-shot online CLI action.
 ///
 /// # Errors
@@ -88,6 +95,7 @@ where
 /// Returns an error when the Tokio runtime cannot be created, Quinn setup fails, or smoke checks fail.
 pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> {
     match action {
+        OnlineCliAction::Help => Ok(online_cli_usage().to_owned()),
         OnlineCliAction::LocalSmoke => run_local_smoke_cli_action(),
         OnlineCliAction::LatencyLossPlaytest => run_latency_loss_playtest_cli_action(),
         OnlineCliAction::ProductionAcceptance => run_production_acceptance_cli_action(),
@@ -642,6 +650,10 @@ mod tests {
 
     #[test]
     fn online_cli_parser_recognizes_local_smoke_and_descriptor_actions() {
+        assert_eq!(
+            parse_online_cli_action(["--online-help"]),
+            Some(OnlineCliAction::Help)
+        );
         assert_eq!(
             parse_online_cli_action(["--online-local-smoke"]),
             Some(OnlineCliAction::LocalSmoke)

@@ -186,6 +186,25 @@ fn spawned_online_cli_emits_serialized_host_descriptor() {
 }
 
 #[test]
+fn spawned_online_cli_prints_help() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .arg("--online-help")
+        .output()
+        .expect("online help CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("online help stdout is utf8");
+    assert!(stdout.contains("Online multiplayer CLI actions"));
+    assert!(stdout.contains("--online-production-acceptance-json"));
+}
+
+#[test]
 fn spawned_online_cli_runs_local_smoke() {
     let _lock = online_cli_test_lock();
     let binary = env!("CARGO_BIN_EXE_drillgame");
