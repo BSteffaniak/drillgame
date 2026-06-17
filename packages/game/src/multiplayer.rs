@@ -841,6 +841,7 @@ impl ClientSessionRuntime {
             ProtocolMessage::SnapshotKeyframe { snapshot } => {
                 self.latest_authoritative_tick = snapshot.tick;
             }
+            ProtocolMessage::ReadyState { .. } => {}
             other => self.pending_messages.push(other),
         }
     }
@@ -3431,6 +3432,10 @@ pub enum ProtocolMessage {
     CommandPacket(CommandPacket),
     CommandAcknowledgement(CommandAcknowledgement),
     CommandRejection(CommandRejection),
+    ReadyState {
+        player_id: PlayerId,
+        ready: bool,
+    },
     SnapshotKeyframe {
         snapshot: NetworkWorldSnapshot,
     },
@@ -3462,6 +3467,7 @@ impl ProtocolMessage {
             | Self::ReconnectRequest { .. }
             | Self::CommandAcknowledgement(_)
             | Self::CommandRejection(_)
+            | Self::ReadyState { .. }
             | Self::TerrainChunkRequest { .. }
             | Self::TerrainChunkResponse { .. } => ReliabilityClass::Reliable,
         }
