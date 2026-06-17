@@ -1091,6 +1091,12 @@ mod tests {
                 .online_last_replication_status
                 .contains("received")
         );
+        assert!(
+            join_session
+                .game()
+                .online_last_replicated_player_status
+                .contains("tick")
+        );
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,
             "descriptor-client-connected"

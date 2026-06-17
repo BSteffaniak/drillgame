@@ -970,6 +970,18 @@ impl RealOnlineSessionController {
                 match message {
                     crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
                         let tick = snapshot.tick.get();
+                        if let Some(player) = snapshot.players.first() {
+                            game.apply_online_replicated_player_status(format!(
+                                "tick {tick}: player {} pos=({:.1},{:.1}) fuel={:.0} hull={:.0} credits={} cargo={}",
+                                player.player_id.get(),
+                                player.x,
+                                player.y,
+                                player.fuel,
+                                player.hull,
+                                player.credits,
+                                player.cargo_used
+                            ));
+                        }
                         client_runtime.handle_message(
                             crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot },
                         );
@@ -980,12 +992,32 @@ impl RealOnlineSessionController {
                     }
                     crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload } => {
                         let tick_value = tick.get();
+                        let delta_status = match &payload {
+                            crate::multiplayer::NetworkDeltaPayload::Noop => {
+                                format!("tick {tick_value}: noop delta")
+                            }
+                            crate::multiplayer::NetworkDeltaPayload::TerrainChunks {
+                                revisions,
+                            } => {
+                                format!(
+                                    "tick {tick_value}: {} terrain chunk revision(s)",
+                                    revisions.len()
+                                )
+                            }
+                            crate::multiplayer::NetworkDeltaPayload::Players { players } => {
+                                format!("tick {tick_value}: {} player delta(s)", players.len())
+                            }
+                            crate::multiplayer::NetworkDeltaPayload::KeyframeRequired => {
+                                format!("tick {tick_value}: keyframe required")
+                            }
+                        };
                         client_runtime.handle_message(
                             crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload },
                         );
                         game.apply_online_replication_status(format!(
                             "world delta tick {tick_value} received"
                         ));
+                        game.apply_online_replicated_player_status(delta_status);
                         received_count += 1;
                     }
                     other => {
@@ -2169,6 +2201,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_replication_status: String,
     #[serde(default)]
+    pub online_last_replicated_player_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -2411,6 +2445,7 @@ impl GameState {
             online_diagnostic_controller_mode: String::new(),
             online_diagnostic_last_tick: String::new(),
             online_last_replication_status: String::new(),
+            online_last_replicated_player_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -2854,10 +2889,15 @@ impl GameState {
         self.online_last_replication_status = status.into();
     }
 
+    pub fn apply_online_replicated_player_status(&mut self, status: impl Into<String>) {
+        self.online_last_replicated_player_status = status.into();
+    }
+
     pub fn clear_online_diagnostics(&mut self) {
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
         self.online_last_replication_status.clear();
+        self.online_last_replicated_player_status.clear();
     }
 
     #[must_use]
@@ -2971,6 +3011,14 @@ impl GameState {
                 "none"
             } else {
                 self.online_last_replication_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online replicated player: {}",
+            if self.online_last_replicated_player_status.is_empty() {
+                "none"
+            } else {
+                self.online_last_replicated_player_status.as_str()
             }
         ));
         lines.push(self.online_save_policy_line());
@@ -7818,6 +7866,11 @@ mod tests {
             pending_lines
                 .iter()
                 .any(|line| line.contains("Online replication"))
+        );
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("Online replicated player"))
         );
         assert!(
             pending_lines
