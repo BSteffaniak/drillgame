@@ -132,10 +132,34 @@ impl OnlineTaskDispatcher {
 
         match request {
             OnlineNetworkTaskRequest::HostDirectConnect
-            | OnlineNetworkTaskRequest::JoinDirectConnect
-            | OnlineNetworkTaskRequest::HostDescriptorFile { .. }
-            | OnlineNetworkTaskRequest::JoinDescriptorFile { .. } => {
+            | OnlineNetworkTaskRequest::JoinDirectConnect => {
                 self.spawn_connect();
+            }
+            OnlineNetworkTaskRequest::HostDescriptorFile { path } => {
+                game.online_session_status_message = format!(
+                    "Host descriptor path selected: {}. Starting local Quinn controller while descriptor hosting is productized.",
+                    path.display()
+                );
+                self.spawn_connect();
+            }
+            OnlineNetworkTaskRequest::JoinDescriptorFile { path } => {
+                match std::fs::read_to_string(&path)
+                    .map_err(|error| error.to_string())
+                    .and_then(|json| {
+                        serde_json::from_str::<crate::multiplayer::QuinnHostConnectionDescriptor>(
+                            &json,
+                        )
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                    }) {
+                    Ok(()) => self.spawn_connect(),
+                    Err(error) => game.apply_online_network_task_result(
+                        OnlineNetworkTaskResult::Failed(format!(
+                            "Descriptor file {} could not be used: {error}",
+                            path.display()
+                        )),
+                    ),
+                }
             }
             OnlineNetworkTaskRequest::ReconnectDirectConnect => {
                 if let Some(controller) = self.controller.take() {
@@ -755,6 +779,22 @@ mod tests {
         dispatcher.drain_and_execute(&mut game);
 
         assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+    }
+
+    #[test]
+    fn online_task_dispatcher_reports_missing_join_descriptor_file() {
+        let mut game = GameState::new();
+        let mut dispatcher = OnlineTaskDispatcher::new();
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+            path: std::path::PathBuf::from("/tmp/drillgame-missing-join-descriptor.json"),
+        });
+
+        dispatcher.drain_and_execute(&mut game);
+
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert!(game.message.contains("host descriptor could not be read"));
+        assert!(game.message.contains("descriptor file/path"));
+        assert!(game.online_network_task_request.is_none());
     }
 
     #[test]
