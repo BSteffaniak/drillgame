@@ -3131,6 +3131,16 @@ impl GameState {
                 .as_ref()
                 .map_or_else(|| "none".to_owned(), |modal| format!("{modal:?}"))
         ));
+        lines.push(format!(
+            "Online save boundary: dirty={} local_write_allowed={} request_exit={}",
+            if self.save_dirty { "yes" } else { "no" },
+            if self.can_write_local_save() {
+                "yes"
+            } else {
+                "no"
+            },
+            if self.request_exit { "yes" } else { "no" }
+        ));
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
@@ -8001,6 +8011,11 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
+                .any(|line| line.contains("Online save boundary"))
+        );
+        assert!(
+            pending_lines
+                .iter()
                 .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
@@ -8249,6 +8264,48 @@ mod tests {
             status_message: "Connected as host.".to_owned(),
         });
         assert!(game.online_save_policy_line().contains("allowed"));
+    }
+
+    #[test]
+    fn joined_online_client_unsaved_exit_save_choice_is_blocked_with_message() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = false;
+        game.save_dirty = true;
+
+        game.request_exit_or_prompt();
+        assert_eq!(game.modal, Some(ModalScreen::UnsavedExitConfirm));
+        game.selected_menu_item = 0;
+        let handled = game.handle_exit_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+
+        assert!(handled);
+        assert!(!game.request_exit);
+        assert!(game.save_dirty);
+        assert!(game.message.contains("Save blocked"));
+        assert_eq!(game.modal, Some(ModalScreen::UnsavedExitConfirm));
+    }
+
+    #[test]
+    fn host_owned_online_unsaved_exit_discard_can_request_exit() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.save_dirty = true;
+
+        game.request_exit_or_prompt();
+        assert_eq!(game.modal, Some(ModalScreen::UnsavedExitConfirm));
+        game.selected_menu_item = 1;
+        let handled = game.handle_exit_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+
+        assert!(handled);
+        assert!(game.request_exit);
+        assert!(game.save_dirty);
     }
 
     #[test]
