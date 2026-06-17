@@ -2596,6 +2596,52 @@ impl HighLatencySimulationSummary {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ProductionOnlineAcceptanceCoverage {
+    DirectConnectTransport,
+    StableHostAssignedSlot,
+    RemoteCommands,
+    SnapshotDeltaAndTerrainReplication,
+    RealCorrection,
+    Reconnect,
+    ShutdownLifecycle,
+    ScriptedLatencyLoss,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionOnlineAcceptanceSummary {
+    pub covered: BTreeSet<ProductionOnlineAcceptanceCoverage>,
+}
+
+impl ProductionOnlineAcceptanceSummary {
+    #[must_use]
+    pub fn direct_connect_mvp_passed(&self) -> bool {
+        self.covered
+            .contains(&ProductionOnlineAcceptanceCoverage::DirectConnectTransport)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::StableHostAssignedSlot)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::RemoteCommands)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::SnapshotDeltaAndTerrainReplication)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::RealCorrection)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::Reconnect)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::ShutdownLifecycle)
+            && self
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::ScriptedLatencyLoss)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ScriptedLatencyLossCoverage {
     RealSocketSmoke,
     LatencyJitterLoss,
@@ -3033,6 +3079,45 @@ pub async fn scripted_latency_loss_online_playtest_summary()
         covered.insert(ScriptedLatencyLossCoverage::Reconnect);
     }
     Ok(ScriptedLatencyLossOnlinePlaytestSummary { covered })
+}
+
+/// Run the automated direct-connect production-online acceptance report.
+///
+/// # Errors
+///
+/// Returns a Quinn session error if the localhost real-socket session cannot be established.
+pub async fn production_online_acceptance_summary()
+-> Result<ProductionOnlineAcceptanceSummary, QuinnOnlineSessionError> {
+    let smoke = local_online_smoke_summary().await?;
+    let lifecycle = connection_lifecycle_summary();
+    let scripted = scripted_latency_loss_online_playtest_summary().await?;
+    let mut covered = BTreeSet::new();
+    if smoke.joined {
+        covered.insert(ProductionOnlineAcceptanceCoverage::DirectConnectTransport);
+        covered.insert(ProductionOnlineAcceptanceCoverage::StableHostAssignedSlot);
+    }
+    if smoke.tick.summary.command_summary.is_some() {
+        covered.insert(ProductionOnlineAcceptanceCoverage::RemoteCommands);
+    }
+    if smoke.tick.summary.snapshot_replicated
+        && smoke.tick.summary.delta_replicated
+        && smoke.tick.summary.terrain_chunk_response.is_some()
+    {
+        covered.insert(ProductionOnlineAcceptanceCoverage::SnapshotDeltaAndTerrainReplication);
+    }
+    if smoke.tick.summary.correction_summary.is_some() {
+        covered.insert(ProductionOnlineAcceptanceCoverage::RealCorrection);
+    }
+    if smoke.reconnected {
+        covered.insert(ProductionOnlineAcceptanceCoverage::Reconnect);
+    }
+    if lifecycle.covers_host_join_disconnect_reconnect_shutdown() {
+        covered.insert(ProductionOnlineAcceptanceCoverage::ShutdownLifecycle);
+    }
+    if scripted.passed() {
+        covered.insert(ProductionOnlineAcceptanceCoverage::ScriptedLatencyLoss);
+    }
+    Ok(ProductionOnlineAcceptanceSummary { covered })
 }
 
 #[must_use]
@@ -3675,24 +3760,25 @@ mod tests {
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
         InMemoryTransportQueues, InputSequence, LOCAL_CLIENT_ID, NetworkDeltaPayload,
         NetworkPlayerSnapshot, NetworkWorldSnapshot, PacketIo, PlayerCommand, PlayerId,
-        ProductionPacketChannel, ProductionQuicPacketIo, ProtocolMessage, QuinnClientConnector,
-        QuinnEndpointConfig, QuinnHostListener, QuinnLocalEndpointPair, QuinnPacketIo,
-        QuinnSocketBackend, ReliabilityClass, ScriptedLatencyLossCoverage, SequencedPlayerCommand,
-        SessionToken, SimulationTick, VersionedProtocolPacket, client_authority_allowed,
-        command_conflicts, connect_localhost_quinn_session, connect_split_localhost_quinn_session,
+        ProductionOnlineAcceptanceCoverage, ProductionPacketChannel, ProductionQuicPacketIo,
+        ProtocolMessage, QuinnClientConnector, QuinnEndpointConfig, QuinnHostListener,
+        QuinnLocalEndpointPair, QuinnPacketIo, QuinnSocketBackend, ReliabilityClass,
+        ScriptedLatencyLossCoverage, SequencedPlayerCommand, SessionToken, SimulationTick,
+        VersionedProtocolPacket, client_authority_allowed, command_conflicts,
+        connect_localhost_quinn_session, connect_split_localhost_quinn_session,
         connection_lifecycle_summary, default_local_client_runtime, disconnect_reservation_policy,
         high_latency_simulation_summary, host_save_decision, initial_collision_policy,
         initial_discovery_sharing_policy, initial_message_routing_policy,
         initial_resource_ownership_policy, initial_transport_policy, lobby_session_ux_flow,
         local_online_smoke_summary, network_soak_summary, packet_io_recovery_summary,
-        packet_recovery_action, per_client_ui_policy, production_transport_selection,
-        pump_in_memory_runtime_packets, recovery_coverage_summary, reliable_join_exchange_messages,
-        reliable_reconnect_exchange_messages, scaffolded_edge_case_proof,
-        scripted_latency_loss_online_playtest_summary, selected_transport_backend,
-        session_continuity_decision, session_shutdown_decision, terrain_recovery_decision,
-        transport_fault_coverage_summary, transport_implementation_decision,
-        transport_integration_status, transport_reliability_mapping,
-        unsupported_production_networking_items,
+        packet_recovery_action, per_client_ui_policy, production_online_acceptance_summary,
+        production_transport_selection, pump_in_memory_runtime_packets, recovery_coverage_summary,
+        reliable_join_exchange_messages, reliable_reconnect_exchange_messages,
+        scaffolded_edge_case_proof, scripted_latency_loss_online_playtest_summary,
+        selected_transport_backend, session_continuity_decision, session_shutdown_decision,
+        terrain_recovery_decision, transport_fault_coverage_summary,
+        transport_implementation_decision, transport_integration_status,
+        transport_reliability_mapping, unsupported_production_networking_items,
     };
 
     #[test]
@@ -4669,6 +4755,40 @@ mod tests {
             summary
                 .covered
                 .contains(&ScriptedLatencyLossCoverage::Reconnect)
+        );
+    }
+
+    #[tokio::test]
+    async fn production_online_acceptance_summary_covers_direct_connect_mvp() {
+        let summary = production_online_acceptance_summary()
+            .await
+            .expect("production online acceptance runs");
+
+        assert!(summary.direct_connect_mvp_passed());
+        assert!(
+            summary
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::DirectConnectTransport)
+        );
+        assert!(
+            summary
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::StableHostAssignedSlot)
+        );
+        assert!(
+            summary
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::RemoteCommands)
+        );
+        assert!(
+            summary
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::SnapshotDeltaAndTerrainReplication)
+        );
+        assert!(
+            summary
+                .covered
+                .contains(&ProductionOnlineAcceptanceCoverage::RealCorrection)
         );
     }
 

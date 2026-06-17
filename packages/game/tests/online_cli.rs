@@ -220,3 +220,21 @@ fn spawned_online_cli_runs_latency_loss_playtest() {
     let stdout = String::from_utf8(output.stdout).expect("playtest stdout is utf8");
     assert!(stdout.contains("scripted latency/loss online playtest passed"));
 }
+
+#[test]
+fn spawned_online_cli_runs_production_acceptance() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .arg("--online-production-acceptance")
+        .output()
+        .expect("online production acceptance CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("acceptance stdout is utf8");
+    assert!(stdout.contains("production online direct-connect acceptance passed"));
+}
