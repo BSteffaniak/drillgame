@@ -994,14 +994,6 @@ mod tests {
             "descriptor-client-connected"
         );
 
-        let mut host_session = GameSession::new();
-        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
-        assert!(
-            host_session
-                .game()
-                .online_session_status_message
-                .contains("tick")
-        );
         let mut join_session = GameSession::new();
         join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
         assert!(
@@ -1009,6 +1001,21 @@ mod tests {
                 .game()
                 .online_session_status_message
                 .contains("Descriptor client sent live command tick")
+        );
+        let mut host_session = GameSession::new();
+        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
+        assert!(
+            host_session
+                .game()
+                .online_session_status_message
+                .contains("command=true")
+        );
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        assert!(
+            join_session
+                .game()
+                .online_session_status_message
+                .contains("received")
         );
         let _ignored = std::fs::remove_file(unique_path);
     }

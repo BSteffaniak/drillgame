@@ -11,6 +11,7 @@ use std::{
     mem,
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -568,6 +569,9 @@ impl RealOnlineSessionController {
         crate::multiplayer::QuinnSessionTickSummary,
         crate::multiplayer::QuinnOnlineSessionError,
     > {
+        let command_summary = self
+            .descriptor_host_try_receive_command_packet(Duration::from_millis(1))
+            .await?;
         let snapshot_replicated = if let Some(snapshot) = input.snapshot {
             self.descriptor_host_send_snapshot(snapshot).await?;
             true
@@ -581,7 +585,7 @@ impl RealOnlineSessionController {
             false
         };
         let summary = crate::multiplayer::QuinnSessionTickSummary {
-            command_summary: None,
+            command_summary,
             snapshot_replicated,
             delta_replicated,
             terrain_chunk_response: None,
@@ -609,6 +613,9 @@ impl RealOnlineSessionController {
         } else {
             false
         };
+        let received_messages = self
+            .descriptor_client_try_receive_pending_messages(Duration::from_millis(1))
+            .await?;
         let summary = crate::multiplayer::QuinnSessionTickSummary {
             command_summary: None,
             snapshot_replicated: false,
@@ -621,12 +628,115 @@ impl RealOnlineSessionController {
                 state: OnlineSessionUxState::Connected,
                 host_owns_save: false,
                 player_slot: self.player_slot,
-                status_message:
-                    "Descriptor client sent live command tick; waiting for host replication."
-                        .to_owned(),
+                status_message: format!(
+                    "Descriptor client sent live command tick; received {received_messages} pending host messages."
+                ),
             });
         }
         Ok(summary)
+    }
+
+    pub async fn descriptor_host_try_receive_command_packet(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<
+        Option<crate::multiplayer::CommandPacketExchangeSummary>,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let RealOnlineSessionMode::DescriptorHostAccepted {
+            host_runtime,
+            host_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        let received = match tokio::time::timeout(timeout, host_io.receive_datagram_packet()).await
+        {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) => return Ok(None),
+        };
+        let packet = match received.decode_supported().map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                "unsupported protocol version: expected {}, actual {}",
+                error.expected, error.actual
+            ))
+        })? {
+            crate::multiplayer::ProtocolMessage::CommandPacket(packet) => packet,
+            other => {
+                return Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other));
+            }
+        };
+        let (responses, summary) = host_runtime.apply_command_packet_exchange(&packet);
+        for response in responses {
+            host_io
+                .send_packet(crate::multiplayer::VersionedProtocolPacket::new(response))
+                .await?;
+        }
+        Ok(Some(summary))
+    }
+
+    pub async fn descriptor_client_try_receive_pending_messages(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<usize, crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected {
+            client_runtime,
+            packet_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        let mut received_count = 0;
+        match tokio::time::timeout(timeout, packet_io.receive_reliable_packet()).await {
+            Ok(Ok(packet)) => {
+                let message = packet.decode_supported().map_err(|error| {
+                    crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                        "unsupported protocol version: expected {}, actual {}",
+                        error.expected, error.actual
+                    ))
+                })?;
+                client_runtime.handle_message(message);
+                received_count += 1;
+            }
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) => {}
+        }
+        match tokio::time::timeout(timeout, packet_io.receive_datagram_packet()).await {
+            Ok(Ok(packet)) => {
+                let message = packet.decode_supported().map_err(|error| {
+                    crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                        "unsupported protocol version: expected {}, actual {}",
+                        error.expected, error.actual
+                    ))
+                })?;
+                match message {
+                    crate::multiplayer::ProtocolMessage::SnapshotKeyframe { .. }
+                    | crate::multiplayer::ProtocolMessage::WorldDelta { .. } => {
+                        client_runtime.handle_message(message);
+                        received_count += 1;
+                    }
+                    other => {
+                        return Err(
+                            crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other),
+                        );
+                    }
+                }
+            }
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) => {}
+        }
+        Ok(received_count)
     }
 
     pub async fn descriptor_client_send_command_packet_unacknowledged(
