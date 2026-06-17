@@ -1116,6 +1116,8 @@ pub struct GameState {
     pub online_client_bind_addr: SocketAddr,
     #[serde(default = "default_online_gameplay_ticks")]
     pub online_gameplay_ticks: u32,
+    #[serde(default)]
+    pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
     #[serde(default)]
@@ -1350,6 +1352,7 @@ impl GameState {
             online_host_advertise_addr: default_online_host_advertise_addr(),
             online_client_bind_addr: default_online_client_bind_addr(),
             online_gameplay_ticks: default_online_gameplay_ticks(),
+            online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
@@ -1737,12 +1740,14 @@ impl GameState {
             OnlineNetworkTaskResult::Failed(message) => {
                 self.online_session_state = OnlineSessionUxState::Error;
                 self.online_network_task_request = None;
+                self.online_local_ready = false;
                 self.online_session_status_message = Self::online_failure_status_message(&message);
                 self.message = self.online_session_status_message.clone();
             }
             OnlineNetworkTaskResult::Shutdown => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = None;
+                self.online_local_ready = false;
                 self.modal = None;
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
@@ -1817,6 +1822,7 @@ impl GameState {
         self.selected_menu_item = 0;
         self.local_multiplayer_requested = false;
         self.local_multiplayer_active = false;
+        self.online_local_ready = true;
         if self.online_session_status_message.is_empty() {
             "Online session connected; entering gameplay."
                 .clone_into(&mut self.online_session_status_message);
@@ -1837,8 +1843,10 @@ impl GameState {
             lines.push("Pending network task: none".to_owned());
         }
         lines.push(format!(
-            "State: {:?} | Host owns save: {} | Slot: {}",
+            "State: {:?} | Role: {} | Ready: {} | Host owns save: {} | Slot: {}",
             self.online_session_state,
+            self.online_role_label(),
+            if self.online_local_ready { "yes" } else { "no" },
             self.online_host_owns_save,
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
@@ -1847,6 +1855,17 @@ impl GameState {
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
+    }
+
+    #[must_use]
+    pub const fn online_role_label(&self) -> &'static str {
+        if self.online_host_owns_save {
+            "host"
+        } else if self.online_player_slot.is_some() {
+            "client"
+        } else {
+            "unassigned"
+        }
     }
 
     #[must_use]
@@ -1891,6 +1910,9 @@ impl GameState {
 
     fn close_online_multiplayer_menu(&mut self) {
         self.online_network_task_request = None;
+        if self.online_session_state != OnlineSessionUxState::Connected {
+            self.online_local_ready = false;
+        }
         self.online_session_state = match self.online_session_state {
             OnlineSessionUxState::Connected => OnlineSessionUxState::Connected,
             OnlineSessionUxState::Shutdown => OnlineSessionUxState::Shutdown,
@@ -1910,6 +1932,7 @@ impl GameState {
                     Some(OnlineNetworkTaskRequest::HostDirectConnect);
                 self.online_host_owns_save = true;
                 self.online_player_slot = Some(1);
+                self.online_local_ready = false;
                 "Hosting lobby locally. Host owns save/session authority."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -1919,6 +1942,7 @@ impl GameState {
                     Some(OnlineNetworkTaskRequest::JoinDirectConnect);
                 self.online_host_owns_save = false;
                 self.online_player_slot = Some(2);
+                self.online_local_ready = false;
                 "Joining by direct address. Waiting for host assignment."
                     .clone_into(&mut self.online_session_status_message);
             }
@@ -1942,9 +1966,19 @@ impl GameState {
             5 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
+                self.online_local_ready = false;
                 self.modal = None;
                 "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
+            }
+            6 => {
+                self.online_local_ready = !self.online_local_ready;
+                if self.online_local_ready {
+                    "Local player ready for online session start."
+                } else {
+                    "Local player not ready."
+                }
+                .clone_into(&mut self.online_session_status_message);
             }
             _ => {
                 self.close_online_multiplayer_menu();
@@ -2756,7 +2790,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 6,
+                ModalScreen::OnlineMultiplayer => 7,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -6263,6 +6297,12 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
+                .any(|line| line.contains("Role: client"))
+        );
+        assert!(pending_lines.iter().any(|line| line.contains("Ready: no")));
+        assert!(
+            pending_lines
+                .iter()
                 .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
@@ -6484,6 +6524,38 @@ mod tests {
         assert_eq!(game.online_session_state, OnlineSessionUxState::Idle);
         assert_eq!(game.modal, None);
         assert!(game.message.contains("no network task queued"));
+    }
+
+    #[test]
+    fn online_multiplayer_toggle_ready_updates_lobby_status() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 6;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.online_local_ready);
+        assert!(game.message.contains("ready"));
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Ready: yes"))
+        );
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(!game.online_local_ready);
+        assert!(game.message.contains("not ready"));
     }
 
     #[test]

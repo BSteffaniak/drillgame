@@ -793,6 +793,7 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Simulate timeout",
         "Show error",
         "Shutdown session",
+        "Toggle ready",
         "Back",
     ];
     draw_options_list(
