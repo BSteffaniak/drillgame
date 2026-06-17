@@ -2796,6 +2796,32 @@ impl GameState {
         );
     }
 
+    fn inspect_online_descriptor_path(&mut self) {
+        match std::fs::read_to_string(&self.online_descriptor_path)
+            .map_err(|error| format!("descriptor read failed: {error}"))
+            .and_then(|contents| {
+                serde_json::from_str::<crate::multiplayer::QuinnHostConnectionDescriptor>(&contents)
+                    .map_err(|error| format!("descriptor parse failed: {error}"))
+            }) {
+            Ok(descriptor) => {
+                self.online_session_status_message = format!(
+                    "Descriptor OK: path={}, host={}, server={}, cert={} bytes",
+                    self.online_descriptor_path.display(),
+                    descriptor.host_addr,
+                    descriptor.server_name,
+                    descriptor.certificate_der.len()
+                );
+            }
+            Err(error) => {
+                self.online_session_state = OnlineSessionUxState::Error;
+                self.online_session_status_message = format!(
+                    "Descriptor inspect failed for {}: {error}",
+                    self.online_descriptor_path.display()
+                );
+            }
+        }
+    }
+
     fn cycle_online_host_address_preset(&mut self) {
         if self.online_host_bind_addr == default_online_host_bind_addr()
             && self.online_host_advertise_addr == default_online_host_advertise_addr()
@@ -2876,22 +2902,25 @@ impl GameState {
                 self.cycle_online_descriptor_path();
             }
             4 => {
-                self.cycle_online_host_address_preset();
+                self.inspect_online_descriptor_path();
             }
             5 => {
-                self.cycle_online_gameplay_ticks();
+                self.cycle_online_host_address_preset();
             }
             6 => {
+                self.cycle_online_gameplay_ticks();
+            }
+            7 => {
                 self.online_session_state = OnlineSessionUxState::Timeout;
                 "Connection timed out; retry or go back."
                     .clone_into(&mut self.online_session_status_message);
             }
-            7 => {
+            8 => {
                 self.online_session_state = OnlineSessionUxState::Error;
                 "Connection error: direct Quinn connection task failed."
                     .clone_into(&mut self.online_session_status_message);
             }
-            8 => {
+            9 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 self.online_local_ready = false;
@@ -2899,7 +2928,7 @@ impl GameState {
                 "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
             }
-            9 => {
+            10 => {
                 self.online_local_ready = !self.online_local_ready;
                 if self.online_local_ready {
                     "Local player ready for online session start."
@@ -3718,7 +3747,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 10,
+                ModalScreen::OnlineMultiplayer => 11,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -7538,7 +7567,7 @@ mod tests {
             OnlineSessionUxState::Reconnecting
         );
 
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 7;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7548,7 +7577,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Timeout);
 
-        game.selected_menu_item = 7;
+        game.selected_menu_item = 8;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7558,7 +7587,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
 
-        game.selected_menu_item = 8;
+        game.selected_menu_item = 9;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7640,7 +7669,7 @@ mod tests {
         let mut game = GameState::new();
         game.save_dirty = true;
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 8;
+        game.selected_menu_item = 9;
 
         game.update(
             PlayerInput {
@@ -7725,10 +7754,55 @@ mod tests {
     }
 
     #[test]
+    fn online_multiplayer_inspects_descriptor_file_from_modal() {
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-inspect-descriptor-{}.json",
+            std::process::id()
+        ));
+        let descriptor = crate::multiplayer::QuinnHostConnectionDescriptor {
+            host_addr: "127.0.0.1:4242".parse().expect("host addr parses"),
+            server_name: "localhost".to_owned(),
+            certificate_der: vec![1, 2, 3, 4],
+        };
+        std::fs::write(
+            &unique_path,
+            serde_json::to_string(&descriptor).expect("descriptor serializes"),
+        )
+        .expect("descriptor writes");
+
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.online_descriptor_path = unique_path.clone();
+        game.selected_menu_item = 4;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.message.contains("Descriptor OK"));
+        assert!(game.message.contains("127.0.0.1:4242"));
+        assert!(game.message.contains("cert=4 bytes"));
+
+        std::fs::write(&unique_path, "not json").expect("bad descriptor writes");
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert!(game.message.contains("Descriptor inspect failed"));
+        let _ignored = std::fs::remove_file(unique_path);
+    }
+
+    #[test]
     fn online_multiplayer_cycles_host_address_and_tick_presets() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 4;
+        game.selected_menu_item = 5;
 
         game.update(
             PlayerInput {
@@ -7773,7 +7847,7 @@ mod tests {
             default_online_host_advertise_addr()
         );
 
-        game.selected_menu_item = 5;
+        game.selected_menu_item = 6;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7797,7 +7871,7 @@ mod tests {
     fn online_multiplayer_toggle_ready_updates_lobby_status() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 9;
+        game.selected_menu_item = 10;
 
         game.update(
             PlayerInput {
