@@ -1098,7 +1098,7 @@ impl LocalOnlineSmokeSummary {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LocalOnlineSoakSummary {
     pub ticks_requested: u32,
     pub ticks_completed: u32,

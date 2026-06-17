@@ -20,6 +20,9 @@ pub enum OnlineCliAction {
     LocalSoak {
         ticks: u32,
     },
+    LocalSoakJson {
+        ticks: u32,
+    },
     LatencyLossPlaytest,
     ProductionAcceptance,
     ProductionAcceptanceJson,
@@ -98,6 +101,13 @@ where
                     return None;
                 }
                 return Some(OnlineCliAction::LocalSoak { ticks });
+            }
+            "--online-local-soak-json" => {
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::LocalSoakJson { ticks });
             }
             "--online-latency-loss-playtest" => {
                 return Some(OnlineCliAction::LatencyLossPlaytest);
@@ -359,7 +369,7 @@ pub fn build_lan_qa_checklist_markdown(plan: &LanQaCommandPlan) -> String {
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-local-soak <ticks>\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-inspect-descriptor-file <path>\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-local-soak <ticks>\n  --online-local-soak-json <ticks>\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-inspect-descriptor-file <path>\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -372,6 +382,7 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::Help => Ok(online_cli_usage().to_owned()),
         OnlineCliAction::LocalSmoke => run_local_smoke_cli_action(),
         OnlineCliAction::LocalSoak { ticks } => run_local_soak_cli_action(ticks),
+        OnlineCliAction::LocalSoakJson { ticks } => run_local_soak_json_cli_action(ticks),
         OnlineCliAction::LatencyLossPlaytest => run_latency_loss_playtest_cli_action(),
         OnlineCliAction::ProductionAcceptance => run_production_acceptance_cli_action(),
         OnlineCliAction::ProductionAcceptanceJson => run_production_acceptance_json_cli_action(),
@@ -480,6 +491,14 @@ fn run_local_soak_cli_action(ticks: u32) -> Result<String, String> {
             summary.ticks_completed, summary.ticks_requested
         ))
     }
+}
+
+fn run_local_soak_json_cli_action(ticks: u32) -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    let summary = runtime
+        .block_on(local_online_soak_summary(ticks))
+        .map_err(format_debug_error)?;
+    serde_json::to_string_pretty(&summary).map_err(format_debug_error)
 }
 
 fn run_latency_loss_playtest_cli_action() -> Result<String, String> {
@@ -1138,6 +1157,10 @@ mod tests {
         assert_eq!(
             parse_online_cli_action(["--online-local-soak", "5"]),
             Some(OnlineCliAction::LocalSoak { ticks: 5 })
+        );
+        assert_eq!(
+            parse_online_cli_action(["--online-local-soak-json", "5"]),
+            Some(OnlineCliAction::LocalSoakJson { ticks: 5 })
         );
         assert_eq!(
             parse_online_cli_action(["--online-latency-loss-playtest"]),
