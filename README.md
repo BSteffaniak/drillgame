@@ -66,6 +66,8 @@ Multiplayer support now has validated local split-screen and direct-connect onli
   - `cargo run --bin drillgame -- --online-local-smoke`
   - `cargo run --bin drillgame -- --online-local-soak 120`
   - `cargo run --bin drillgame -- --online-local-soak-json 120`
+  - `cargo run --bin drillgame -- --online-local-degraded-soak 120`
+  - `cargo run --bin drillgame -- --online-local-degraded-soak-json 120`
   - `cargo run --bin drillgame -- --online-latency-loss-playtest`
   - `cargo run --bin drillgame -- --online-production-acceptance`
   - `cargo run --bin drillgame -- --online-production-acceptance-json`
@@ -136,7 +138,7 @@ For release QA, store the generated checklist/plan alongside host and client log
 - exact host/client commands that were run
 - descriptor inspection output from `--online-inspect-descriptor-file`
 - host and client stdout/stderr logs
-- soak JSON from `--online-local-soak-json <ticks>`
+- soak JSON from `--online-local-soak-json <ticks>` or degraded soak JSON from `--online-local-degraded-soak-json <ticks>`
 - screenshots or notes for in-game Online Multiplayer modal transitions when testing the windowed UI
 
 Known limitations:

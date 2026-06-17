@@ -409,6 +409,8 @@ fn spawned_online_cli_prints_help() {
     assert!(stdout.contains("--online-production-acceptance-json"));
     assert!(stdout.contains("--online-local-soak <ticks>"));
     assert!(stdout.contains("--online-local-soak-json <ticks>"));
+    assert!(stdout.contains("--online-local-degraded-soak <ticks>"));
+    assert!(stdout.contains("--online-local-degraded-soak-json <ticks>"));
 }
 
 #[test]
@@ -469,6 +471,47 @@ fn spawned_online_cli_emits_local_soak_json() {
     assert_eq!(json["ticks_completed"], 4);
     assert_eq!(json["commands_exchanged"], 4);
     assert_eq!(json["corrections_replicated"], 4);
+}
+
+#[test]
+fn spawned_online_cli_runs_local_degraded_soak() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .args(["--online-local-degraded-soak", "4"])
+        .output()
+        .expect("online degraded soak CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("degraded soak stdout is utf8");
+    assert!(stdout.contains("local online degraded soak passed"));
+    assert!(stdout.contains("ticks=4"));
+}
+
+#[test]
+fn spawned_online_cli_emits_local_degraded_soak_json() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .args(["--online-local-degraded-soak-json", "4"])
+        .output()
+        .expect("online degraded soak JSON CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("degraded soak JSON stdout is utf8");
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("degraded soak output is JSON");
+    assert_eq!(json["real_quinn_soak"]["ticks_requested"], 4);
+    assert_eq!(json["real_quinn_soak"]["ticks_completed"], 4);
+    assert!(json["degraded_network"]["covered"].is_array());
 }
 
 #[test]

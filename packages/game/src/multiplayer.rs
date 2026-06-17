@@ -1124,6 +1124,19 @@ impl LocalOnlineSoakSummary {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LocalOnlineDegradedSoakSummary {
+    pub real_quinn_soak: LocalOnlineSoakSummary,
+    pub degraded_network: ScriptedLatencyLossOnlinePlaytestSummary,
+}
+
+impl LocalOnlineDegradedSoakSummary {
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.real_quinn_soak.passed() && self.degraded_network.passed()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProductionPlatformScope {
     DirectConnectMvp,
@@ -1786,6 +1799,20 @@ pub async fn local_online_soak_summary(
     }
     summary.elapsed_micros = started.elapsed().as_micros();
     Ok(summary)
+}
+
+/// Run real Quinn sustained tick soak plus scripted degraded-network latency/loss/reconnect readiness.
+///
+/// # Errors
+///
+/// Returns an error when the real socket soak or degraded-network playtest fails to run.
+pub async fn local_online_degraded_soak_summary(
+    ticks: u32,
+) -> Result<LocalOnlineDegradedSoakSummary, QuinnOnlineSessionError> {
+    Ok(LocalOnlineDegradedSoakSummary {
+        real_quinn_soak: local_online_soak_summary(ticks).await?,
+        degraded_network: scripted_latency_loss_online_playtest_summary().await?,
+    })
 }
 
 /// Start split localhost Quinn host/client entrypoints and complete the join handshake through real packet IO.
