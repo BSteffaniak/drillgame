@@ -13,6 +13,8 @@ pub enum OnlineCliAction {
     HostDescriptorJson,
     HostDescriptorFile { path: PathBuf },
     JoinDescriptorFile { path: PathBuf },
+    HostGameplayDescriptorFile { path: PathBuf, ticks: u32 },
+    JoinGameplayDescriptorFile { path: PathBuf, ticks: u32 },
 }
 
 #[must_use]
@@ -38,6 +40,28 @@ where
                     path: PathBuf::from(path.as_ref()),
                 });
             }
+            "--online-host-gameplay-descriptor-file" => {
+                let path = args.next()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::HostGameplayDescriptorFile {
+                    path: PathBuf::from(path.as_ref()),
+                    ticks,
+                });
+            }
+            "--online-join-gameplay-descriptor-file" => {
+                let path = args.next()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::JoinGameplayDescriptorFile {
+                    path: PathBuf::from(path.as_ref()),
+                    ticks,
+                });
+            }
             _ => {}
         }
     }
@@ -55,6 +79,12 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
         OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
+        OnlineCliAction::HostGameplayDescriptorFile { path, ticks } => {
+            run_host_gameplay_descriptor_file_cli_action(path, ticks)
+        }
+        OnlineCliAction::JoinGameplayDescriptorFile { path, ticks } => {
+            run_join_gameplay_descriptor_file_cli_action(path, ticks)
+        }
     }
 }
 
@@ -141,6 +171,113 @@ fn run_join_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> 
         run_join_descriptor_file_reconnect_exchange(&reconnect_io).await?;
         Ok("joined descriptor host and exchanged command/snapshot/correction/reconnect".to_owned())
     })
+}
+
+fn run_host_gameplay_descriptor_file_cli_action(
+    path: PathBuf,
+    ticks: u32,
+) -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    runtime.block_on(async move {
+        let listener =
+            QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
+                .map_err(format_debug_error)?;
+        let descriptor = listener
+            .connection_descriptor()
+            .map_err(format_debug_error)?;
+        let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
+        std::fs::write(&path, json).map_err(|error| error.to_string())?;
+        println!("online gameplay host descriptor ready");
+        std::io::stdout()
+            .flush()
+            .map_err(|error| error.to_string())?;
+        let packet_io = tokio::time::timeout(Duration::from_secs(5), listener.accept_packet_io())
+            .await
+            .map_err(|_| "timed out waiting for gameplay descriptor-file client".to_owned())?
+            .map_err(format_debug_error)?;
+        run_host_gameplay_descriptor_ticks(&packet_io, ticks).await?;
+        Ok(format!("host gameplay descriptor file ran {ticks} ticks"))
+    })
+}
+
+fn run_join_gameplay_descriptor_file_cli_action(
+    path: PathBuf,
+    ticks: u32,
+) -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    runtime.block_on(async move {
+        let json = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        let descriptor: QuinnHostConnectionDescriptor =
+            serde_json::from_str(&json).map_err(|error| error.to_string())?;
+        let connector = QuinnClientConnector::bind_from_host_descriptor(
+            QuinnEndpointConfig::localhost_ephemeral(),
+            &descriptor,
+        )
+        .map_err(format_debug_error)?;
+        let packet_io = connector
+            .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
+            .await
+            .map_err(format_debug_error)?;
+        run_join_gameplay_descriptor_ticks(&packet_io, ticks).await?;
+        Ok(format!("joined gameplay descriptor host for {ticks} ticks"))
+    })
+}
+
+async fn run_host_gameplay_descriptor_ticks(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+    ticks: u32,
+) -> Result<(), String> {
+    for tick_index in 0..ticks {
+        let command_packet =
+            tokio::time::timeout(Duration::from_secs(5), packet_io.receive_datagram_packet())
+                .await
+                .map_err(|_| "timed out waiting for gameplay command packet".to_owned())?
+                .map_err(format_debug_error)?;
+        let crate::multiplayer::ProtocolMessage::CommandPacket(packet) = command_packet.message
+        else {
+            return Err("gameplay host expected command packet".to_owned());
+        };
+        if packet.commands.len() != 1 {
+            return Err("gameplay host expected one command per tick".to_owned());
+        }
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::SnapshotKeyframe {
+                    snapshot: gameplay_descriptor_snapshot(tick_index),
+                },
+            ))
+            .await
+            .map_err(format_debug_error)?;
+    }
+    tokio::task::yield_now().await;
+    packet_io.close(b"gameplay descriptor exchange complete");
+    Ok(())
+}
+
+async fn run_join_gameplay_descriptor_ticks(
+    packet_io: &crate::multiplayer::QuinnPacketIo,
+    ticks: u32,
+) -> Result<(), String> {
+    for tick_index in 0..ticks {
+        packet_io
+            .send_packet(gameplay_descriptor_command_packet(tick_index))
+            .await
+            .map_err(format_debug_error)?;
+        let snapshot =
+            tokio::time::timeout(Duration::from_secs(5), packet_io.receive_datagram_packet())
+                .await
+                .map_err(|_| "timed out waiting for gameplay snapshot".to_owned())?
+                .map_err(format_debug_error)?;
+        let crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } = snapshot.message
+        else {
+            return Err("gameplay join expected snapshot".to_owned());
+        };
+        if snapshot.tick != crate::multiplayer::SimulationTick::new(u64::from(tick_index) + 10) {
+            return Err("gameplay join received unexpected snapshot tick".to_owned());
+        }
+    }
+    tokio::task::yield_now().await;
+    Ok(())
 }
 
 async fn run_host_descriptor_file_packet_exchange(
@@ -368,6 +505,49 @@ const fn descriptor_file_session_token() -> crate::multiplayer::SessionToken {
     crate::multiplayer::SessionToken::new(0xD411_600D_0000_0001)
 }
 
+fn gameplay_descriptor_command_packet(
+    tick_index: u32,
+) -> crate::multiplayer::VersionedProtocolPacket {
+    crate::multiplayer::VersionedProtocolPacket::new(
+        crate::multiplayer::ProtocolMessage::CommandPacket(crate::multiplayer::CommandPacket {
+            client_id: crate::multiplayer::ClientId::new(1),
+            commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                sequence: crate::multiplayer::InputSequence::new(tick_index + 1),
+                target_tick: crate::multiplayer::SimulationTick::new(u64::from(tick_index) + 10),
+                command: crate::multiplayer::PlayerCommand::Movement {
+                    horizontal: if tick_index.is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    },
+                    thrust: tick_index.is_multiple_of(2),
+                    drill_down: !tick_index.is_multiple_of(2),
+                },
+            }],
+        }),
+    )
+}
+
+fn gameplay_descriptor_snapshot(tick_index: u32) -> crate::multiplayer::NetworkWorldSnapshot {
+    let tick_offset = f32::from(u16::try_from(tick_index).unwrap_or(u16::MAX));
+    crate::multiplayer::NetworkWorldSnapshot {
+        tick: crate::multiplayer::SimulationTick::new(u64::from(tick_index) + 10),
+        players: vec![crate::multiplayer::NetworkPlayerSnapshot {
+            player_id: crate::multiplayer::PlayerId::new(1),
+            x: 10.0 + tick_offset,
+            y: 20.0 + tick_offset,
+            velocity_x: 1.0,
+            velocity_y: 0.0,
+            fuel: 99.0 - tick_offset,
+            hull: 100.0,
+            credits: 5 + tick_index,
+            cargo_used: tick_index,
+            scanner_cooldown_seconds: 0.0,
+        }],
+    }
+}
+
 fn descriptor_file_command_packet() -> crate::multiplayer::VersionedProtocolPacket {
     crate::multiplayer::VersionedProtocolPacket::new(
         crate::multiplayer::ProtocolMessage::CommandPacket(crate::multiplayer::CommandPacket {
@@ -429,6 +609,47 @@ mod tests {
             parse_online_cli_action(["--online-join-descriptor-file", "/tmp/host.json"]),
             Some(OnlineCliAction::JoinDescriptorFile {
                 path: PathBuf::from("/tmp/host.json")
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-host-gameplay-descriptor-file",
+                "/tmp/gameplay-host.json",
+                "3"
+            ]),
+            Some(OnlineCliAction::HostGameplayDescriptorFile {
+                path: PathBuf::from("/tmp/gameplay-host.json"),
+                ticks: 3,
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-join-gameplay-descriptor-file",
+                "/tmp/gameplay-host.json",
+                "3"
+            ]),
+            Some(OnlineCliAction::JoinGameplayDescriptorFile {
+                path: PathBuf::from("/tmp/gameplay-host.json"),
+                ticks: 3,
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-join-gameplay-descriptor-file",
+                "/tmp/gameplay-host.json",
+                "0"
+            ]),
+            None
+        );
+        assert_eq!(
+            parse_online_cli_action(vec![
+                "--online-host-gameplay-descriptor-file".to_owned(),
+                "/tmp/owned-gameplay-host.json".to_owned(),
+                "2".to_owned(),
+            ]),
+            Some(OnlineCliAction::HostGameplayDescriptorFile {
+                path: PathBuf::from("/tmp/owned-gameplay-host.json"),
+                ticks: 2,
             })
         );
         assert_eq!(parse_online_cli_action(["--fullscreen"]), None);
