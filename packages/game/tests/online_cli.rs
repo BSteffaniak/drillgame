@@ -146,9 +146,11 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file_on_advertised_addr(
         serde_json::from_str(&descriptor_json).expect("advertised descriptor JSON parses");
     assert_eq!(descriptor.host_addr, bind_addr.to_string());
 
+    let join_bind_addr = unused_loopback_udp_addr();
     let join_output = Command::new(binary)
-        .arg("--online-join-descriptor-file")
+        .arg("--online-join-descriptor-file-on-addr")
         .arg(&descriptor_path)
+        .arg(join_bind_addr.to_string())
         .output()
         .expect("join advertised descriptor process runs");
     assert!(
@@ -259,9 +261,11 @@ fn spawned_online_cli_host_and_join_gameplay_descriptor_ticks_on_advertised_addr
         serde_json::from_str(&descriptor_json).expect("advertised gameplay descriptor JSON parses");
     assert_eq!(descriptor.host_addr, bind_addr.to_string());
 
+    let join_bind_addr = unused_loopback_udp_addr();
     let join_output = Command::new(binary)
-        .arg("--online-join-gameplay-descriptor-file")
+        .arg("--online-join-gameplay-descriptor-file-on-addr")
         .arg(&descriptor_path)
+        .arg(join_bind_addr.to_string())
         .arg("3")
         .output()
         .expect("advertised gameplay join descriptor process runs");

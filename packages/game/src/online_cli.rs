@@ -27,6 +27,10 @@ pub enum OnlineCliAction {
     JoinDescriptorFile {
         path: PathBuf,
     },
+    JoinDescriptorFileOnAddr {
+        path: PathBuf,
+        bind_addr: SocketAddr,
+    },
     HostGameplayDescriptorFile {
         path: PathBuf,
         ticks: u32,
@@ -39,6 +43,11 @@ pub enum OnlineCliAction {
     },
     JoinGameplayDescriptorFile {
         path: PathBuf,
+        ticks: u32,
+    },
+    JoinGameplayDescriptorFileOnAddr {
+        path: PathBuf,
+        bind_addr: SocketAddr,
         ticks: u32,
     },
 }
@@ -86,6 +95,14 @@ where
                     path: PathBuf::from(path.as_ref()),
                 });
             }
+            "--online-join-descriptor-file-on-addr" => {
+                let path = args.next()?;
+                let bind_addr = args.next()?.as_ref().parse().ok()?;
+                return Some(OnlineCliAction::JoinDescriptorFileOnAddr {
+                    path: PathBuf::from(path.as_ref()),
+                    bind_addr,
+                });
+            }
             "--online-host-gameplay-descriptor-file" => {
                 let path = args.next()?;
                 let ticks = args.next()?.as_ref().parse().ok()?;
@@ -123,6 +140,19 @@ where
                     ticks,
                 });
             }
+            "--online-join-gameplay-descriptor-file-on-addr" => {
+                let path = args.next()?;
+                let bind_addr = args.next()?.as_ref().parse().ok()?;
+                let ticks = args.next()?.as_ref().parse().ok()?;
+                if ticks == 0 {
+                    return None;
+                }
+                return Some(OnlineCliAction::JoinGameplayDescriptorFileOnAddr {
+                    path: PathBuf::from(path.as_ref()),
+                    bind_addr,
+                    ticks,
+                });
+            }
             _ => {}
         }
     }
@@ -131,7 +161,7 @@ where
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -154,6 +184,9 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
             advertise_addr,
         } => run_host_descriptor_file_on_addr_cli_action(path, bind_addr, advertise_addr),
         OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
+        OnlineCliAction::JoinDescriptorFileOnAddr { path, bind_addr } => {
+            run_join_descriptor_file_on_addr_cli_action(path, bind_addr)
+        }
         OnlineCliAction::HostGameplayDescriptorFile { path, ticks } => {
             run_host_gameplay_descriptor_file_cli_action(path, ticks)
         }
@@ -171,6 +204,11 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::JoinGameplayDescriptorFile { path, ticks } => {
             run_join_gameplay_descriptor_file_cli_action(path, ticks)
         }
+        OnlineCliAction::JoinGameplayDescriptorFileOnAddr {
+            path,
+            bind_addr,
+            ticks,
+        } => run_join_gameplay_descriptor_file_on_addr_cli_action(path, bind_addr, ticks),
     }
 }
 
@@ -291,16 +329,27 @@ fn run_host_descriptor_file_with_config(
 }
 
 fn run_join_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> {
+    run_join_descriptor_file_with_config(path, QuinnEndpointConfig::localhost_ephemeral())
+}
+
+fn run_join_descriptor_file_on_addr_cli_action(
+    path: PathBuf,
+    bind_addr: SocketAddr,
+) -> Result<String, String> {
+    run_join_descriptor_file_with_config(path, QuinnEndpointConfig { bind_addr })
+}
+
+fn run_join_descriptor_file_with_config(
+    path: PathBuf,
+    config: QuinnEndpointConfig,
+) -> Result<String, String> {
     let runtime = build_current_thread_runtime()?;
     runtime.block_on(async move {
         let json = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
         let descriptor: QuinnHostConnectionDescriptor =
             serde_json::from_str(&json).map_err(|error| error.to_string())?;
-        let connector = QuinnClientConnector::bind_from_host_descriptor(
-            QuinnEndpointConfig::localhost_ephemeral(),
-            &descriptor,
-        )
-        .map_err(format_debug_error)?;
+        let connector = QuinnClientConnector::bind_from_host_descriptor(config, &descriptor)
+            .map_err(format_debug_error)?;
         let packet_io = connector
             .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
             .await
@@ -375,16 +424,33 @@ fn run_join_gameplay_descriptor_file_cli_action(
     path: PathBuf,
     ticks: u32,
 ) -> Result<String, String> {
+    run_join_gameplay_descriptor_file_with_config(
+        path,
+        QuinnEndpointConfig::localhost_ephemeral(),
+        ticks,
+    )
+}
+
+fn run_join_gameplay_descriptor_file_on_addr_cli_action(
+    path: PathBuf,
+    bind_addr: SocketAddr,
+    ticks: u32,
+) -> Result<String, String> {
+    run_join_gameplay_descriptor_file_with_config(path, QuinnEndpointConfig { bind_addr }, ticks)
+}
+
+fn run_join_gameplay_descriptor_file_with_config(
+    path: PathBuf,
+    config: QuinnEndpointConfig,
+    ticks: u32,
+) -> Result<String, String> {
     let runtime = build_current_thread_runtime()?;
     runtime.block_on(async move {
         let json = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
         let descriptor: QuinnHostConnectionDescriptor =
             serde_json::from_str(&json).map_err(|error| error.to_string())?;
-        let connector = QuinnClientConnector::bind_from_host_descriptor(
-            QuinnEndpointConfig::localhost_ephemeral(),
-            &descriptor,
-        )
-        .map_err(format_debug_error)?;
+        let connector = QuinnClientConnector::bind_from_host_descriptor(config, &descriptor)
+            .map_err(format_debug_error)?;
         let packet_io = connector
             .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
             .await
@@ -817,6 +883,17 @@ mod tests {
         );
         assert_eq!(
             parse_online_cli_action([
+                "--online-join-descriptor-file-on-addr",
+                "/tmp/host.json",
+                "0.0.0.0:0"
+            ]),
+            Some(OnlineCliAction::JoinDescriptorFileOnAddr {
+                path: PathBuf::from("/tmp/host.json"),
+                bind_addr: "0.0.0.0:0".parse().expect("bind addr parses"),
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
                 "--online-host-gameplay-descriptor-file",
                 "/tmp/gameplay-host.json",
                 "3"
@@ -849,6 +926,19 @@ mod tests {
             ]),
             Some(OnlineCliAction::JoinGameplayDescriptorFile {
                 path: PathBuf::from("/tmp/gameplay-host.json"),
+                ticks: 3,
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-join-gameplay-descriptor-file-on-addr",
+                "/tmp/gameplay-host.json",
+                "0.0.0.0:0",
+                "3"
+            ]),
+            Some(OnlineCliAction::JoinGameplayDescriptorFileOnAddr {
+                path: PathBuf::from("/tmp/gameplay-host.json"),
+                bind_addr: "0.0.0.0:0".parse().expect("bind addr parses"),
                 ticks: 3,
             })
         );
