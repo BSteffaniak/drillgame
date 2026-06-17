@@ -1736,7 +1736,8 @@ impl GameState {
             }
             OnlineNetworkTaskResult::Failed(message) => {
                 self.online_session_state = OnlineSessionUxState::Error;
-                self.online_session_status_message = format!("Connection error: {message}");
+                self.online_network_task_request = None;
+                self.online_session_status_message = Self::online_failure_status_message(&message);
                 self.message = self.online_session_status_message.clone();
             }
             OnlineNetworkTaskResult::Shutdown => {
@@ -1760,6 +1761,36 @@ impl GameState {
         self.online_player_slot = snapshot.player_slot;
         self.online_session_status_message = snapshot.status_message;
         self.message = self.online_session_status_message.clone();
+    }
+
+    #[must_use]
+    pub fn online_failure_status_message(error: &str) -> String {
+        let normalized = error.to_ascii_lowercase();
+        if normalized.contains("version") {
+            return "Connection error: game version/protocol mismatch. Update both players to the same build.".to_owned();
+        }
+        if normalized.contains("certificate") || normalized.contains("cert") {
+            return "Connection error: host descriptor certificate could not be trusted. Regenerate and re-share the descriptor.".to_owned();
+        }
+        if normalized.contains("descriptor")
+            || normalized.contains("json")
+            || normalized.contains("parse")
+        {
+            return "Connection error: host descriptor could not be read. Check the descriptor file/path and ask the host to share it again.".to_owned();
+        }
+        if normalized.contains("timeout") || normalized.contains("timed out") {
+            return "Connection timed out: verify the host is running, the advertised UDP port is open, and both machines are on the expected LAN/VPN.".to_owned();
+        }
+        if normalized.contains("refused") || normalized.contains("unreachable") {
+            return "Connection refused or unreachable: verify host address, firewall, and UDP port forwarding/LAN routing.".to_owned();
+        }
+        if normalized.contains("reconnect") || normalized.contains("session token") {
+            return "Reconnect failed: the previous online session is no longer available. Rejoin from the host descriptor.".to_owned();
+        }
+        if normalized.contains("shutdown") || normalized.contains("closed") {
+            return "Online session ended: the host closed the session.".to_owned();
+        }
+        format!("Connection error: {error}")
     }
 
     const fn can_write_local_save(&self) -> bool {
@@ -6295,6 +6326,32 @@ mod tests {
     }
 
     #[test]
+    fn online_failure_status_messages_are_player_actionable() {
+        assert!(
+            GameState::online_failure_status_message("protocol version mismatch")
+                .contains("same build")
+        );
+        assert!(
+            GameState::online_failure_status_message("certificate verify failed")
+                .contains("Regenerate")
+        );
+        assert!(
+            GameState::online_failure_status_message("descriptor JSON parse error")
+                .contains("descriptor file")
+        );
+        assert!(
+            GameState::online_failure_status_message("connection timed out").contains("UDP port")
+        );
+        assert!(
+            GameState::online_failure_status_message("connection refused").contains("firewall")
+        );
+        assert!(
+            GameState::online_failure_status_message("session token reconnect failed")
+                .contains("Rejoin")
+        );
+    }
+
+    #[test]
     fn online_network_task_results_reduce_into_game_state() {
         let mut game = GameState::new();
 
@@ -6310,6 +6367,7 @@ mod tests {
             "direct Quinn connection task failed".to_owned(),
         ));
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
+        assert_eq!(game.online_network_task_request, None);
         assert!(game.message.contains("direct Quinn connection task failed"));
 
         game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);

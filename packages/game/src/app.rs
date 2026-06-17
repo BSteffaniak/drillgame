@@ -779,6 +779,6 @@ mod tests {
         dispatcher.drain_and_execute(&mut game);
 
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
-        assert!(game.message.contains("No active online session"));
+        assert!(game.message.contains("Rejoin"));
     }
 }
