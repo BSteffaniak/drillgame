@@ -560,6 +560,95 @@ impl RealOnlineSessionController {
         Ok(())
     }
 
+    pub async fn drive_descriptor_host_outbound_tick(
+        &mut self,
+        game: &mut GameState,
+        input: crate::multiplayer::QuinnSessionTickInput,
+    ) -> Result<
+        crate::multiplayer::QuinnSessionTickSummary,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let snapshot_replicated = if let Some(snapshot) = input.snapshot {
+            self.descriptor_host_send_snapshot(snapshot).await?;
+            true
+        } else {
+            false
+        };
+        let delta_replicated = if let Some((tick, payload)) = input.delta {
+            self.descriptor_host_send_world_delta(tick, payload).await?;
+            true
+        } else {
+            false
+        };
+        let summary = crate::multiplayer::QuinnSessionTickSummary {
+            command_summary: None,
+            snapshot_replicated,
+            delta_replicated,
+            terrain_chunk_response: None,
+            correction_summary: None,
+        };
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
+            &summary,
+            self.player_slot,
+        ));
+        Ok(summary)
+    }
+
+    pub async fn drive_descriptor_client_outbound_tick(
+        &mut self,
+        game: &mut GameState,
+        input: crate::multiplayer::QuinnSessionTickInput,
+    ) -> Result<
+        crate::multiplayer::QuinnSessionTickSummary,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let command_sent = if let Some(packet) = input.command_packet {
+            self.descriptor_client_send_command_packet_unacknowledged(packet)
+                .await?;
+            true
+        } else {
+            false
+        };
+        let summary = crate::multiplayer::QuinnSessionTickSummary {
+            command_summary: None,
+            snapshot_replicated: false,
+            delta_replicated: false,
+            terrain_chunk_response: None,
+            correction_summary: None,
+        };
+        if command_sent {
+            game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+                state: OnlineSessionUxState::Connected,
+                host_owns_save: false,
+                player_slot: self.player_slot,
+                status_message:
+                    "Descriptor client sent live command tick; waiting for host replication."
+                        .to_owned(),
+            });
+        }
+        Ok(summary)
+    }
+
+    pub async fn descriptor_client_send_command_packet_unacknowledged(
+        &mut self,
+        packet: crate::multiplayer::CommandPacket,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected { packet_io, .. } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::CommandPacket(packet),
+            ))
+            .await?;
+        Ok(())
+    }
+
     pub async fn descriptor_host_send_snapshot(
         &mut self,
         snapshot: crate::multiplayer::NetworkWorldSnapshot,

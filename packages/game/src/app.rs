@@ -344,8 +344,26 @@ impl OnlineTaskDispatcher {
                 return;
             }
         };
-        if let Err(error) = runtime.block_on(controller.drive_tick_input(session.game_mut(), input))
-        {
+        let mode_label = controller.mode_label();
+        let result = match mode_label {
+            "descriptor-host-accepted" => runtime.block_on(
+                controller.drive_descriptor_host_outbound_tick(session.game_mut(), input),
+            ),
+            "descriptor-client-connected" => runtime.block_on(
+                controller.drive_descriptor_client_outbound_tick(session.game_mut(), input),
+            ),
+            "descriptor-host-pending" => Ok(crate::multiplayer::QuinnSessionTickSummary {
+                command_summary: None,
+                snapshot_replicated: false,
+                delta_replicated: false,
+                terrain_chunk_response: None,
+                correction_summary: None,
+            }),
+            _ => runtime
+                .block_on(controller.drive_tick_input(session.game_mut(), input))
+                .map(|telemetry| telemetry.summary),
+        };
+        if let Err(error) = result {
             session
                 .game_mut()
                 .apply_online_network_task_result(OnlineNetworkTaskResult::Failed(format!(
@@ -974,6 +992,23 @@ mod tests {
                 .expect("joined client controller")
                 .mode_label(),
             "descriptor-client-connected"
+        );
+
+        let mut host_session = GameSession::new();
+        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
+        assert!(
+            host_session
+                .game()
+                .online_session_status_message
+                .contains("tick")
+        );
+        let mut join_session = GameSession::new();
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        assert!(
+            join_session
+                .game()
+                .online_session_status_message
+                .contains("Descriptor client sent live command tick")
         );
         let _ignored = std::fs::remove_file(unique_path);
     }
