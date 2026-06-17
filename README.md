@@ -77,10 +77,66 @@ Multiplayer support now has validated local split-screen and direct-connect onli
   - `cargo run --bin drillgame -- --online-host-gameplay-descriptor-file-on-addr /tmp/drillgame-gameplay-host.json 0.0.0.0:4243 192.168.1.20:4243 60`
   - `cargo run --bin drillgame -- --online-join-gameplay-descriptor-file-on-addr /tmp/drillgame-gameplay-host.json 0.0.0.0:0 60`
 
-This is still a desktop-first/direct-connect online MVP, not a backend/platform multiplayer service. Known limitations:
+This is still a desktop-first/direct-connect online MVP, not a backend/platform multiplayer service.
+
+### Direct-connect host/join quick start
+
+Use these commands when testing two instances on the same LAN/VPN. Replace `192.168.1.20` with the host machine's LAN/VPN IP and pick an open UDP port such as `4242` or `4243`.
+
+1. Host generates and advertises a descriptor while binding UDP on all local interfaces:
+
+   ```bash
+   cargo run --bin drillgame -- --online-host-descriptor-file-on-addr /tmp/drillgame-host.json 0.0.0.0:4242 192.168.1.20:4242
+   ```
+
+2. Send `/tmp/drillgame-host.json` to the joining player over a trusted channel.
+3. Joining player validates/uses the descriptor:
+
+   ```bash
+   cargo run --bin drillgame -- --online-inspect-descriptor-file /tmp/drillgame-host.json
+   cargo run --bin drillgame -- --online-join-descriptor-file-on-addr /tmp/drillgame-host.json 0.0.0.0:0
+   ```
+
+4. For gameplay tick validation with the generated descriptor, run matching host/join commands:
+
+   ```bash
+   cargo run --bin drillgame -- --online-host-gameplay-descriptor-file-on-addr /tmp/drillgame-gameplay-host.json 0.0.0.0:4243 192.168.1.20:4243 60
+   cargo run --bin drillgame -- --online-join-gameplay-descriptor-file-on-addr /tmp/drillgame-gameplay-host.json 0.0.0.0:0 60
+   ```
+
+5. To generate a repeatable QA plan/checklist for a LAN run:
+
+   ```bash
+   cargo run --bin drillgame -- --online-lan-qa-plan-json /tmp/drillgame-host.json 0.0.0.0:4242 192.168.1.20:4242 0.0.0.0:0 60
+   cargo run --bin drillgame -- --online-lan-qa-checklist-md /tmp/drillgame-host.json 0.0.0.0:4242 192.168.1.20:4242 0.0.0.0:0 60
+   ```
+
+### Direct-connect troubleshooting
+
+- Make sure both players run the same Drillgame build/protocol version.
+- Use the host's LAN/VPN IP address, not `127.0.0.1`, when connecting from another machine.
+- Allow inbound UDP for the selected host port in the host OS firewall/router/VPN policy.
+- If connection fails, regenerate and re-share the descriptor; descriptors contain the expected host address and certificate trust material.
+- If `connection refused`, `unreachable`, or `timed out` appears, verify host process is still running, advertised address/port are reachable, and both machines are on the intended network.
+- NAT traversal, matchmaking, public relays, platform invites, and host migration are not part of the direct-connect MVP.
+
+### Multiplayer QA evidence
+
+For release QA, store the generated checklist/plan alongside host and client logs. A useful evidence bundle contains:
+
+- QA plan JSON from `--online-lan-qa-plan-json`
+- QA checklist markdown from `--online-lan-qa-checklist-md`
+- exact host/client commands that were run
+- descriptor inspection output from `--online-inspect-descriptor-file`
+- host and client stdout/stderr logs
+- soak JSON from `--online-local-soak-json <ticks>`
+- screenshots or notes for in-game Online Multiplayer modal transitions when testing the windowed UI
+
+Known limitations:
 
 - real multi-machine QA outside localhost/scripted degraded-network coverage still needs to be performed before a production online release
-- NAT traversal, matchmaking/server browser, platform invites, and host migration are deliberately deferred outside the direct-connect MVP
+- online play is direct-connect only: one player hosts, host owns session authority/save writes, and the session ends if the host leaves
+- NAT traversal, matchmaking/server browser, platform invites, public relay/backend services, and host migration are deliberately deferred outside the direct-connect MVP
 - legacy `GameState` still participates in live gameplay as compatibility glue while authoritative systems are extracted
 
 ## Saves and Settings
