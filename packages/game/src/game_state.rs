@@ -560,6 +560,80 @@ impl RealOnlineSessionController {
         Ok(())
     }
 
+    pub async fn descriptor_host_receive_command_packet(
+        &mut self,
+    ) -> Result<
+        crate::multiplayer::CommandPacketExchangeSummary,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
+        let RealOnlineSessionMode::DescriptorHostAccepted {
+            host_runtime,
+            host_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        let received = host_io.receive_datagram_packet().await?;
+        let packet = match received.decode_supported().map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                "unsupported protocol version: expected {}, actual {}",
+                error.expected, error.actual
+            ))
+        })? {
+            crate::multiplayer::ProtocolMessage::CommandPacket(packet) => packet,
+            other => {
+                return Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other));
+            }
+        };
+        let (responses, summary) = host_runtime.apply_command_packet_exchange(&packet);
+        for response in responses {
+            host_io
+                .send_packet(crate::multiplayer::VersionedProtocolPacket::new(response))
+                .await?;
+        }
+        Ok(summary)
+    }
+
+    pub async fn descriptor_client_send_command_packet(
+        &mut self,
+        packet: crate::multiplayer::CommandPacket,
+        expected_responses: usize,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected {
+            client_runtime,
+            packet_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::CommandPacket(packet),
+            ))
+            .await?;
+        for _ in 0..expected_responses {
+            let response = packet_io.receive_reliable_packet().await?;
+            let message = response.decode_supported().map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })?;
+            client_runtime.handle_message(message);
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub const fn mode_label(&self) -> &'static str {
         self.mode.label()
@@ -6591,6 +6665,38 @@ mod tests {
         );
         assert!(accept_game.message.contains("Remote miner joined"));
         assert!(client_game.message.contains("Connected to host descriptor"));
+
+        let command_packet = crate::multiplayer::CommandPacket {
+            client_id: crate::multiplayer::LOCAL_CLIENT_ID,
+            commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                sequence: crate::multiplayer::InputSequence::new(1),
+                target_tick: crate::multiplayer::SimulationTick::new(301),
+                command: crate::multiplayer::PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: true,
+                    drill_down: false,
+                },
+            }],
+        };
+        let (host_summary, client_command_result) = tokio::join!(
+            host_controller.descriptor_host_receive_command_packet(),
+            async {
+                let mut client_controller = client_controller;
+                client_controller
+                    .descriptor_client_send_command_packet(command_packet, 1)
+                    .await
+                    .map(|()| client_controller)
+            },
+        );
+        let host_summary = host_summary.expect("host receives descriptor command packet");
+        let client_controller = client_command_result.expect("client receives command ack");
+        assert!(host_summary.all_accepted());
+        assert_eq!(host_summary.acknowledged, 1);
+        assert_eq!(
+            client_controller.mode_label(),
+            "descriptor-client-connected"
+        );
         let _ignored = std::fs::remove_file(unique_path);
     }
 
