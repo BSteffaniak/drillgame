@@ -64,6 +64,7 @@ Multiplayer support now has validated local split-screen and direct-connect onli
 - executable online checks are available:
   - `cargo run --bin drillgame -- --online-help`
   - `cargo run --bin drillgame -- --online-local-smoke`
+  - `cargo run --bin drillgame -- --online-local-soak 120`
   - `cargo run --bin drillgame -- --online-latency-loss-playtest`
   - `cargo run --bin drillgame -- --online-production-acceptance`
   - `cargo run --bin drillgame -- --online-production-acceptance-json`

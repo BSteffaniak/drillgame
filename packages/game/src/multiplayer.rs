@@ -1098,6 +1098,32 @@ impl LocalOnlineSmokeSummary {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalOnlineSoakSummary {
+    pub ticks_requested: u32,
+    pub ticks_completed: u32,
+    pub commands_exchanged: u32,
+    pub snapshots_replicated: u32,
+    pub deltas_replicated: u32,
+    pub terrain_chunks_exchanged: u32,
+    pub corrections_replicated: u32,
+    pub elapsed_micros: u128,
+}
+
+impl LocalOnlineSoakSummary {
+    #[must_use]
+    pub const fn passed(&self) -> bool {
+        self.ticks_requested > 0
+            && self.ticks_completed == self.ticks_requested
+            && self.commands_exchanged == self.ticks_requested
+            && self.snapshots_replicated == self.ticks_requested
+            && self.deltas_replicated == self.ticks_requested
+            && self.terrain_chunks_exchanged == self.ticks_requested
+            && self.corrections_replicated == self.ticks_requested
+            && self.elapsed_micros > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProductionPlatformScope {
     DirectConnectMvp,
@@ -1633,6 +1659,133 @@ pub async fn local_online_smoke_summary() -> Result<LocalOnlineSmokeSummary, Qui
         reconnected: session.client_runtime.session_token == Some(SessionToken::new(920)),
         descriptor_handoff_available,
     })
+}
+
+/// Run a longer localhost direct-connect soak over the real Quinn packet IO helpers.
+///
+/// # Errors
+///
+/// Returns an error when session setup or any tick exchange fails.
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    reason = "soak input generation intentionally derives compact synthetic coordinates from bounded tick offsets"
+)]
+pub async fn local_online_soak_summary(
+    ticks: u32,
+) -> Result<LocalOnlineSoakSummary, QuinnOnlineSessionError> {
+    let client_config = default_local_client_runtime();
+    let player_id = client_config.player_id.unwrap_or(LOCAL_PLAYER_ID);
+    let mut session = connect_split_localhost_quinn_session(
+        HostRuntimeConfig::default(),
+        client_config.clone(),
+        SimulationTick::new(400),
+    )
+    .await?;
+    let started = Instant::now();
+    let mut summary = LocalOnlineSoakSummary {
+        ticks_requested: ticks,
+        ticks_completed: 0,
+        commands_exchanged: 0,
+        snapshots_replicated: 0,
+        deltas_replicated: 0,
+        terrain_chunks_exchanged: 0,
+        corrections_replicated: 0,
+        elapsed_micros: 0,
+    };
+
+    for offset in 0..ticks {
+        let tick = 401_u64 + u64::from(offset);
+        let command = match offset % 4 {
+            0 => PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: false,
+                drill_down: false,
+            },
+            1 => PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: true,
+                drill_down: false,
+            },
+            2 => PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: true,
+            },
+            _ => PlayerCommand::Interact,
+        };
+        let telemetry = session
+            .drive_tick_with_telemetry(QuinnSessionTickInput {
+                command_packet: Some(CommandPacket {
+                    client_id: client_config.client_id,
+                    commands: vec![SequencedPlayerCommand {
+                        player_id,
+                        sequence: InputSequence::new(100 + offset),
+                        target_tick: SimulationTick::new(tick),
+                        command,
+                    }],
+                }),
+                snapshot: Some(NetworkWorldSnapshot {
+                    tick: SimulationTick::new(tick + 1),
+                    players: vec![NetworkPlayerSnapshot {
+                        player_id,
+                        x: offset as f32,
+                        y: (offset as f32) * 0.5,
+                        velocity_x: 1.0,
+                        velocity_y: -0.5,
+                        fuel: 100.0_f32 - offset as f32,
+                        hull: 100.0,
+                        credits: offset,
+                        cargo_used: offset,
+                        scanner_cooldown_seconds: 0.0,
+                    }],
+                }),
+                delta: Some((SimulationTick::new(tick + 2), NetworkDeltaPayload::Noop)),
+                terrain_chunk_request: Some((
+                    offset as i32,
+                    offset as i32 + 1,
+                    u64::from(offset),
+                    u64::from(offset + 1),
+                )),
+                correction_probe: Some((
+                    offset as f32 + 0.25,
+                    offset as f32 + 0.5,
+                    NetworkPlayerSnapshot {
+                        player_id,
+                        x: offset as f32,
+                        y: offset as f32,
+                        velocity_x: 0.0,
+                        velocity_y: 0.0,
+                        fuel: 90.0,
+                        hull: 95.0,
+                        credits: offset,
+                        cargo_used: offset,
+                        scanner_cooldown_seconds: 0.0,
+                    },
+                    SimulationTick::new(tick + 3),
+                )),
+            })
+            .await?;
+        summary.ticks_completed += 1;
+        if telemetry.summary.command_summary.is_some() {
+            summary.commands_exchanged += 1;
+        }
+        if telemetry.summary.snapshot_replicated {
+            summary.snapshots_replicated += 1;
+        }
+        if telemetry.summary.delta_replicated {
+            summary.deltas_replicated += 1;
+        }
+        if telemetry.summary.terrain_chunk_response.is_some() {
+            summary.terrain_chunks_exchanged += 1;
+        }
+        if telemetry.summary.correction_summary.is_some() {
+            summary.corrections_replicated += 1;
+        }
+    }
+    summary.elapsed_micros = started.elapsed().as_micros();
+    Ok(summary)
 }
 
 /// Start split localhost Quinn host/client entrypoints and complete the join handshake through real packet IO.

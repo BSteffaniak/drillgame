@@ -407,6 +407,7 @@ fn spawned_online_cli_prints_help() {
     let stdout = String::from_utf8(output.stdout).expect("online help stdout is utf8");
     assert!(stdout.contains("Online multiplayer CLI actions"));
     assert!(stdout.contains("--online-production-acceptance-json"));
+    assert!(stdout.contains("--online-local-soak <ticks>"));
 }
 
 #[test]
@@ -425,6 +426,26 @@ fn spawned_online_cli_runs_local_smoke() {
     );
     let stdout = String::from_utf8(output.stdout).expect("smoke stdout is utf8");
     assert!(stdout.contains("local online smoke passed"));
+}
+
+#[test]
+fn spawned_online_cli_runs_local_soak() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let output = Command::new(binary)
+        .args(["--online-local-soak", "6"])
+        .output()
+        .expect("online soak CLI process runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("soak stdout is utf8");
+    assert!(stdout.contains("local online soak passed"));
+    assert!(stdout.contains("ticks=6"));
+    assert!(stdout.contains("corrections=6"));
 }
 
 #[test]
