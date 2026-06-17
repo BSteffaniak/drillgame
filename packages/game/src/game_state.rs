@@ -1876,10 +1876,21 @@ impl GameState {
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
         lines.push(self.online_session_status_message.clone());
+        lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
         lines
+    }
+
+    #[must_use]
+    pub fn online_save_policy_line(&self) -> String {
+        if self.can_write_local_save() {
+            "Save policy: local save writes allowed for this player/session.".to_owned()
+        } else {
+            "Save policy: host owns the online save; joined clients cannot write local saves."
+                .to_owned()
+        }
     }
 
     #[must_use]
@@ -6389,6 +6400,11 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
+                .any(|line| line.contains("host owns the online save"))
+        );
+        assert!(
+            pending_lines
+                .iter()
                 .any(|line| line.contains("Direct-connect config"))
         );
         assert!(
@@ -6610,6 +6626,58 @@ mod tests {
         assert_eq!(game.online_session_state, OnlineSessionUxState::Idle);
         assert_eq!(game.modal, None);
         assert!(game.message.contains("no network task queued"));
+    }
+
+    #[test]
+    fn online_save_policy_line_reports_host_owned_save_rules() {
+        let mut game = GameState::new();
+        assert!(game.online_save_policy_line().contains("allowed"));
+
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Connected as joined client.".to_owned(),
+        });
+        assert!(
+            game.online_save_policy_line()
+                .contains("joined clients cannot write")
+        );
+
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot: Some(1),
+            status_message: "Connected as host.".to_owned(),
+        });
+        assert!(game.online_save_policy_line().contains("allowed"));
+    }
+
+    #[test]
+    fn online_shutdown_preserves_dirty_save_state() {
+        let mut game = GameState::new();
+        game.save_dirty = true;
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 5;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert!(game.save_dirty);
+        assert_eq!(game.modal, None);
+        assert_eq!(
+            game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::Shutdown)
+        );
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        assert!(game.save_dirty);
+        assert_eq!(game.online_network_task_request, None);
+        assert_eq!(game.modal, None);
     }
 
     #[test]

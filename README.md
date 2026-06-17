@@ -120,6 +120,13 @@ Use these commands when testing two instances on the same LAN/VPN. Replace `192.
 - If `connection refused`, `unreachable`, or `timed out` appears, verify host process is still running, advertised address/port are reachable, and both machines are on the intended network.
 - NAT traversal, matchmaking, public relays, platform invites, and host migration are not part of the direct-connect MVP.
 
+### Direct-connect save/session behavior
+
+- The host owns the authoritative online session and is the only peer allowed to write local saves during an online session.
+- Joined clients are blocked from local save writes and should rely on the host-owned session/save.
+- Shutting down an online session does not clear local unsaved-change state; save prompts and dirty-save behavior remain local UI responsibilities.
+- Host migration is not supported. If the host leaves, the direct-connect session ends and players must start/join a new session.
+
 ### Multiplayer QA evidence
 
 For release QA, store the generated checklist/plan alongside host and client logs. A useful evidence bundle contains:
