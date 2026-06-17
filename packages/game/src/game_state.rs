@@ -1335,6 +1335,30 @@ fn default_online_host_advertise_addr() -> SocketAddr {
         .expect("default online host advertise address parses")
 }
 
+fn lan_online_host_bind_addr() -> SocketAddr {
+    "0.0.0.0:5252"
+        .parse()
+        .expect("LAN online host bind address parses")
+}
+
+fn lan_online_host_advertise_addr() -> SocketAddr {
+    "192.168.1.10:5252"
+        .parse()
+        .expect("LAN online host advertise address parses")
+}
+
+fn localhost_ephemeral_online_host_bind_addr() -> SocketAddr {
+    "127.0.0.1:0"
+        .parse()
+        .expect("localhost ephemeral online host bind address parses")
+}
+
+fn localhost_ephemeral_online_host_advertise_addr() -> SocketAddr {
+    "127.0.0.1:0"
+        .parse()
+        .expect("localhost ephemeral online host advertise address parses")
+}
+
 fn default_online_client_bind_addr() -> SocketAddr {
     "0.0.0.0:0"
         .parse()
@@ -2772,6 +2796,39 @@ impl GameState {
         );
     }
 
+    fn cycle_online_host_address_preset(&mut self) {
+        if self.online_host_bind_addr == default_online_host_bind_addr()
+            && self.online_host_advertise_addr == default_online_host_advertise_addr()
+        {
+            self.online_host_bind_addr = lan_online_host_bind_addr();
+            self.online_host_advertise_addr = lan_online_host_advertise_addr();
+        } else if self.online_host_bind_addr == lan_online_host_bind_addr()
+            && self.online_host_advertise_addr == lan_online_host_advertise_addr()
+        {
+            self.online_host_bind_addr = localhost_ephemeral_online_host_bind_addr();
+            self.online_host_advertise_addr = localhost_ephemeral_online_host_advertise_addr();
+        } else {
+            self.online_host_bind_addr = default_online_host_bind_addr();
+            self.online_host_advertise_addr = default_online_host_advertise_addr();
+        }
+        self.online_session_status_message = format!(
+            "Host address preset selected: bind {}, advertise {}",
+            self.online_host_bind_addr, self.online_host_advertise_addr
+        );
+    }
+
+    fn cycle_online_gameplay_ticks(&mut self) {
+        self.online_gameplay_ticks = match self.online_gameplay_ticks {
+            0..=60 => 120,
+            61..=120 => 300,
+            _ => 60,
+        };
+        self.online_session_status_message = format!(
+            "Gameplay smoke tick count selected: {} ticks",
+            self.online_gameplay_ticks
+        );
+    }
+
     fn confirm_online_multiplayer(&mut self) {
         match self.selected_menu_item {
             0 => {
@@ -2819,16 +2876,22 @@ impl GameState {
                 self.cycle_online_descriptor_path();
             }
             4 => {
+                self.cycle_online_host_address_preset();
+            }
+            5 => {
+                self.cycle_online_gameplay_ticks();
+            }
+            6 => {
                 self.online_session_state = OnlineSessionUxState::Timeout;
                 "Connection timed out; retry or go back."
                     .clone_into(&mut self.online_session_status_message);
             }
-            5 => {
+            7 => {
                 self.online_session_state = OnlineSessionUxState::Error;
                 "Connection error: direct Quinn connection task failed."
                     .clone_into(&mut self.online_session_status_message);
             }
-            6 => {
+            8 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 self.online_local_ready = false;
@@ -2836,7 +2899,7 @@ impl GameState {
                 "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
             }
-            7 => {
+            9 => {
                 self.online_local_ready = !self.online_local_ready;
                 if self.online_local_ready {
                     "Local player ready for online session start."
@@ -3655,7 +3718,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 7,
+                ModalScreen::OnlineMultiplayer => 10,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -7475,7 +7538,7 @@ mod tests {
             OnlineSessionUxState::Reconnecting
         );
 
-        game.selected_menu_item = 4;
+        game.selected_menu_item = 6;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7485,7 +7548,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Timeout);
 
-        game.selected_menu_item = 5;
+        game.selected_menu_item = 7;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7495,7 +7558,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
 
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 8;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -7577,7 +7640,7 @@ mod tests {
         let mut game = GameState::new();
         game.save_dirty = true;
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 8;
 
         game.update(
             PlayerInput {
@@ -7662,10 +7725,79 @@ mod tests {
     }
 
     #[test]
+    fn online_multiplayer_cycles_host_address_and_tick_presets() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 4;
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_host_bind_addr, lan_online_host_bind_addr());
+        assert_eq!(
+            game.online_host_advertise_addr,
+            lan_online_host_advertise_addr()
+        );
+        assert!(game.message.contains("Host address preset selected"));
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(
+            game.online_host_bind_addr,
+            localhost_ephemeral_online_host_bind_addr()
+        );
+        assert_eq!(
+            game.online_host_advertise_addr,
+            localhost_ephemeral_online_host_advertise_addr()
+        );
+
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_host_bind_addr, default_online_host_bind_addr());
+        assert_eq!(
+            game.online_host_advertise_addr,
+            default_online_host_advertise_addr()
+        );
+
+        game.selected_menu_item = 5;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_gameplay_ticks, 120);
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_gameplay_ticks, 300);
+        assert!(game.message.contains("Gameplay smoke tick count selected"));
+    }
+
+    #[test]
     fn online_multiplayer_toggle_ready_updates_lobby_status() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 7;
+        game.selected_menu_item = 9;
 
         game.update(
             PlayerInput {
