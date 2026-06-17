@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf, time::Duration};
+use std::{io::Write, net::SocketAddr, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,10 +16,25 @@ pub enum OnlineCliAction {
     ProductionAcceptance,
     ProductionAcceptanceJson,
     HostDescriptorJson,
-    HostDescriptorFile { path: PathBuf },
-    JoinDescriptorFile { path: PathBuf },
-    HostGameplayDescriptorFile { path: PathBuf, ticks: u32 },
-    JoinGameplayDescriptorFile { path: PathBuf, ticks: u32 },
+    HostDescriptorFile {
+        path: PathBuf,
+    },
+    HostDescriptorFileOnAddr {
+        path: PathBuf,
+        bind_addr: SocketAddr,
+        advertise_addr: SocketAddr,
+    },
+    JoinDescriptorFile {
+        path: PathBuf,
+    },
+    HostGameplayDescriptorFile {
+        path: PathBuf,
+        ticks: u32,
+    },
+    JoinGameplayDescriptorFile {
+        path: PathBuf,
+        ticks: u32,
+    },
 }
 
 #[must_use]
@@ -47,6 +62,16 @@ where
                 let path = args.next()?;
                 return Some(OnlineCliAction::HostDescriptorFile {
                     path: PathBuf::from(path.as_ref()),
+                });
+            }
+            "--online-host-descriptor-file-on-addr" => {
+                let path = args.next()?;
+                let bind_addr = args.next()?.as_ref().parse().ok()?;
+                let advertise_addr = args.next()?.as_ref().parse().ok()?;
+                return Some(OnlineCliAction::HostDescriptorFileOnAddr {
+                    path: PathBuf::from(path.as_ref()),
+                    bind_addr,
+                    advertise_addr,
                 });
             }
             "--online-join-descriptor-file" => {
@@ -85,7 +110,7 @@ where
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-host-descriptor-json\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -102,6 +127,11 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::ProductionAcceptanceJson => run_production_acceptance_json_cli_action(),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
+        OnlineCliAction::HostDescriptorFileOnAddr {
+            path,
+            bind_addr,
+            advertise_addr,
+        } => run_host_descriptor_file_on_addr_cli_action(path, bind_addr, advertise_addr),
         OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
         OnlineCliAction::HostGameplayDescriptorFile { path, ticks } => {
             run_host_gameplay_descriptor_file_cli_action(path, ticks)
@@ -178,14 +208,35 @@ fn run_host_descriptor_json_cli_action() -> Result<String, String> {
 }
 
 fn run_host_descriptor_file_cli_action(path: PathBuf) -> Result<String, String> {
+    run_host_descriptor_file_with_config(path, QuinnEndpointConfig::localhost_ephemeral(), None)
+}
+
+fn run_host_descriptor_file_on_addr_cli_action(
+    path: PathBuf,
+    bind_addr: SocketAddr,
+    advertise_addr: SocketAddr,
+) -> Result<String, String> {
+    run_host_descriptor_file_with_config(
+        path,
+        QuinnEndpointConfig { bind_addr },
+        Some(advertise_addr),
+    )
+}
+
+fn run_host_descriptor_file_with_config(
+    path: PathBuf,
+    config: QuinnEndpointConfig,
+    advertise_addr: Option<SocketAddr>,
+) -> Result<String, String> {
     let runtime = build_current_thread_runtime()?;
     runtime.block_on(async move {
-        let listener =
-            QuinnHostListener::bind_localhost(QuinnEndpointConfig::localhost_ephemeral())
-                .map_err(format_debug_error)?;
-        let descriptor = listener
+        let listener = QuinnHostListener::bind_localhost(config).map_err(format_debug_error)?;
+        let mut descriptor = listener
             .connection_descriptor()
             .map_err(format_debug_error)?;
+        if let Some(addr) = advertise_addr {
+            descriptor.host_addr = addr;
+        }
         let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
         std::fs::write(&path, json).map_err(|error| error.to_string())?;
         println!("online host descriptor ready");
@@ -678,6 +729,19 @@ mod tests {
             parse_online_cli_action(["--online-host-descriptor-file", "/tmp/host.json"]),
             Some(OnlineCliAction::HostDescriptorFile {
                 path: PathBuf::from("/tmp/host.json")
+            })
+        );
+        assert_eq!(
+            parse_online_cli_action([
+                "--online-host-descriptor-file-on-addr",
+                "/tmp/lan-host.json",
+                "0.0.0.0:0",
+                "192.0.2.10:4242"
+            ]),
+            Some(OnlineCliAction::HostDescriptorFileOnAddr {
+                path: PathBuf::from("/tmp/lan-host.json"),
+                bind_addr: "0.0.0.0:0".parse().expect("bind addr parses"),
+                advertise_addr: "192.0.2.10:4242".parse().expect("advertise addr parses"),
             })
         );
         assert_eq!(

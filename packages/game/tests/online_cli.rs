@@ -1,5 +1,6 @@
 use std::{
     io::{BufRead, BufReader},
+    net::{SocketAddr, UdpSocket},
     path::PathBuf,
     process::{Command, Stdio},
     sync::mpsc,
@@ -32,6 +33,11 @@ fn temporary_descriptor_path(name: &str) -> PathBuf {
             .expect("system time after unix epoch")
             .as_nanos()
     ))
+}
+
+fn unused_loopback_udp_addr() -> SocketAddr {
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("ephemeral UDP socket binds");
+    socket.local_addr().expect("ephemeral UDP addr is visible")
 }
 
 fn spawn_stdout_line_reader(stdout: std::process::ChildStdout) -> mpsc::Receiver<String> {
@@ -102,6 +108,63 @@ fn spawned_online_cli_host_and_join_exchange_descriptor_file() {
         .recv_timeout(Duration::from_secs(1))
         .expect("host accepted marker is emitted");
     assert!(accepted_line.contains("command/snapshot/correction/reconnect"));
+
+    let _ignored = std::fs::remove_file(descriptor_path);
+}
+
+#[test]
+fn spawned_online_cli_host_and_join_exchange_descriptor_file_on_advertised_addr() {
+    let _lock = online_cli_test_lock();
+    let binary = env!("CARGO_BIN_EXE_drillgame");
+    let descriptor_path = temporary_descriptor_path("host-join-advertised");
+    let bind_addr = unused_loopback_udp_addr();
+    let mut host = Command::new(binary)
+        .arg("--online-host-descriptor-file-on-addr")
+        .arg(&descriptor_path)
+        .arg(bind_addr.to_string())
+        .arg(bind_addr.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("advertised host descriptor process starts");
+
+    let stdout = host.stdout.take().expect("host stdout is piped");
+    let stdout_lines = spawn_stdout_line_reader(stdout);
+    let readiness_line = stdout_lines
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or_else(|error| {
+            if let Some(status) = host.try_wait().expect("host status can be polled") {
+                panic!("advertised host exited before readiness marker: {status}");
+            }
+            panic!("advertised host readiness marker was not emitted: {error}");
+        });
+    assert_eq!(readiness_line, "online host descriptor ready");
+    assert!(descriptor_path.exists(), "descriptor file was not written");
+    let descriptor_json =
+        std::fs::read_to_string(&descriptor_path).expect("advertised descriptor file can be read");
+    let descriptor: HostDescriptorProbe =
+        serde_json::from_str(&descriptor_json).expect("advertised descriptor JSON parses");
+    assert_eq!(descriptor.host_addr, bind_addr.to_string());
+
+    let join_output = Command::new(binary)
+        .arg("--online-join-descriptor-file")
+        .arg(&descriptor_path)
+        .output()
+        .expect("join advertised descriptor process runs");
+    assert!(
+        join_output.status.success(),
+        "join stderr: {}",
+        String::from_utf8_lossy(&join_output.stderr)
+    );
+
+    let host_output = host
+        .wait_with_output()
+        .expect("advertised host descriptor process exits after join");
+    assert!(
+        host_output.status.success(),
+        "host stderr: {}",
+        String::from_utf8_lossy(&host_output.stderr)
+    );
 
     let _ignored = std::fs::remove_file(descriptor_path);
 }
