@@ -13,6 +13,7 @@ pub enum OnlineCliAction {
     LocalSmoke,
     LatencyLossPlaytest,
     ProductionAcceptance,
+    ProductionAcceptanceJson,
     HostDescriptorJson,
     HostDescriptorFile { path: PathBuf },
     JoinDescriptorFile { path: PathBuf },
@@ -35,6 +36,9 @@ where
             }
             "--online-production-acceptance" => {
                 return Some(OnlineCliAction::ProductionAcceptance);
+            }
+            "--online-production-acceptance-json" => {
+                return Some(OnlineCliAction::ProductionAcceptanceJson);
             }
             "--online-host-descriptor-json" => return Some(OnlineCliAction::HostDescriptorJson),
             "--online-host-descriptor-file" => {
@@ -87,6 +91,7 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
         OnlineCliAction::LocalSmoke => run_local_smoke_cli_action(),
         OnlineCliAction::LatencyLossPlaytest => run_latency_loss_playtest_cli_action(),
         OnlineCliAction::ProductionAcceptance => run_production_acceptance_cli_action(),
+        OnlineCliAction::ProductionAcceptanceJson => run_production_acceptance_json_cli_action(),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::HostDescriptorFile { path } => run_host_descriptor_file_cli_action(path),
         OnlineCliAction::JoinDescriptorFile { path } => run_join_descriptor_file_cli_action(path),
@@ -143,6 +148,14 @@ fn run_production_acceptance_cli_action() -> Result<String, String> {
                 .to_owned(),
         )
     }
+}
+
+fn run_production_acceptance_json_cli_action() -> Result<String, String> {
+    let runtime = build_current_thread_runtime()?;
+    let summary = runtime
+        .block_on(production_online_acceptance_summary())
+        .map_err(format_debug_error)?;
+    serde_json::to_string_pretty(&summary).map_err(format_debug_error)
 }
 
 fn run_host_descriptor_json_cli_action() -> Result<String, String> {
@@ -640,6 +653,10 @@ mod tests {
         assert_eq!(
             parse_online_cli_action(["--online-production-acceptance"]),
             Some(OnlineCliAction::ProductionAcceptance)
+        );
+        assert_eq!(
+            parse_online_cli_action(["--online-production-acceptance-json"]),
+            Some(OnlineCliAction::ProductionAcceptanceJson)
         );
         assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-json"]),

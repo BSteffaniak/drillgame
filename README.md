@@ -65,6 +65,7 @@ Multiplayer support now has validated local split-screen and direct-connect onli
   - `cargo run --bin drillgame -- --online-local-smoke`
   - `cargo run --bin drillgame -- --online-latency-loss-playtest`
   - `cargo run --bin drillgame -- --online-production-acceptance`
+  - `cargo run --bin drillgame -- --online-production-acceptance-json`
 
 This is still a desktop-first/direct-connect online MVP, not a backend/platform multiplayer service. Known limitations:
 
