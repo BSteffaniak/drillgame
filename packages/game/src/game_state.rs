@@ -299,6 +299,7 @@ pub enum OnlineNetworkTaskRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OnlineNetworkTaskResult {
     Hosted(RealOnlineSessionUxSnapshot),
+    JoinedDescriptor(RealOnlineSessionUxSnapshot),
     Connected(RealOnlineSessionUxSnapshot),
     Reconnected(RealOnlineSessionUxSnapshot),
     Failed(String),
@@ -316,13 +317,19 @@ pub enum RealOnlineSessionMode {
         descriptor_path: PathBuf,
         descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
     },
+    DescriptorClientConnected {
+        connector: crate::multiplayer::QuinnClientConnector,
+        packet_io: crate::multiplayer::QuinnPacketIo,
+        descriptor_path: PathBuf,
+        descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
+    },
 }
 
 impl RealOnlineSessionMode {
     const fn session_mut(&mut self) -> Option<&mut crate::multiplayer::QuinnOnlineSession> {
         match self {
             Self::CombinedLocalhost(session) => Some(session),
-            Self::DescriptorHostPending { .. } => None,
+            Self::DescriptorHostPending { .. } | Self::DescriptorClientConnected { .. } => None,
         }
     }
 
@@ -330,6 +337,7 @@ impl RealOnlineSessionMode {
         match self {
             Self::CombinedLocalhost(_) => "combined-localhost",
             Self::DescriptorHostPending { .. } => "descriptor-host-pending",
+            Self::DescriptorClientConnected { .. } => "descriptor-client-connected",
         }
     }
 }
@@ -404,6 +412,50 @@ impl RealOnlineSessionController {
             Some(1),
             path,
         ));
+        Ok(controller)
+    }
+
+    pub async fn connect_descriptor_client(
+        game: &mut GameState,
+        path: &Path,
+    ) -> Result<Self, crate::multiplayer::QuinnOnlineSessionError> {
+        let json = std::fs::read_to_string(path).map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                "descriptor file {} could not be read: {error}",
+                path.display()
+            ))
+        })?;
+        let descriptor: crate::multiplayer::QuinnHostConnectionDescriptor =
+            serde_json::from_str(&json).map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "descriptor file {} could not be parsed: {error}",
+                    path.display()
+                ))
+            })?;
+        let connector = crate::multiplayer::QuinnClientConnector::bind_from_host_descriptor(
+            crate::multiplayer::QuinnEndpointConfig::localhost_ephemeral(),
+            &descriptor,
+        )?;
+        let packet_io = connector
+            .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
+            .await?;
+        let controller = Self {
+            mode: RealOnlineSessionMode::DescriptorClientConnected {
+                connector,
+                packet_io,
+                descriptor_path: path.to_path_buf(),
+                descriptor,
+            },
+            player_slot: Some(2),
+            next_sequence: 30,
+            next_tick: 301,
+        };
+        game.apply_real_online_session_ux(
+            RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
+                controller.player_slot,
+                path,
+            ),
+        );
         Ok(controller)
     }
 
@@ -628,6 +680,19 @@ impl RealOnlineSessionUxSnapshot {
             player_slot,
             status_message: format!(
                 "Host descriptor ready at {}; waiting for remote miner to join.",
+                path.display()
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn from_descriptor_client_connected(player_slot: Option<u8>, path: &Path) -> Self {
+        Self {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot,
+            status_message: format!(
+                "Connected to host descriptor {}; waiting for gameplay sync.",
                 path.display()
             ),
         }
@@ -1880,7 +1945,8 @@ impl GameState {
     )]
     pub fn apply_online_network_task_result(&mut self, result: OnlineNetworkTaskResult) {
         match result {
-            OnlineNetworkTaskResult::Hosted(snapshot) => {
+            OnlineNetworkTaskResult::Hosted(snapshot)
+            | OnlineNetworkTaskResult::JoinedDescriptor(snapshot) => {
                 self.apply_real_online_session_ux(snapshot);
             }
             OnlineNetworkTaskResult::Connected(snapshot)

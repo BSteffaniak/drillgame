@@ -31,6 +31,7 @@ const FRAME_DELTA_SPIKE_WARN_SECONDS: f32 = FIXED_DELTA_SECONDS * 15.0;
 
 enum OnlineTaskCompletion {
     Hosted(Result<RealOnlineSessionController, String>),
+    JoinedDescriptor(Result<(RealOnlineSessionController, std::path::PathBuf), String>),
     Connected(Result<RealOnlineSessionController, String>),
     Reconnected(Result<RealOnlineSessionController, String>),
 }
@@ -76,6 +77,15 @@ impl OnlineTaskDispatcher {
                 self.controller = Some(controller);
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(snapshot));
             }
+            OnlineTaskCompletion::JoinedDescriptor(Ok((controller, path))) => {
+                self.controller = Some(controller);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::JoinedDescriptor(
+                    crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
+                        Some(2),
+                        &path,
+                    ),
+                ));
+            }
             OnlineTaskCompletion::Connected(Ok(controller)) => {
                 self.controller = Some(controller);
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
@@ -89,6 +99,7 @@ impl OnlineTaskDispatcher {
                 ));
             }
             OnlineTaskCompletion::Hosted(Err(error))
+            | OnlineTaskCompletion::JoinedDescriptor(Err(error))
             | OnlineTaskCompletion::Connected(Err(error))
             | OnlineTaskCompletion::Reconnected(Err(error)) => {
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(error));
@@ -115,6 +126,22 @@ impl OnlineTaskDispatcher {
                 RealOnlineSessionController::host_descriptor_file_pending(&mut game, &path)
                     .map_err(|error| format!("{error:?}"));
             let _ignored = sender.send(OnlineTaskCompletion::Hosted(result));
+        });
+    }
+
+    fn spawn_join_descriptor(&mut self, path: std::path::PathBuf) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_completion = Some(receiver);
+        runtime.spawn(async move {
+            let mut game = GameState::new();
+            let result = RealOnlineSessionController::connect_descriptor_client(&mut game, &path)
+                .await
+                .map(|controller| (controller, path))
+                .map_err(|error| format!("{error:?}"));
+            let _ignored = sender.send(OnlineTaskCompletion::JoinedDescriptor(result));
         });
     }
 
@@ -180,23 +207,7 @@ impl OnlineTaskDispatcher {
                 );
             }
             OnlineNetworkTaskRequest::JoinDescriptorFile { path } => {
-                match std::fs::read_to_string(&path)
-                    .map_err(|error| error.to_string())
-                    .and_then(|json| {
-                        serde_json::from_str::<crate::multiplayer::QuinnHostConnectionDescriptor>(
-                            &json,
-                        )
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                    }) {
-                    Ok(()) => self.spawn_connect(),
-                    Err(error) => game.apply_online_network_task_result(
-                        OnlineNetworkTaskResult::Failed(format!(
-                            "Descriptor file {} could not be used: {error}",
-                            path.display()
-                        )),
-                    ),
-                }
+                self.spawn_join_descriptor(path);
             }
             OnlineNetworkTaskRequest::ReconnectDirectConnect => {
                 if let Some(controller) = self.controller.take() {
@@ -863,6 +874,7 @@ mod tests {
         });
 
         dispatcher.drain_and_execute(&mut game);
+        wait_for_online_completion(&mut dispatcher, &mut game);
 
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
         assert!(game.message.contains("host descriptor could not be read"));
