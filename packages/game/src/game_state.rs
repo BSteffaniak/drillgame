@@ -560,6 +560,172 @@ impl RealOnlineSessionController {
         Ok(())
     }
 
+    pub async fn descriptor_host_send_snapshot(
+        &mut self,
+        snapshot: crate::multiplayer::NetworkWorldSnapshot,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot },
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn descriptor_host_send_world_delta(
+        &mut self,
+        tick: crate::multiplayer::SimulationTick,
+        payload: crate::multiplayer::NetworkDeltaPayload,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload },
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn descriptor_client_receive_replication(
+        &mut self,
+    ) -> Result<crate::multiplayer::ProtocolMessage, crate::multiplayer::QuinnOnlineSessionError>
+    {
+        let RealOnlineSessionMode::DescriptorClientConnected {
+            client_runtime,
+            packet_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        let message = packet_io
+            .receive_datagram_packet()
+            .await?
+            .decode_supported()
+            .map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })?;
+        match message {
+            crate::multiplayer::ProtocolMessage::SnapshotKeyframe { .. }
+            | crate::multiplayer::ProtocolMessage::WorldDelta { .. } => {
+                client_runtime.handle_message(message.clone());
+                Ok(message)
+            }
+            other => Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+    }
+
+    pub async fn descriptor_host_answer_terrain_request(
+        &mut self,
+        response_revision: u64,
+    ) -> Result<crate::multiplayer::ProtocolMessage, crate::multiplayer::QuinnOnlineSessionError>
+    {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        let request = host_io
+            .receive_reliable_packet()
+            .await?
+            .decode_supported()
+            .map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })?;
+        let response = match request {
+            crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                chunk_x,
+                chunk_y,
+                known_revision: _,
+            } => crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+                chunk_x,
+                chunk_y,
+                revision: response_revision,
+            },
+            other => {
+                return Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other));
+            }
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                response.clone(),
+            ))
+            .await?;
+        Ok(response)
+    }
+
+    pub async fn descriptor_client_request_terrain_chunk(
+        &mut self,
+        chunk_x: i32,
+        chunk_y: i32,
+        known_revision: u64,
+    ) -> Result<crate::multiplayer::ProtocolMessage, crate::multiplayer::QuinnOnlineSessionError>
+    {
+        let RealOnlineSessionMode::DescriptorClientConnected {
+            client_runtime,
+            packet_io,
+            ..
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
+                    chunk_x,
+                    chunk_y,
+                    known_revision,
+                },
+            ))
+            .await?;
+        let response = packet_io
+            .receive_reliable_packet()
+            .await?
+            .decode_supported()
+            .map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                    "unsupported protocol version: expected {}, actual {}",
+                    error.expected, error.actual
+                ))
+            })?;
+        match response {
+            crate::multiplayer::ProtocolMessage::TerrainChunkResponse { .. } => {
+                client_runtime.handle_message(response.clone());
+                Ok(response)
+            }
+            other => Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other)),
+        }
+    }
+
     pub async fn descriptor_host_receive_command_packet(
         &mut self,
     ) -> Result<
@@ -6622,6 +6788,7 @@ mod tests {
         assert!(!game.block_joined_client_save());
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn descriptor_host_and_client_complete_join_handshake() {
         let unique_path = std::env::temp_dir().join(format!(
@@ -6696,6 +6863,61 @@ mod tests {
         assert_eq!(
             client_controller.mode_label(),
             "descriptor-client-connected"
+        );
+        let mut client_controller = client_controller;
+
+        let snapshot = live_player_network_snapshot(
+            &client_game,
+            crate::multiplayer::PlayerId::new(2),
+            crate::multiplayer::SimulationTick::new(302),
+        );
+        host_controller
+            .descriptor_host_send_snapshot(snapshot)
+            .await
+            .expect("host sends descriptor snapshot");
+        let snapshot_message = client_controller
+            .descriptor_client_receive_replication()
+            .await
+            .expect("client receives descriptor snapshot");
+        assert!(matches!(
+            snapshot_message,
+            crate::multiplayer::ProtocolMessage::SnapshotKeyframe { .. }
+        ));
+
+        host_controller
+            .descriptor_host_send_world_delta(
+                crate::multiplayer::SimulationTick::new(303),
+                crate::multiplayer::NetworkDeltaPayload::Players {
+                    players: vec![crate::multiplayer::PlayerId::new(2)],
+                },
+            )
+            .await
+            .expect("host sends descriptor delta");
+        let delta_message = client_controller
+            .descriptor_client_receive_replication()
+            .await
+            .expect("client receives descriptor delta");
+        assert!(matches!(
+            delta_message,
+            crate::multiplayer::ProtocolMessage::WorldDelta { .. }
+        ));
+
+        let (terrain_response, client_response) = tokio::join!(
+            host_controller.descriptor_host_answer_terrain_request(9),
+            client_controller.descriptor_client_request_terrain_chunk(4, 5, 8),
+        );
+        let expected_response = crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+            chunk_x: 4,
+            chunk_y: 5,
+            revision: 9,
+        };
+        assert_eq!(
+            terrain_response.expect("host responds to terrain request"),
+            expected_response
+        );
+        assert_eq!(
+            client_response.expect("client receives terrain response"),
+            expected_response
         );
         let _ignored = std::fs::remove_file(unique_path);
     }
