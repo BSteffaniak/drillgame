@@ -317,7 +317,14 @@ pub enum RealOnlineSessionMode {
         descriptor_path: PathBuf,
         descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
     },
+    DescriptorHostAccepted {
+        host_runtime: crate::multiplayer::HostSessionRuntime,
+        host_io: crate::multiplayer::QuinnPacketIo,
+        descriptor_path: PathBuf,
+        descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
+    },
     DescriptorClientConnected {
+        client_runtime: crate::multiplayer::ClientSessionRuntime,
         connector: crate::multiplayer::QuinnClientConnector,
         packet_io: crate::multiplayer::QuinnPacketIo,
         descriptor_path: PathBuf,
@@ -329,7 +336,9 @@ impl RealOnlineSessionMode {
     const fn session_mut(&mut self) -> Option<&mut crate::multiplayer::QuinnOnlineSession> {
         match self {
             Self::CombinedLocalhost(session) => Some(session),
-            Self::DescriptorHostPending { .. } | Self::DescriptorClientConnected { .. } => None,
+            Self::DescriptorHostPending { .. }
+            | Self::DescriptorHostAccepted { .. }
+            | Self::DescriptorClientConnected { .. } => None,
         }
     }
 
@@ -337,6 +346,7 @@ impl RealOnlineSessionMode {
         match self {
             Self::CombinedLocalhost(_) => "combined-localhost",
             Self::DescriptorHostPending { .. } => "descriptor-host-pending",
+            Self::DescriptorHostAccepted { .. } => "descriptor-host-accepted",
             Self::DescriptorClientConnected { .. } => "descriptor-client-connected",
         }
     }
@@ -391,7 +401,9 @@ impl RealOnlineSessionController {
             },
         )?;
         let mut descriptor = listener.connection_descriptor()?;
-        descriptor.host_addr = game.online_host_advertise_addr;
+        if game.online_host_advertise_addr.port() != 0 {
+            descriptor.host_addr = game.online_host_advertise_addr;
+        }
         let json = serde_json::to_string(&descriptor).map_err(|error| {
             crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
         })?;
@@ -439,8 +451,24 @@ impl RealOnlineSessionController {
         let packet_io = connector
             .connect_packet_io(descriptor.host_addr, &descriptor.server_name)
             .await?;
+        let client_config = crate::multiplayer::default_local_client_runtime();
+        let mut client_runtime = crate::multiplayer::ClientSessionRuntime::new(client_config);
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                client_runtime.connect_request(),
+            ))
+            .await?;
+        let accepted_packet = packet_io.receive_reliable_packet().await?;
+        let accepted_message = accepted_packet.decode_supported().map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                "unsupported protocol version: expected {}, actual {}",
+                error.expected, error.actual
+            ))
+        })?;
+        client_runtime.handle_message(accepted_message);
         let controller = Self {
             mode: RealOnlineSessionMode::DescriptorClientConnected {
+                client_runtime,
                 connector,
                 packet_io,
                 descriptor_path: path.to_path_buf(),
@@ -457,6 +485,79 @@ impl RealOnlineSessionController {
             ),
         );
         Ok(controller)
+    }
+
+    pub async fn accept_descriptor_client(
+        &mut self,
+        game: &mut GameState,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostPending {
+            listener,
+            descriptor_path,
+            descriptor,
+        } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "pending descriptor host listener",
+                ),
+            );
+        };
+        let host_io = listener.accept_packet_io().await?;
+        let mut host_runtime = crate::multiplayer::HostSessionRuntime::new(
+            crate::multiplayer::HostRuntimeConfig::default(),
+            crate::multiplayer::SimulationTick::new(300),
+        );
+        let join_packet = host_io.receive_reliable_packet().await?;
+        let join_message = join_packet.decode_supported().map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                "unsupported protocol version: expected {}, actual {}",
+                error.expected, error.actual
+            ))
+        })?;
+        let join_response = match join_message {
+            crate::multiplayer::ProtocolMessage::JoinRequest {
+                client_id,
+                session_token: None,
+            } => host_runtime.accept_client(
+                client_id,
+                crate::multiplayer::PlayerId::new(2),
+                crate::multiplayer::SimulationTick::new(300),
+            ),
+            crate::multiplayer::ProtocolMessage::ReconnectRequest {
+                client_id,
+                session_token,
+            }
+            | crate::multiplayer::ProtocolMessage::JoinRequest {
+                client_id,
+                session_token: Some(session_token),
+            } => host_runtime.reconnect_client(
+                client_id,
+                session_token,
+                crate::multiplayer::SimulationTick::new(300),
+            ),
+            other => {
+                return Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other));
+            }
+        }
+        .ok_or(crate::multiplayer::QuinnOnlineSessionError::JoinRejected)?;
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                join_response,
+            ))
+            .await?;
+        let descriptor_path = descriptor_path.clone();
+        let descriptor = descriptor.clone();
+        self.mode = RealOnlineSessionMode::DescriptorHostAccepted {
+            host_runtime,
+            host_io,
+            descriptor_path,
+            descriptor,
+        };
+        game.apply_real_online_session_ux(
+            RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(self.player_slot),
+        );
+        Ok(())
     }
 
     #[must_use]
@@ -682,6 +783,17 @@ impl RealOnlineSessionUxSnapshot {
                 "Host descriptor ready at {}; waiting for remote miner to join.",
                 path.display()
             ),
+        }
+    }
+
+    #[must_use]
+    pub fn from_descriptor_host_accepted(player_slot: Option<u8>) -> Self {
+        Self {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot,
+            status_message: "Remote miner joined descriptor host; gameplay sync is ready to start."
+                .to_owned(),
         }
     }
 
@@ -6434,6 +6546,52 @@ mod tests {
 
         assert!(game.can_write_local_save());
         assert!(!game.block_joined_client_save());
+    }
+
+    #[tokio::test]
+    async fn descriptor_host_and_client_complete_join_handshake() {
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-descriptor-handshake-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&unique_path);
+        let mut host_game = GameState::new();
+        host_game.online_host_bind_addr = "127.0.0.1:0".parse().expect("bind addr parses");
+        host_game.online_host_advertise_addr =
+            "127.0.0.1:0".parse().expect("advertise addr parses");
+        let mut host_controller =
+            RealOnlineSessionController::host_descriptor_file_pending(&mut host_game, &unique_path)
+                .expect("host descriptor writes");
+        let descriptor_json = std::fs::read_to_string(&unique_path).expect("descriptor written");
+        let descriptor: crate::multiplayer::QuinnHostConnectionDescriptor =
+            serde_json::from_str(&descriptor_json).expect("descriptor parses");
+        host_game.online_host_advertise_addr = descriptor.host_addr;
+
+        let mut accept_game = GameState::new();
+        let mut client_game = GameState::new();
+        let (accept_result, client_result) = tokio::join!(
+            host_controller.accept_descriptor_client(&mut accept_game),
+            RealOnlineSessionController::connect_descriptor_client(&mut client_game, &unique_path),
+        );
+
+        accept_result.expect("host accepts descriptor client");
+        let client_controller = client_result.expect("client joins descriptor host");
+        assert_eq!(host_controller.mode_label(), "descriptor-host-accepted");
+        assert_eq!(
+            client_controller.mode_label(),
+            "descriptor-client-connected"
+        );
+        assert_eq!(
+            accept_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+        assert_eq!(
+            client_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+        assert!(accept_game.message.contains("Remote miner joined"));
+        assert!(client_game.message.contains("Connected to host descriptor"));
+        let _ignored = std::fs::remove_file(unique_path);
     }
 
     #[tokio::test]
