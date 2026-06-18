@@ -426,6 +426,103 @@ pub enum OnlineNetworkTaskRequest {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineTaskResultTransitionKind {
+    HostWaitingForJoin,
+    JoinedWaitingForStart,
+    EnteredGameplay,
+    Failed,
+    Shutdown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineTaskResultTransition {
+    pub kind: OnlineTaskResultTransitionKind,
+    pub state: OnlineSessionUxState,
+    pub role_label: &'static str,
+    pub modal_open: bool,
+    pub entered_playing: bool,
+    pub status_message: String,
+}
+
+impl OnlineTaskResultTransition {
+    #[must_use]
+    pub fn from_game(
+        kind: OnlineTaskResultTransitionKind,
+        game: &GameState,
+        status_message: String,
+    ) -> Self {
+        Self {
+            kind,
+            state: game.online_session_state,
+            role_label: game.online_role_label(),
+            modal_open: game.modal.is_some(),
+            entered_playing: kind == OnlineTaskResultTransitionKind::EnteredGameplay
+                && game.run_mode == RunMode::Playing
+                && game.modal.is_none(),
+            status_message,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "transition summaries are consumed by reducer tests until runtime UI displays the reducer return"
+    )]
+    #[must_use]
+    pub const fn player_facing_summary(&self) -> &'static str {
+        match self.kind {
+            OnlineTaskResultTransitionKind::HostWaitingForJoin => {
+                "Host descriptor is ready; keep this window open and wait for the joined client."
+            }
+            OnlineTaskResultTransitionKind::JoinedWaitingForStart => {
+                "Connected to the host; toggle ready and start when both players are ready."
+            }
+            OnlineTaskResultTransitionKind::EnteredGameplay => {
+                "Online gameplay is active in the game window."
+            }
+            OnlineTaskResultTransitionKind::Failed => {
+                "Online task failed; read the status message before retrying."
+            }
+            OnlineTaskResultTransitionKind::Shutdown => "Online session shutdown completed.",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineGameplayStartBlocker {
+    NotConnected,
+    LocalNotReady,
+    RemoteNotConnected,
+    RemoteNotReady,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplayStartGate {
+    pub ready: bool,
+    pub blocker: Option<OnlineGameplayStartBlocker>,
+    pub message: String,
+}
+
+impl OnlineGameplayStartGate {
+    #[must_use]
+    pub fn ready() -> Self {
+        Self {
+            ready: true,
+            blocker: None,
+            message: "Starting online gameplay from connected direct-connect session.".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn blocked(blocker: OnlineGameplayStartBlocker, message: &'static str) -> Self {
+        Self {
+            ready: false,
+            blocker: Some(blocker),
+            message: message.to_owned(),
+        }
+    }
+}
+
 #[allow(
     dead_code,
     reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
@@ -3264,16 +3361,24 @@ impl GameState {
         dead_code,
         reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
     )]
-    pub fn apply_online_network_task_result(&mut self, result: OnlineNetworkTaskResult) {
-        match result {
-            OnlineNetworkTaskResult::Hosted(snapshot)
-            | OnlineNetworkTaskResult::JoinedDescriptor(snapshot) => {
+    pub fn apply_online_network_task_result(
+        &mut self,
+        result: OnlineNetworkTaskResult,
+    ) -> OnlineTaskResultTransition {
+        let transition_kind = match result {
+            OnlineNetworkTaskResult::Hosted(snapshot) => {
                 self.apply_real_online_session_ux(snapshot);
+                OnlineTaskResultTransitionKind::HostWaitingForJoin
+            }
+            OnlineNetworkTaskResult::JoinedDescriptor(snapshot) => {
+                self.apply_real_online_session_ux(snapshot);
+                OnlineTaskResultTransitionKind::JoinedWaitingForStart
             }
             OnlineNetworkTaskResult::Connected(snapshot)
             | OnlineNetworkTaskResult::Reconnected(snapshot) => {
                 self.apply_real_online_session_ux(snapshot);
                 self.enter_online_playing_session();
+                OnlineTaskResultTransitionKind::EnteredGameplay
             }
             OnlineNetworkTaskResult::Failed(message) => {
                 self.online_session_state = OnlineSessionUxState::Error;
@@ -3284,6 +3389,7 @@ impl GameState {
                 self.clear_online_diagnostics();
                 self.online_session_status_message = Self::online_failure_status_message(&message);
                 self.message = self.online_session_status_message.clone();
+                OnlineTaskResultTransitionKind::Failed
             }
             OnlineNetworkTaskResult::Shutdown => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
@@ -3296,8 +3402,14 @@ impl GameState {
                 "Online session shutdown acknowledged."
                     .clone_into(&mut self.online_session_status_message);
                 self.message = self.online_session_status_message.clone();
+                OnlineTaskResultTransitionKind::Shutdown
             }
-        }
+        };
+        OnlineTaskResultTransition::from_game(
+            transition_kind,
+            self,
+            self.online_session_status_message.clone(),
+        )
     }
 
     #[allow(
@@ -3479,6 +3591,15 @@ impl GameState {
         lines.push(format!(
             "Role guidance: {}",
             self.online_role_guidance_line()
+        ));
+        lines.push(format!(
+            "Gameplay start gate: ready={} blocker={:?}",
+            if self.online_gameplay_start_gate().ready {
+                "yes"
+            } else {
+                "no"
+            },
+            self.online_gameplay_start_gate().blocker
         ));
         lines.push(format!(
             "Save/exit policy: {}",
@@ -3755,22 +3876,37 @@ impl GameState {
         ]
     }
 
-    fn request_online_gameplay_start(&mut self) {
+    fn online_gameplay_start_gate(&self) -> OnlineGameplayStartGate {
         if self.online_session_state != OnlineSessionUxState::Connected {
-            "Start blocked: connect host and client before entering online gameplay."
-                .clone_into(&mut self.online_session_status_message);
+            OnlineGameplayStartGate::blocked(
+                OnlineGameplayStartBlocker::NotConnected,
+                "Start blocked: connect host and client before entering online gameplay.",
+            )
         } else if !self.online_local_ready {
-            "Start blocked: toggle local ready before entering online gameplay."
-                .clone_into(&mut self.online_session_status_message);
+            OnlineGameplayStartGate::blocked(
+                OnlineGameplayStartBlocker::LocalNotReady,
+                "Start blocked: toggle local ready before entering online gameplay.",
+            )
         } else if !self.online_remote_player_connected {
-            "Start blocked: waiting for the remote player connection."
-                .clone_into(&mut self.online_session_status_message);
+            OnlineGameplayStartGate::blocked(
+                OnlineGameplayStartBlocker::RemoteNotConnected,
+                "Start blocked: waiting for the remote player connection.",
+            )
         } else if !self.online_remote_player_ready {
-            "Start blocked: waiting for the remote player to toggle ready."
-                .clone_into(&mut self.online_session_status_message);
+            OnlineGameplayStartGate::blocked(
+                OnlineGameplayStartBlocker::RemoteNotReady,
+                "Start blocked: waiting for the remote player to toggle ready.",
+            )
         } else {
-            "Starting online gameplay from connected direct-connect session."
-                .clone_into(&mut self.online_session_status_message);
+            OnlineGameplayStartGate::ready()
+        }
+    }
+
+    fn request_online_gameplay_start(&mut self) {
+        let gate = self.online_gameplay_start_gate();
+        gate.message
+            .clone_into(&mut self.online_session_status_message);
+        if gate.ready {
             self.enter_online_playing_session();
         }
     }
@@ -9216,23 +9352,123 @@ mod tests {
     fn online_network_task_results_reduce_into_game_state() {
         let mut game = GameState::new();
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
+        let connected = game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
             RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
         ));
+        assert_eq!(
+            connected.kind,
+            OnlineTaskResultTransitionKind::EnteredGameplay
+        );
+        assert_eq!(connected.state, OnlineSessionUxState::Connected);
+        assert!(connected.entered_playing);
         assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
         assert_eq!(game.run_mode, RunMode::Playing);
         assert_eq!(game.modal, None);
         assert_eq!(game.selected_menu_item, 0);
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+        let failed = game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
             "direct Quinn connection task failed".to_owned(),
         ));
+        assert_eq!(failed.kind, OnlineTaskResultTransitionKind::Failed);
+        assert_eq!(failed.state, OnlineSessionUxState::Error);
+        assert!(!failed.entered_playing);
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
         assert_eq!(game.online_network_task_request, None);
         assert!(game.message.contains("direct Quinn connection task failed"));
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        let shutdown = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        assert_eq!(shutdown.kind, OnlineTaskResultTransitionKind::Shutdown);
         assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
+    }
+
+    #[test]
+    fn descriptor_online_task_results_keep_modal_until_ready_start() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+
+        let hosted = game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(
+            RealOnlineSessionUxSnapshot::from_host_descriptor_ready(
+                Some(1),
+                &default_online_descriptor_path(),
+            ),
+        ));
+        assert_eq!(
+            hosted.kind,
+            OnlineTaskResultTransitionKind::HostWaitingForJoin
+        );
+        assert_eq!(hosted.state, OnlineSessionUxState::Hosting);
+        assert_eq!(hosted.role_label, "host");
+        assert!(hosted.modal_open);
+        assert!(!hosted.entered_playing);
+        assert!(
+            hosted
+                .player_facing_summary()
+                .contains("wait for the joined client")
+        );
+        assert_eq!(game.run_mode, RunMode::Title);
+        assert_eq!(game.modal, Some(ModalScreen::OnlineMultiplayer));
+
+        let joined =
+            game.apply_online_network_task_result(OnlineNetworkTaskResult::JoinedDescriptor(
+                RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
+                    Some(2),
+                    &default_online_descriptor_path(),
+                ),
+            ));
+        assert_eq!(
+            joined.kind,
+            OnlineTaskResultTransitionKind::JoinedWaitingForStart
+        );
+        assert_eq!(joined.state, OnlineSessionUxState::Connected);
+        assert_eq!(joined.role_label, "client");
+        assert!(joined.modal_open);
+        assert!(!joined.entered_playing);
+        assert!(joined.player_facing_summary().contains("toggle ready"));
+        assert_eq!(game.run_mode, RunMode::Title);
+        assert_eq!(game.modal, Some(ModalScreen::OnlineMultiplayer));
+    }
+
+    #[test]
+    fn online_gameplay_start_gate_reports_blockers_and_ready_transition() {
+        let mut game = GameState::new();
+        let not_connected = game.online_gameplay_start_gate();
+        assert!(!not_connected.ready);
+        assert_eq!(
+            not_connected.blocker,
+            Some(OnlineGameplayStartBlocker::NotConnected)
+        );
+
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_remote_player_connected = true;
+        let local_not_ready = game.online_gameplay_start_gate();
+        assert_eq!(
+            local_not_ready.blocker,
+            Some(OnlineGameplayStartBlocker::LocalNotReady)
+        );
+
+        game.online_local_ready = true;
+        game.online_remote_player_connected = false;
+        let remote_not_connected = game.online_gameplay_start_gate();
+        assert_eq!(
+            remote_not_connected.blocker,
+            Some(OnlineGameplayStartBlocker::RemoteNotConnected)
+        );
+
+        game.online_remote_player_connected = true;
+        let remote_not_ready = game.online_gameplay_start_gate();
+        assert_eq!(
+            remote_not_ready.blocker,
+            Some(OnlineGameplayStartBlocker::RemoteNotReady)
+        );
+
+        game.online_remote_player_ready = true;
+        let ready = game.online_gameplay_start_gate();
+        assert!(ready.ready);
+        assert_eq!(ready.blocker, None);
+        game.request_online_gameplay_start();
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert_eq!(game.modal, None);
+        assert!(game.message.contains("Starting online gameplay"));
     }
 
     #[test]
