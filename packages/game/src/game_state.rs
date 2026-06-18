@@ -277,6 +277,70 @@ pub enum OnlineAddressEditTarget {
     ClientBind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineSaveAuthority {
+    LocalPlayer,
+    RemoteHost,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineUnsavedExitAction {
+    SaveAndExitAllowed,
+    DiscardOrCancelOnly,
+    CleanExitAllowed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OnlineSaveExitPolicy {
+    pub save_authority: OnlineSaveAuthority,
+    pub local_save_allowed: bool,
+    pub local_load_allowed: bool,
+    pub save_before_exit_allowed: bool,
+    pub unsaved_exit_action: OnlineUnsavedExitAction,
+}
+
+impl OnlineSaveExitPolicy {
+    #[must_use]
+    pub const fn status_line(self) -> &'static str {
+        match (
+            self.save_authority,
+            self.local_save_allowed,
+            self.local_load_allowed,
+            self.unsaved_exit_action,
+        ) {
+            (
+                OnlineSaveAuthority::LocalPlayer,
+                true,
+                true,
+                OnlineUnsavedExitAction::SaveAndExitAllowed,
+            ) => "Local host owns save: save/load/save-before-exit allowed.",
+            (
+                OnlineSaveAuthority::LocalPlayer,
+                true,
+                true,
+                OnlineUnsavedExitAction::CleanExitAllowed,
+            ) => "Local host owns save: clean exit allowed; save/load still available.",
+            (
+                OnlineSaveAuthority::RemoteHost,
+                false,
+                false,
+                OnlineUnsavedExitAction::DiscardOrCancelOnly,
+            ) => {
+                "Joined client: host owns the online save; local save/load blocked, discard or cancel unsaved exit."
+            }
+            (
+                OnlineSaveAuthority::RemoteHost,
+                false,
+                false,
+                OnlineUnsavedExitAction::CleanExitAllowed,
+            ) => {
+                "Joined client: host owns the online save; local save/load blocked, clean exit allowed."
+            }
+            _ => "Online save policy: mixed state; verify connection ownership before save/load.",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineSessionUxState {
     Idle,
@@ -3259,11 +3323,46 @@ impl GameState {
         ) || self.online_host_owns_save
     }
 
+    const fn online_save_exit_policy(&self) -> OnlineSaveExitPolicy {
+        let local_allowed = self.can_write_local_save();
+        OnlineSaveExitPolicy {
+            save_authority: if local_allowed {
+                OnlineSaveAuthority::LocalPlayer
+            } else {
+                OnlineSaveAuthority::RemoteHost
+            },
+            local_save_allowed: local_allowed,
+            local_load_allowed: local_allowed,
+            save_before_exit_allowed: local_allowed && self.save_dirty,
+            unsaved_exit_action: if self.save_dirty {
+                if local_allowed {
+                    OnlineUnsavedExitAction::SaveAndExitAllowed
+                } else {
+                    OnlineUnsavedExitAction::DiscardOrCancelOnly
+                }
+            } else {
+                OnlineUnsavedExitAction::CleanExitAllowed
+            },
+        }
+    }
+
+    fn block_joined_client_load(&mut self) -> bool {
+        if self.can_write_local_save() {
+            return false;
+        }
+        "Load blocked: host owns the online session save; leave the session before loading a local save."
+            .clone_into(&mut self.message);
+        self.online_session_status_message = self.message.clone();
+        true
+    }
+
     fn block_joined_client_save(&mut self) -> bool {
         if self.can_write_local_save() {
             return false;
         }
-        "Save blocked: host owns the online session save.".clone_into(&mut self.message);
+        "Save blocked: host owns the online session save; joined clients cannot write local saves."
+            .clone_into(&mut self.message);
+        self.online_session_status_message = self.message.clone();
         true
     }
 
@@ -3318,6 +3417,10 @@ impl GameState {
         lines.push(format!(
             "Role guidance: {}",
             self.online_role_guidance_line()
+        ));
+        lines.push(format!(
+            "Save/exit policy: {}",
+            self.online_save_exit_policy().status_line()
         ));
         lines.push(format!(
             "Descriptor file: {} | inspect before join: yes | share after host publish: yes",
@@ -3375,10 +3478,21 @@ impl GameState {
                 .as_ref()
                 .map_or_else(|| "none".to_owned(), |modal| format!("{modal:?}"))
         ));
+        let save_policy = self.online_save_exit_policy();
         lines.push(format!(
-            "Online save boundary: dirty={} local_write_allowed={} request_exit={}",
+            "Online save boundary: dirty={} local_save_allowed={} local_load_allowed={} save_before_exit_allowed={} request_exit={}",
             if self.save_dirty { "yes" } else { "no" },
-            if self.can_write_local_save() {
+            if save_policy.local_save_allowed {
+                "yes"
+            } else {
+                "no"
+            },
+            if save_policy.local_load_allowed {
+                "yes"
+            } else {
+                "no"
+            },
+            if save_policy.save_before_exit_allowed {
                 "yes"
             } else {
                 "no"
@@ -3473,12 +3587,10 @@ impl GameState {
 
     #[must_use]
     pub fn online_save_policy_line(&self) -> String {
-        if self.can_write_local_save() {
-            "Save policy: local save writes allowed for this player/session.".to_owned()
-        } else {
-            "Save policy: host owns the online save; joined clients cannot write local saves."
-                .to_owned()
-        }
+        format!(
+            "Save policy: {}",
+            self.online_save_exit_policy().status_line()
+        )
     }
 
     #[must_use]
@@ -4028,6 +4140,9 @@ impl GameState {
     }
 
     fn load_latest_into_self(&mut self) {
+        if self.block_joined_client_load() {
+            return;
+        }
         match load_latest_game() {
             Ok(mut loaded) => {
                 loaded.master_volume = self.master_volume;
@@ -4471,10 +4586,16 @@ impl GameState {
         match PauseOption::ALL[self.selected_pause_item] {
             PauseOption::Resume => self.run_mode = RunMode::Playing,
             PauseOption::Save => {
+                if self.block_joined_client_save() {
+                    return;
+                }
                 self.modal = Some(ModalScreen::SaveSlots);
                 self.selected_menu_item = 0;
             }
             PauseOption::Load => {
+                if self.block_joined_client_load() {
+                    return;
+                }
                 self.modal = Some(ModalScreen::LoadSlots);
                 self.selected_menu_item = 0;
             }
@@ -4501,11 +4622,17 @@ impl GameState {
         }
 
         if input.load {
+            if self.block_joined_client_load() {
+                return;
+            }
             self.load_into_self();
         }
     }
 
     fn load_into_self(&mut self) {
+        if self.block_joined_client_load() {
+            return;
+        }
         if !save_exists() {
             "No save file found.".clone_into(&mut self.message);
             return;
@@ -4894,6 +5021,10 @@ impl GameState {
     }
 
     fn load_slot(&mut self, slot: usize) {
+        if self.block_joined_client_load() {
+            self.modal = Some(ModalScreen::LoadSlots);
+            return;
+        }
         match load_game_slot(slot) {
             Ok(mut loaded) => {
                 loaded.master_volume = self.master_volume;
@@ -8921,7 +9052,17 @@ mod tests {
     #[test]
     fn online_save_policy_line_reports_host_owned_save_rules() {
         let mut game = GameState::new();
-        assert!(game.online_save_policy_line().contains("allowed"));
+        assert!(game.online_save_policy_line().contains("save/load"));
+        assert_eq!(
+            game.online_save_exit_policy(),
+            OnlineSaveExitPolicy {
+                save_authority: OnlineSaveAuthority::LocalPlayer,
+                local_save_allowed: true,
+                local_load_allowed: true,
+                save_before_exit_allowed: false,
+                unsaved_exit_action: OnlineUnsavedExitAction::CleanExitAllowed,
+            }
+        );
 
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
             state: OnlineSessionUxState::Connected,
@@ -8929,9 +9070,20 @@ mod tests {
             player_slot: Some(2),
             status_message: "Connected as joined client.".to_owned(),
         });
+        game.save_dirty = true;
         assert!(
             game.online_save_policy_line()
-                .contains("joined clients cannot write")
+                .contains("local save/load blocked")
+        );
+        assert_eq!(
+            game.online_save_exit_policy(),
+            OnlineSaveExitPolicy {
+                save_authority: OnlineSaveAuthority::RemoteHost,
+                local_save_allowed: false,
+                local_load_allowed: false,
+                save_before_exit_allowed: false,
+                unsaved_exit_action: OnlineUnsavedExitAction::DiscardOrCancelOnly,
+            }
         );
 
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
@@ -8940,7 +9092,135 @@ mod tests {
             player_slot: Some(1),
             status_message: "Connected as host.".to_owned(),
         });
-        assert!(game.online_save_policy_line().contains("allowed"));
+        assert!(game.online_save_policy_line().contains("save/load"));
+        assert!(game.online_save_exit_policy().save_before_exit_allowed);
+    }
+
+    #[test]
+    fn joined_client_save_load_and_unsaved_exit_are_blocked_without_losing_session_state() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Connected as joined client.".to_owned(),
+        });
+        game.save_dirty = true;
+        game.run_mode = RunMode::Playing;
+
+        assert!(game.block_joined_client_save());
+        assert!(game.message.contains("Save blocked"));
+        assert!(game.online_session_status_message.contains("Save blocked"));
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(!game.request_exit);
+
+        assert!(game.block_joined_client_load());
+        assert!(game.message.contains("Load blocked"));
+        assert!(game.online_session_status_message.contains("Load blocked"));
+        assert_eq!(game.run_mode, RunMode::Playing);
+
+        game.modal = Some(ModalScreen::UnsavedExitConfirm);
+        game.selected_menu_item = 0;
+        assert!(game.handle_exit_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(game.modal, Some(ModalScreen::UnsavedExitConfirm));
+        assert!(!game.request_exit);
+        assert!(game.message.contains("Save blocked"));
+
+        game.selected_menu_item = 1;
+        assert!(game.handle_exit_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert!(game.request_exit);
+    }
+
+    #[test]
+    fn host_owned_online_save_policy_allows_save_exit_and_load_paths() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot: Some(1),
+            status_message: "Connected as host.".to_owned(),
+        });
+        game.save_dirty = true;
+
+        assert!(!game.block_joined_client_save());
+        assert!(!game.block_joined_client_load());
+        assert_eq!(
+            game.online_save_exit_policy().save_authority,
+            OnlineSaveAuthority::LocalPlayer
+        );
+        assert!(game.online_save_exit_policy().local_save_allowed);
+        assert!(game.online_save_exit_policy().local_load_allowed);
+        assert!(game.online_save_exit_policy().save_before_exit_allowed);
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("local_load_allowed=yes")
+                    && line.contains("save_before_exit_allowed=yes"))
+        );
+    }
+
+    #[test]
+    fn joined_client_pause_save_and_load_entries_are_blocked_before_slot_modals() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Connected as joined client.".to_owned(),
+        });
+        game.run_mode = RunMode::Paused;
+
+        game.selected_pause_item = PauseOption::ALL
+            .iter()
+            .position(|option| matches!(option, PauseOption::Save))
+            .expect("save pause option exists");
+        game.handle_pause_menu(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(game.modal, None);
+        assert!(game.message.contains("Save blocked"));
+
+        game.selected_pause_item = PauseOption::ALL
+            .iter()
+            .position(|option| matches!(option, PauseOption::Load))
+            .expect("load pause option exists");
+        game.handle_pause_menu(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(game.modal, None);
+        assert!(game.message.contains("Load blocked"));
+    }
+
+    #[test]
+    fn save_load_status_lines_explain_joined_client_unsaved_exit_choices() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: false,
+            player_slot: Some(2),
+            status_message: "Connected as joined client.".to_owned(),
+        });
+        game.save_dirty = true;
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(|line| {
+            line.contains("host owns the online save; local save/load blocked, discard or cancel unsaved exit")
+        }));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("local_save_allowed=no")
+                    && line.contains("local_load_allowed=no")
+                    && line.contains("save_before_exit_allowed=no"))
+        );
     }
 
     #[test]
