@@ -262,6 +262,56 @@ impl CosmeticRigSkin {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlinePeerLobbyPresentation {
+    pub name: String,
+    pub slot: Option<u8>,
+    pub role_label: &'static str,
+    pub ready: bool,
+    pub connected: bool,
+    pub save_authority: OnlineSaveAuthority,
+}
+
+impl OnlinePeerLobbyPresentation {
+    #[must_use]
+    pub fn line(&self, peer_label: &str) -> String {
+        format!(
+            "{peer_label}: {} | slot {} | role {} | ready {} | connected {} | save_authority {:?}",
+            self.name,
+            self.slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            self.role_label,
+            if self.ready { "yes" } else { "no" },
+            if self.connected { "yes" } else { "no" },
+            self.save_authority
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLobbyPresentation {
+    pub local: OnlinePeerLobbyPresentation,
+    pub remote: OnlinePeerLobbyPresentation,
+    pub start_gate: OnlineGameplayStartGate,
+    pub guidance: String,
+}
+
+impl OnlineLobbyPresentation {
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        vec![
+            self.local.line("Local player"),
+            self.remote.line("Remote player"),
+            format!(
+                "Lobby start gate: ready={} blocker={:?}",
+                if self.start_gate.ready { "yes" } else { "no" },
+                self.start_gate.blocker
+            ),
+            self.guidance.clone(),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RunMode {
     Title,
@@ -978,14 +1028,12 @@ impl RealOnlineSessionController {
                     error.expected, error.actual
                 ))
             })? {
-                crate::multiplayer::ProtocolMessage::PlayerIdentity { name, .. } => {
-                    game.online_remote_player_name = Some(name);
-                    game.online_remote_player_connected = true;
+                crate::multiplayer::ProtocolMessage::PlayerIdentity { player_id, name } => {
+                    game.apply_online_remote_identity(player_id, &name);
                     received_any = true;
                 }
-                crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
-                    game.online_remote_player_ready = ready;
-                    game.online_remote_player_connected = true;
+                crate::multiplayer::ProtocolMessage::ReadyState { player_id, ready } => {
+                    game.apply_online_remote_ready_state(player_id, ready);
                     received_any = true;
                 }
                 crate::multiplayer::ProtocolMessage::TerrainChunkRequest {
@@ -1011,12 +1059,9 @@ impl RealOnlineSessionController {
                     received_any = true;
                 }
                 crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
-                    game.online_remote_player_connected = false;
-                    game.online_remote_player_ready = false;
-                    game.online_remote_player_snapshots.clear();
-                    game.online_session_status_message =
-                        format!("Joined client left the online session: {reason}");
-                    game.message.clone_from(&game.online_session_status_message);
+                    game.apply_online_remote_disconnected(&format!(
+                        "Joined client left the online session: {reason}"
+                    ));
                     received_any = true;
                 }
                 other => {
@@ -1212,13 +1257,11 @@ impl RealOnlineSessionController {
                         ))
                     })?;
                     match message {
-                        crate::multiplayer::ProtocolMessage::PlayerIdentity { name, .. } => {
-                            game.online_remote_player_name = Some(name);
-                            game.online_remote_player_connected = true;
+                        crate::multiplayer::ProtocolMessage::PlayerIdentity { player_id, name } => {
+                            game.apply_online_remote_identity(player_id, &name);
                         }
-                        crate::multiplayer::ProtocolMessage::ReadyState { ready, .. } => {
-                            game.online_remote_player_ready = ready;
-                            game.online_remote_player_connected = true;
+                        crate::multiplayer::ProtocolMessage::ReadyState { player_id, ready } => {
+                            game.apply_online_remote_ready_state(player_id, ready);
                         }
                         crate::multiplayer::ProtocolMessage::StartSession { .. } => {
                             game.online_remote_player_connected = true;
@@ -1249,14 +1292,11 @@ impl RealOnlineSessionController {
                             );
                         }
                         crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
-                            game.online_remote_player_connected = false;
-                            game.online_remote_player_ready = false;
-                            game.online_remote_player_snapshots.clear();
+                            game.apply_online_remote_disconnected(&format!(
+                                "Online session ended by host: {reason}"
+                            ));
                             game.online_session_state = OnlineSessionUxState::Shutdown;
                             game.modal = None;
-                            game.online_session_status_message =
-                                format!("Online session ended by host: {reason}");
-                            game.message.clone_from(&game.online_session_status_message);
                         }
                         other => client_runtime.handle_message(other),
                     }
@@ -3428,6 +3468,39 @@ impl GameState {
         self.message = self.online_session_status_message.clone();
     }
 
+    pub fn apply_online_remote_identity(
+        &mut self,
+        player_id: crate::multiplayer::PlayerId,
+        name: &str,
+    ) {
+        self.online_remote_player_name = Some(name.to_owned());
+        self.online_remote_player_connected = true;
+        self.online_session_status_message =
+            format!("Remote player identity synced: p{} {name}", player_id.get());
+    }
+
+    pub fn apply_online_remote_ready_state(
+        &mut self,
+        player_id: crate::multiplayer::PlayerId,
+        ready: bool,
+    ) {
+        self.online_remote_player_ready = ready;
+        self.online_remote_player_connected = true;
+        self.online_session_status_message = format!(
+            "Remote player p{} ready state synced: {}",
+            player_id.get(),
+            if ready { "ready" } else { "not ready" }
+        );
+    }
+
+    pub fn apply_online_remote_disconnected(&mut self, reason: &str) {
+        self.online_remote_player_connected = false;
+        self.online_remote_player_ready = false;
+        self.online_remote_player_snapshots.clear();
+        reason.clone_into(&mut self.online_session_status_message);
+        self.message.clone_from(&self.online_session_status_message);
+    }
+
     pub fn apply_online_diagnostics(
         &mut self,
         controller_mode: impl Into<String>,
@@ -3778,51 +3851,65 @@ impl GameState {
     }
 
     #[must_use]
-    pub fn online_lobby_participant_lines(&self) -> Vec<String> {
-        let local_slot = self
-            .online_player_slot
-            .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
-        let remote_name = self
-            .online_remote_player_name
-            .as_deref()
-            .unwrap_or("Waiting for player");
+    pub fn online_lobby_presentation(&self) -> OnlineLobbyPresentation {
+        let local_slot = self.online_player_slot;
         let remote_slot = match self.online_player_slot {
-            Some(1) => "2",
-            Some(2) => "1",
-            _ => "unassigned",
+            Some(1) => Some(2),
+            Some(2) => Some(1),
+            _ => None,
         };
-        vec![
-            format!(
-                "Local player: {} | slot {} | role {} | ready {} | connected {}",
-                self.online_player_name,
-                local_slot,
-                self.online_role_label(),
-                if self.online_local_ready { "yes" } else { "no" },
-                if self.online_session_state == OnlineSessionUxState::Connected {
-                    "yes"
-                } else {
-                    "pending"
-                }
-            ),
-            format!(
-                "Remote player: {remote_name} | slot {remote_slot} | role {} | ready {} | connected {}",
-                if self.online_host_owns_save {
-                    "client"
-                } else {
-                    "host"
-                },
-                if self.online_remote_player_ready {
-                    "yes"
-                } else {
-                    "unknown"
-                },
-                if self.online_remote_player_connected {
-                    "yes"
-                } else {
-                    "pending"
-                }
-            ),
-        ]
+        let local_save_authority = if self.online_host_owns_save {
+            OnlineSaveAuthority::LocalPlayer
+        } else {
+            OnlineSaveAuthority::RemoteHost
+        };
+        let remote_save_authority = if self.online_host_owns_save {
+            OnlineSaveAuthority::RemoteHost
+        } else {
+            OnlineSaveAuthority::LocalPlayer
+        };
+        let remote_role_label = if self.online_host_owns_save {
+            "client"
+        } else {
+            "host"
+        };
+        OnlineLobbyPresentation {
+            local: OnlinePeerLobbyPresentation {
+                name: self.online_player_name.clone(),
+                slot: local_slot,
+                role_label: self.online_role_label(),
+                ready: self.online_local_ready,
+                connected: matches!(
+                    self.online_session_state,
+                    OnlineSessionUxState::Connected | OnlineSessionUxState::Hosting
+                ),
+                save_authority: local_save_authority,
+            },
+            remote: OnlinePeerLobbyPresentation {
+                name: self
+                    .online_remote_player_name
+                    .clone()
+                    .unwrap_or_else(|| "Waiting for player".to_owned()),
+                slot: remote_slot,
+                role_label: remote_role_label,
+                ready: self.online_remote_player_ready,
+                connected: self.online_remote_player_connected,
+                save_authority: remote_save_authority,
+            },
+            start_gate: self.online_gameplay_start_gate(),
+            guidance: if self.online_host_owns_save {
+                "Lobby guidance: host owns save/session authority; wait for the client, verify readiness, then start online gameplay."
+                    .to_owned()
+            } else {
+                "Lobby guidance: joined client uses the host save/session; toggle ready and wait for the host to start online gameplay."
+                    .to_owned()
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn online_lobby_participant_lines(&self) -> Vec<String> {
+        self.online_lobby_presentation().lines()
     }
 
     #[must_use]
@@ -9943,9 +10030,122 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Ada")));
         assert!(lines.iter().any(|line| line.contains("slot 1")));
         assert!(lines.iter().any(|line| line.contains("role host")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("save_authority LocalPlayer"))
+        );
         assert!(lines.iter().any(|line| line.contains("Bert")));
         assert!(lines.iter().any(|line| line.contains("slot 2")));
         assert!(lines.iter().any(|line| line.contains("connected yes")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Lobby start gate") && line.contains("ready=yes"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("host owns save/session authority"))
+        );
+    }
+
+    #[test]
+    fn joined_client_lobby_presentation_is_self_contained_without_cli_help() {
+        let mut game = GameState::new();
+        game.apply_real_online_session_ux(
+            RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
+                Some(2),
+                &default_online_descriptor_path(),
+            ),
+        );
+        game.online_player_name = "Joined Miner".to_owned();
+        game.apply_online_remote_identity(crate::multiplayer::PlayerId::new(1), "Host Miner");
+        game.apply_online_remote_ready_state(crate::multiplayer::PlayerId::new(1), true);
+        game.online_local_ready = true;
+
+        let presentation = game.online_lobby_presentation();
+        assert_eq!(presentation.local.name, "Joined Miner");
+        assert_eq!(presentation.local.slot, Some(2));
+        assert_eq!(presentation.local.role_label, "client");
+        assert_eq!(
+            presentation.local.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
+        assert_eq!(presentation.remote.name, "Host Miner");
+        assert_eq!(presentation.remote.slot, Some(1));
+        assert_eq!(presentation.remote.role_label, "host");
+        assert_eq!(
+            presentation.remote.save_authority,
+            OnlineSaveAuthority::LocalPlayer
+        );
+        assert!(presentation.start_gate.ready);
+        assert!(presentation.guidance.contains("toggle ready"));
+
+        let lines = presentation.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Local player: Joined Miner")
+                    && line.contains("slot 2")
+                    && line.contains("role client")
+                    && line.contains("ready yes"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Remote player: Host Miner")
+                    && line.contains("slot 1")
+                    && line.contains("role host")
+                    && line.contains("connected yes"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("joined client uses the host save/session"))
+        );
+    }
+
+    #[test]
+    fn remote_identity_ready_and_disconnect_updates_are_single_source_for_lobby_ui() {
+        let mut game = GameState::new();
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_session_state = OnlineSessionUxState::Connected;
+
+        game.apply_online_remote_identity(crate::multiplayer::PlayerId::new(2), "Tunnel Guest");
+        assert_eq!(
+            game.online_remote_player_name.as_deref(),
+            Some("Tunnel Guest")
+        );
+        assert!(game.online_remote_player_connected);
+        assert!(
+            game.online_session_status_message
+                .contains("identity synced")
+        );
+
+        game.apply_online_remote_ready_state(crate::multiplayer::PlayerId::new(2), true);
+        assert!(game.online_remote_player_ready);
+        assert!(
+            game.online_session_status_message
+                .contains("ready state synced")
+        );
+        assert!(
+            game.online_lobby_participant_lines()
+                .iter()
+                .any(|line| line.contains("Tunnel Guest") && line.contains("ready yes"))
+        );
+
+        game.apply_online_remote_disconnected("Joined client left the online session: test");
+        assert!(!game.online_remote_player_connected);
+        assert!(!game.online_remote_player_ready);
+        assert!(game.online_remote_player_snapshots.is_empty());
+        assert!(game.message.contains("Joined client left"));
+        assert!(
+            game.online_lobby_participant_lines()
+                .iter()
+                .any(|line| line.contains("Tunnel Guest") && line.contains("connected no"))
+        );
     }
 
     #[test]
