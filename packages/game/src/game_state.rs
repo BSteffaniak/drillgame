@@ -867,6 +867,145 @@ impl OnlineAddressValidation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineDescriptorInputMode {
+    HostWrite,
+    JoinRead,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineDescriptorInputStatus {
+    pub mode: OnlineDescriptorInputMode,
+    pub path: PathBuf,
+    pub accepted: bool,
+    pub can_attempt_task: bool,
+    pub message: String,
+}
+
+impl OnlineDescriptorInputStatus {
+    #[must_use]
+    pub fn validate(mode: OnlineDescriptorInputMode, path: &Path) -> Self {
+        let display_path = path.display().to_string();
+        if display_path.trim().is_empty() {
+            return Self::blocked(
+                mode,
+                path,
+                "Descriptor path is empty; choose a JSON descriptor file path.".to_owned(),
+            );
+        }
+        if !display_path
+            .chars()
+            .all(is_allowed_descriptor_path_character)
+        {
+            return Self::blocked(
+                mode,
+                path,
+                "Descriptor path contains unsupported characters; use letters, numbers, spaces, '.', '-', '_', ':', '~', '/', or '\\'."
+                    .to_owned(),
+            );
+        }
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            return Self::blocked(
+                mode,
+                path,
+                "Descriptor path must end in .json so it can be shared and inspected safely."
+                    .to_owned(),
+            );
+        }
+        match mode {
+            OnlineDescriptorInputMode::HostWrite => {
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                    && !parent.exists()
+                {
+                    return Self::blocked(
+                        mode,
+                        path,
+                        format!(
+                            "Descriptor parent folder does not exist: {}",
+                            parent.display()
+                        ),
+                    );
+                }
+                Self::accepted(
+                    mode,
+                    path,
+                    format!(
+                        "Host descriptor path accepted: {display_path}. Host will write this JSON file for sharing."
+                    ),
+                )
+            }
+            OnlineDescriptorInputMode::JoinRead => {
+                if !path.exists() {
+                    return Self::pending(
+                        mode,
+                        path,
+                        format!(
+                            "Join descriptor file not found yet: {display_path}. Queuing join will surface the task failure if the host has not shared the current JSON descriptor."
+                        ),
+                    );
+                }
+                if !path.is_file() {
+                    return Self::blocked(
+                        mode,
+                        path,
+                        format!("Join descriptor path is not a file: {display_path}"),
+                    );
+                }
+                Self::accepted(
+                    mode,
+                    path,
+                    format!(
+                        "Join descriptor path accepted: {display_path}. Inspecting/connecting can proceed."
+                    ),
+                )
+            }
+        }
+    }
+
+    fn accepted(mode: OnlineDescriptorInputMode, path: &Path, message: String) -> Self {
+        Self {
+            mode,
+            path: path.to_path_buf(),
+            accepted: true,
+            can_attempt_task: true,
+            message,
+        }
+    }
+
+    fn pending(mode: OnlineDescriptorInputMode, path: &Path, message: String) -> Self {
+        Self {
+            mode,
+            path: path.to_path_buf(),
+            accepted: false,
+            can_attempt_task: true,
+            message,
+        }
+    }
+
+    fn blocked(mode: OnlineDescriptorInputMode, path: &Path, message: String) -> Self {
+        Self {
+            mode,
+            path: path.to_path_buf(),
+            accepted: false,
+            can_attempt_task: false,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Online descriptor input: mode={:?} path={} accepted={} can_attempt_task={} | {}",
+            self.mode,
+            self.path.display(),
+            yes_no(self.accepted),
+            yes_no(self.can_attempt_task),
+            self.message
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineSaveAuthority {
     LocalPlayer,
     RemoteHost,
@@ -3474,6 +3613,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_save_boundary_status: String,
     #[serde(default)]
+    pub online_last_descriptor_input_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3732,6 +3873,7 @@ impl GameState {
             online_last_live_verification_status: String::new(),
             online_last_gameplay_domain_status: String::new(),
             online_last_save_boundary_status: String::new(),
+            online_last_descriptor_input_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -4294,6 +4436,22 @@ impl GameState {
         self.message.clone_from(&self.online_session_status_message);
     }
 
+    pub fn apply_online_descriptor_input_status(&mut self, status: &OnlineDescriptorInputStatus) {
+        self.online_last_descriptor_input_status = status.status_line();
+        self.online_session_status_message
+            .clone_from(&status.message);
+        self.message.clone_from(&self.online_session_status_message);
+    }
+
+    #[allow(
+        dead_code,
+        reason = "used by modal/status tests and available to UI editing callbacks as descriptor input productizes"
+    )]
+    pub fn refresh_online_descriptor_input_status(&mut self, mode: OnlineDescriptorInputMode) {
+        let status = OnlineDescriptorInputStatus::validate(mode, &self.online_descriptor_path);
+        self.online_last_descriptor_input_status = status.status_line();
+    }
+
     pub fn refresh_online_runtime_statuses(&mut self) {
         self.refresh_online_ownership_status();
         self.refresh_online_live_verification_status();
@@ -4438,6 +4596,15 @@ impl GameState {
             "Descriptor file: {} | inspect before join: yes | share after host publish: yes",
             self.online_descriptor_path.display()
         ));
+        lines.push(if self.online_last_descriptor_input_status.is_empty() {
+            OnlineDescriptorInputStatus::validate(
+                OnlineDescriptorInputMode::HostWrite,
+                &self.online_descriptor_path,
+            )
+            .status_line()
+        } else {
+            self.online_last_descriptor_input_status.clone()
+        });
         lines.push(self.online_address_guidance_line());
         lines.push(self.online_session_status_message.clone());
         lines.push(format!(
@@ -5156,9 +5323,23 @@ impl GameState {
         self.sound_cues.push(SoundCue::Ui);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "online modal reducer keeps adjacent menu action state transitions together for now"
+    )]
     fn confirm_online_multiplayer(&mut self) {
         match self.selected_menu_item {
             0 => {
+                let descriptor_status = OnlineDescriptorInputStatus::validate(
+                    OnlineDescriptorInputMode::HostWrite,
+                    &self.online_descriptor_path,
+                );
+                if !descriptor_status.can_attempt_task {
+                    self.apply_online_descriptor_input_status(&descriptor_status);
+                    self.sound_cues.push(SoundCue::Ui);
+                    return;
+                }
+                self.apply_online_descriptor_input_status(&descriptor_status);
                 self.online_session_state = OnlineSessionUxState::Hosting;
                 self.online_network_task_request =
                     Some(OnlineNetworkTaskRequest::HostDescriptorFile {
@@ -5176,6 +5357,16 @@ impl GameState {
                 );
             }
             1 => {
+                let descriptor_status = OnlineDescriptorInputStatus::validate(
+                    OnlineDescriptorInputMode::JoinRead,
+                    &self.online_descriptor_path,
+                );
+                if !descriptor_status.can_attempt_task {
+                    self.apply_online_descriptor_input_status(&descriptor_status);
+                    self.sound_cues.push(SoundCue::Ui);
+                    return;
+                }
+                self.apply_online_descriptor_input_status(&descriptor_status);
                 self.online_session_state = OnlineSessionUxState::Joining;
                 self.online_network_task_request =
                     Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
@@ -10752,6 +10943,151 @@ mod tests {
         assert!(
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
+        );
+    }
+
+    #[test]
+    fn descriptor_input_status_validates_host_write_and_join_read_paths() {
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-descriptor-input-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&unique_path);
+
+        let host = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::HostWrite,
+            &unique_path,
+        );
+        assert!(host.accepted);
+        assert!(host.can_attempt_task);
+        assert!(host.message.contains("Host descriptor path accepted"));
+        assert!(host.status_line().contains("mode=HostWrite"));
+
+        let missing_join = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::JoinRead,
+            &unique_path,
+        );
+        assert!(!missing_join.accepted);
+        assert!(missing_join.can_attempt_task);
+        assert!(missing_join.message.contains("not found yet"));
+
+        std::fs::write(&unique_path, "{}").expect("write descriptor test file");
+        let join = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::JoinRead,
+            &unique_path,
+        );
+        assert!(join.accepted);
+        assert!(join.can_attempt_task);
+        assert!(join.message.contains("Join descriptor path accepted"));
+        assert!(join.status_line().contains("mode=JoinRead"));
+        let _ignored = std::fs::remove_file(unique_path);
+    }
+
+    #[test]
+    fn descriptor_input_status_rejects_empty_invalid_and_non_json_paths() {
+        let empty = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::HostWrite,
+            Path::new(""),
+        );
+        assert!(!empty.accepted);
+        assert!(empty.message.contains("empty"));
+
+        let invalid = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::HostWrite,
+            Path::new("bad<descriptor>.json"),
+        );
+        assert!(!invalid.accepted);
+        assert!(invalid.message.contains("unsupported characters"));
+
+        let non_json = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::HostWrite,
+            Path::new("descriptor.txt"),
+        );
+        assert!(!non_json.accepted);
+        assert!(non_json.message.contains("must end in .json"));
+    }
+
+    #[test]
+    fn host_and_join_actions_block_invalid_descriptor_input_before_queuing_tasks() {
+        let mut host_game = GameState::new();
+        host_game.online_descriptor_path = PathBuf::from("bad<descriptor>.json");
+        host_game.selected_menu_item = 0;
+        host_game.confirm_online_multiplayer();
+        assert!(host_game.online_network_task_request.is_none());
+        assert_eq!(host_game.online_session_state, OnlineSessionUxState::Idle);
+        assert!(
+            host_game
+                .online_last_descriptor_input_status
+                .contains("accepted=no")
+        );
+
+        let mut join_game = GameState::new();
+        join_game.online_descriptor_path = PathBuf::from("descriptor.txt");
+        join_game.selected_menu_item = 1;
+        join_game.confirm_online_multiplayer();
+        assert!(join_game.online_network_task_request.is_none());
+        assert_eq!(join_game.online_session_state, OnlineSessionUxState::Idle);
+        assert!(
+            join_game
+                .online_last_descriptor_input_status
+                .contains("must end in .json")
+        );
+    }
+
+    #[test]
+    fn host_and_join_actions_queue_tasks_after_descriptor_input_acceptance() {
+        let unique_path = std::env::temp_dir().join(format!(
+            "drillgame-accepted-descriptor-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&unique_path);
+
+        let mut host_game = GameState::new();
+        host_game.online_descriptor_path = unique_path.clone();
+        host_game.selected_menu_item = 0;
+        host_game.confirm_online_multiplayer();
+        assert!(matches!(
+            host_game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile { .. })
+        ));
+        assert!(
+            host_game
+                .online_last_descriptor_input_status
+                .contains("Host descriptor path accepted")
+        );
+
+        std::fs::write(&unique_path, "{}").expect("write accepted join descriptor");
+        let mut join_game = GameState::new();
+        join_game.online_descriptor_path = unique_path.clone();
+        join_game.selected_menu_item = 1;
+        join_game.confirm_online_multiplayer();
+        assert!(matches!(
+            join_game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::JoinDescriptorFile { .. })
+        ));
+        assert!(
+            join_game
+                .online_last_descriptor_input_status
+                .contains("Join descriptor path accepted")
+        );
+        let _ignored = std::fs::remove_file(unique_path);
+    }
+
+    #[test]
+    fn descriptor_input_status_is_exposed_in_online_status_lines() {
+        let mut game = GameState::new();
+        game.online_descriptor_path = PathBuf::from("descriptor.txt");
+        game.refresh_online_descriptor_input_status(OnlineDescriptorInputMode::HostWrite);
+        assert!(
+            game.online_last_descriptor_input_status
+                .contains("must end in .json")
+        );
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(
+                    |line| line.contains("Online descriptor input") && line.contains("accepted=no")
+                )
         );
     }
 
