@@ -271,6 +271,13 @@ pub enum RunMode {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OnlineAddressEditTarget {
+    HostBind,
+    HostAdvertise,
+    ClientBind,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineSessionUxState {
     Idle,
     Hosting,
@@ -1586,6 +1593,10 @@ const fn is_allowed_descriptor_path_character(character: char) -> bool {
         || matches!(character, '/' | '\\' | '.' | '-' | '_' | ':' | ' ' | '~')
 }
 
+const fn is_allowed_socket_address_character(character: char) -> bool {
+    character.is_ascii_digit() || matches!(character, '.' | ':' | '[' | ']')
+}
+
 const fn apply_network_player_snapshot_to_game(
     game: &mut GameState,
     snapshot: &crate::multiplayer::NetworkPlayerSnapshot,
@@ -2321,6 +2332,10 @@ pub struct GameState {
     pub online_descriptor_path_editing: bool,
     #[serde(default)]
     pub online_descriptor_path_draft: String,
+    #[serde(default)]
+    pub online_address_edit_target: Option<OnlineAddressEditTarget>,
+    #[serde(default)]
+    pub online_address_edit_draft: String,
     #[serde(default = "default_online_host_bind_addr")]
     pub online_host_bind_addr: SocketAddr,
     #[serde(default = "default_online_host_advertise_addr")]
@@ -2577,6 +2592,8 @@ impl GameState {
             online_descriptor_path: default_online_descriptor_path(),
             online_descriptor_path_editing: false,
             online_descriptor_path_draft: String::new(),
+            online_address_edit_target: None,
+            online_address_edit_draft: String::new(),
             online_host_bind_addr: default_online_host_bind_addr(),
             online_host_advertise_addr: default_online_host_advertise_addr(),
             online_client_bind_addr: default_online_client_bind_addr(),
@@ -3217,6 +3234,13 @@ impl GameState {
                 self.online_descriptor_path_draft
             ));
         }
+        if let Some(target) = self.online_address_edit_target {
+            lines.push(format!(
+                "{} address edit: {}_",
+                Self::online_address_edit_target_label(target),
+                self.online_address_edit_draft
+            ));
+        }
         lines.push(self.online_start_readiness_line());
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
@@ -3573,11 +3597,111 @@ impl GameState {
         true
     }
 
+    fn start_online_address_edit(&mut self, target: OnlineAddressEditTarget) {
+        self.online_address_edit_target = Some(target);
+        self.online_address_edit_draft = match target {
+            OnlineAddressEditTarget::HostBind => self.online_host_bind_addr.to_string(),
+            OnlineAddressEditTarget::HostAdvertise => self.online_host_advertise_addr.to_string(),
+            OnlineAddressEditTarget::ClientBind => self.online_client_bind_addr.to_string(),
+        };
+        self.online_session_status_message = format!(
+            "Editing {} address: type host:port, Backspace deletes, Enter accepts, Esc cancels.",
+            Self::online_address_edit_target_label(target)
+        );
+    }
+
+    const fn online_address_edit_target_label(target: OnlineAddressEditTarget) -> &'static str {
+        match target {
+            OnlineAddressEditTarget::HostBind => "host bind",
+            OnlineAddressEditTarget::HostAdvertise => "host advertise",
+            OnlineAddressEditTarget::ClientBind => "client bind",
+        }
+    }
+
+    fn commit_online_address_edit(&mut self) {
+        let Some(target) = self.online_address_edit_target else {
+            return;
+        };
+        let trimmed = self.online_address_edit_draft.trim();
+        match trimmed.parse::<SocketAddr>() {
+            Ok(address) => {
+                match target {
+                    OnlineAddressEditTarget::HostBind => self.online_host_bind_addr = address,
+                    OnlineAddressEditTarget::HostAdvertise => {
+                        self.online_host_advertise_addr = address;
+                    }
+                    OnlineAddressEditTarget::ClientBind => self.online_client_bind_addr = address,
+                }
+                self.online_session_status_message = format!(
+                    "{} address set from typed input: {address}",
+                    Self::online_address_edit_target_label(target)
+                );
+            }
+            Err(error) => {
+                self.online_session_status_message = format!(
+                    "Invalid {} address `{trimmed}`: {error}",
+                    Self::online_address_edit_target_label(target)
+                );
+            }
+        }
+        self.online_address_edit_target = None;
+        self.online_address_edit_draft.clear();
+    }
+
+    fn cancel_online_address_edit(&mut self) {
+        self.online_address_edit_target = None;
+        self.online_address_edit_draft.clear();
+        "Address edit canceled.".clone_into(&mut self.online_session_status_message);
+    }
+
+    fn handle_online_text_input(&mut self, input: PlayerInput) -> bool {
+        if self.online_descriptor_path_editing {
+            return self.handle_online_descriptor_path_text_input(input);
+        }
+        if self.online_address_edit_target.is_some() {
+            return self.handle_online_address_text_input(input);
+        }
+        false
+    }
+
+    fn handle_online_address_text_input(&mut self, input: PlayerInput) -> bool {
+        let Some(target) = self.online_address_edit_target else {
+            return false;
+        };
+        if input.cancel {
+            self.cancel_online_address_edit();
+        } else if input.confirm {
+            self.commit_online_address_edit();
+        } else if input.text_backspace {
+            self.online_address_edit_draft.pop();
+            self.online_session_status_message = format!(
+                "Editing {} address: {}",
+                Self::online_address_edit_target_label(target),
+                self.online_address_edit_draft
+            );
+        } else if let Some(character) = input.text_input
+            && is_allowed_socket_address_character(character)
+            && self.online_address_edit_draft.len() < 80
+        {
+            self.online_address_edit_draft.push(character);
+            self.online_session_status_message = format!(
+                "Editing {} address: {}",
+                Self::online_address_edit_target_label(target),
+                self.online_address_edit_draft
+            );
+        } else {
+            return false;
+        }
+        self.message = self.online_session_status_message.clone();
+        self.sound_cues.push(SoundCue::Ui);
+        true
+    }
+
     fn adjust_online_multiplayer_selection(&mut self) {
         match self.selected_menu_item {
             3 => self.cycle_online_descriptor_path(),
             5 => self.cycle_online_host_address_preset(),
-            6 => self.cycle_online_gameplay_ticks(),
+            8 => self.cycle_online_gameplay_ticks(),
             _ => {
                 "Select descriptor path, host address, or gameplay ticks to adjust with left/right."
                     .clone_into(&mut self.online_session_status_message);
@@ -3637,22 +3761,28 @@ impl GameState {
                 self.inspect_online_descriptor_path();
             }
             5 => {
-                self.cycle_online_host_address_preset();
+                self.start_online_address_edit(OnlineAddressEditTarget::HostBind);
             }
             6 => {
-                self.cycle_online_gameplay_ticks();
+                self.start_online_address_edit(OnlineAddressEditTarget::HostAdvertise);
             }
             7 => {
+                self.start_online_address_edit(OnlineAddressEditTarget::ClientBind);
+            }
+            8 => {
+                self.cycle_online_gameplay_ticks();
+            }
+            9 => {
                 self.online_session_state = OnlineSessionUxState::Timeout;
                 "Connection timed out; retry or go back."
                     .clone_into(&mut self.online_session_status_message);
             }
-            8 => {
+            10 => {
                 self.online_session_state = OnlineSessionUxState::Error;
                 "Connection error: direct Quinn connection task failed."
                     .clone_into(&mut self.online_session_status_message);
             }
-            9 => {
+            11 => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 self.online_local_ready = false;
@@ -3660,7 +3790,7 @@ impl GameState {
                 "Online session shutdown requested."
                     .clone_into(&mut self.online_session_status_message);
             }
-            10 => {
+            12 => {
                 self.online_local_ready = !self.online_local_ready;
                 if self.online_local_ready {
                     "Local player ready for online session start."
@@ -3669,7 +3799,7 @@ impl GameState {
                 }
                 .clone_into(&mut self.online_session_status_message);
             }
-            11 => {
+            13 => {
                 self.request_online_gameplay_start();
             }
             _ => {
@@ -4446,9 +4576,7 @@ impl GameState {
             return false;
         };
 
-        if modal == ModalScreen::OnlineMultiplayer
-            && self.handle_online_descriptor_path_text_input(input)
-        {
+        if modal == ModalScreen::OnlineMultiplayer && self.handle_online_text_input(input) {
             return true;
         }
 
@@ -4488,7 +4616,7 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 12,
+                ModalScreen::OnlineMultiplayer => 15,
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -8268,13 +8396,86 @@ mod tests {
         assert!(game.message.contains("Host address preset selected"));
 
         let initial_ticks = game.online_gameplay_ticks;
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 8;
         assert!(game.handle_modal(PlayerInput {
             menu_left: true,
             ..PlayerInput::default()
         }));
         assert_ne!(game.online_gameplay_ticks, initial_ticks);
         assert!(game.message.contains("Gameplay smoke tick count selected"));
+    }
+
+    #[test]
+    fn online_modal_edits_socket_addresses_from_text_input() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 5;
+
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_address_edit_target,
+            Some(OnlineAddressEditTarget::HostBind)
+        );
+        game.online_address_edit_draft.clear();
+        for character in "127.0.0.1:5555".chars() {
+            assert!(game.handle_modal(PlayerInput {
+                text_input: Some(character),
+                ..PlayerInput::default()
+            }));
+        }
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_host_bind_addr,
+            "127.0.0.1:5555".parse::<SocketAddr>().expect("socket addr")
+        );
+
+        game.selected_menu_item = 6;
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft.clear();
+        for character in "127.0.0.1:6666".chars() {
+            assert!(game.handle_modal(PlayerInput {
+                text_input: Some(character),
+                ..PlayerInput::default()
+            }));
+        }
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_host_advertise_addr,
+            "127.0.0.1:6666".parse::<SocketAddr>().expect("socket addr")
+        );
+
+        game.selected_menu_item = 7;
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft.clear();
+        for character in "127.0.0.1:7777".chars() {
+            assert!(game.handle_modal(PlayerInput {
+                text_input: Some(character),
+                ..PlayerInput::default()
+            }));
+        }
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_client_bind_addr,
+            "127.0.0.1:7777".parse::<SocketAddr>().expect("socket addr")
+        );
     }
 
     #[test]
@@ -8460,7 +8661,7 @@ mod tests {
             OnlineSessionUxState::Reconnecting
         );
 
-        game.selected_menu_item = 7;
+        game.selected_menu_item = 9;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8470,7 +8671,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Timeout);
 
-        game.selected_menu_item = 8;
+        game.selected_menu_item = 10;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8480,7 +8681,7 @@ mod tests {
         );
         assert_eq!(game.online_session_state, OnlineSessionUxState::Error);
 
-        game.selected_menu_item = 9;
+        game.selected_menu_item = 11;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8653,7 +8854,7 @@ mod tests {
         game.online_remote_player_ready = true;
         game.online_remote_player_connected = true;
         game.online_diagnostic_controller_mode = "descriptor-client-connected".to_owned();
-        game.selected_menu_item = 12;
+        game.selected_menu_item = 14;
 
         game.update(
             PlayerInput {
@@ -8682,7 +8883,7 @@ mod tests {
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
             path: game.online_descriptor_path.clone(),
         });
-        game.selected_menu_item = 12;
+        game.selected_menu_item = 14;
 
         game.update(
             PlayerInput {
@@ -8703,7 +8904,7 @@ mod tests {
         let mut game = GameState::new();
         game.save_dirty = true;
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 9;
+        game.selected_menu_item = 11;
 
         game.update(
             PlayerInput {
@@ -8840,7 +9041,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8854,7 +9055,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8870,7 +9071,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8881,10 +9082,10 @@ mod tests {
             default_online_host_advertise_addr()
         );
 
-        game.selected_menu_item = 6;
+        game.selected_menu_item = 8;
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8892,7 +9093,7 @@ mod tests {
         assert_eq!(game.online_gameplay_ticks, 120);
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8905,7 +9106,7 @@ mod tests {
     fn online_multiplayer_start_gameplay_gates_on_connection_and_ready() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 11;
+        game.selected_menu_item = 13;
 
         game.update(
             PlayerInput {
@@ -8924,7 +9125,7 @@ mod tests {
             status_message: "Descriptor client accepted.".to_owned(),
         });
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 11;
+        game.selected_menu_item = 13;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8935,7 +9136,7 @@ mod tests {
         assert!(game.modal.is_some());
         assert!(game.message.contains("toggle local ready"));
 
-        game.selected_menu_item = 10;
+        game.selected_menu_item = 12;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8943,7 +9144,7 @@ mod tests {
             },
             0.0,
         );
-        game.selected_menu_item = 11;
+        game.selected_menu_item = 13;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8955,7 +9156,7 @@ mod tests {
         assert!(game.message.contains("remote player to toggle ready"));
 
         game.online_remote_player_ready = true;
-        game.selected_menu_item = 11;
+        game.selected_menu_item = 13;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -8972,7 +9173,7 @@ mod tests {
     fn online_multiplayer_toggle_ready_updates_lobby_status() {
         let mut game = GameState::new();
         game.modal = Some(ModalScreen::OnlineMultiplayer);
-        game.selected_menu_item = 10;
+        game.selected_menu_item = 12;
 
         game.update(
             PlayerInput {
