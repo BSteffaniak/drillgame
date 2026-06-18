@@ -477,6 +477,63 @@ pub enum OnlineNetworkTaskRequest {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineCorrectionFeel {
+    NoCorrection,
+    SmoothReconcile,
+    AuthoritativeSnap,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineAuthorityCorrectionPresentation {
+    pub authority: &'static str,
+    pub correction_feel: OnlineCorrectionFeel,
+    pub correction_label: &'static str,
+    pub snap_applied: bool,
+    pub player_message: String,
+}
+
+impl OnlineAuthorityCorrectionPresentation {
+    #[must_use]
+    pub fn from_plan(plan: crate::session::CorrectionPlan, snap_applied: bool) -> Self {
+        let (correction_feel, correction_label, player_message) = match plan {
+            crate::session::CorrectionPlan::None => (
+                OnlineCorrectionFeel::NoCorrection,
+                "in sync",
+                "Host authority: local prediction matches the authoritative host; no correction needed."
+                    .to_owned(),
+            ),
+            crate::session::CorrectionPlan::Smooth => (
+                OnlineCorrectionFeel::SmoothReconcile,
+                "smooth reconcile",
+                "Host authority: small prediction drift is being smoothed toward the host position."
+                    .to_owned(),
+            ),
+            crate::session::CorrectionPlan::Snap => (
+                OnlineCorrectionFeel::AuthoritativeSnap,
+                "authoritative snap",
+                "Host authority: large prediction drift snapped to the host position to prevent desync."
+                    .to_owned(),
+            ),
+        };
+        Self {
+            authority: "host authoritative simulation",
+            correction_feel,
+            correction_label,
+            snap_applied,
+            player_message,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Online authority/correction: {} | correction={} | snap_applied={} | {}",
+            self.authority, self.correction_label, self.snap_applied, self.player_message
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineTaskResultTransitionKind {
     HostWaitingForJoin,
     JoinedWaitingForStart,
@@ -1334,6 +1391,12 @@ impl RealOnlineSessionController {
                         let tick = snapshot.tick.get();
                         if let Some(player) = snapshot.players.first() {
                             apply_network_player_snapshot_to_game(game, player);
+                            game.apply_online_authority_correction_status(
+                                &OnlineAuthorityCorrectionPresentation::from_plan(
+                                    crate::session::CorrectionPlan::None,
+                                    false,
+                                ),
+                            );
                             game.apply_online_replicated_player_status(format!(
                                 "tick {tick}: applied player {} pos=({:.1},{:.1}) fuel={:.0} hull={:.0} credits={} cargo={}",
                                 player.player_id.get(),
@@ -2128,14 +2191,15 @@ impl RealOnlineSessionUxSnapshot {
         } else {
             OnlineSessionUxState::Error
         };
+        let presentation = OnlineAuthorityCorrectionPresentation::from_plan(
+            summary.correction_plan,
+            summary.snap_applied,
+        );
         Self {
             state,
             host_owns_save: true,
             player_slot,
-            status_message: format!(
-                "Authoritative correction over real Quinn: plan={:?}, snap={}",
-                summary.correction_plan, summary.snap_applied
-            ),
+            status_message: presentation.status_line(),
         }
     }
 }
@@ -2774,6 +2838,10 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_terrain_status: String,
     #[serde(default)]
+    pub online_last_authority_status: String,
+    #[serde(default)]
+    pub online_last_correction_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3023,6 +3091,8 @@ impl GameState {
             online_last_replication_status: String::new(),
             online_last_replicated_player_status: String::new(),
             online_last_terrain_status: String::new(),
+            online_last_authority_status: String::new(),
+            online_last_correction_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -3522,12 +3592,23 @@ impl GameState {
         self.online_last_terrain_status = status.into();
     }
 
+    pub fn apply_online_authority_correction_status(
+        &mut self,
+        presentation: &OnlineAuthorityCorrectionPresentation,
+    ) {
+        self.online_last_authority_status
+            .clone_from(&presentation.player_message);
+        self.online_last_correction_status = presentation.status_line();
+    }
+
     pub fn clear_online_diagnostics(&mut self) {
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
         self.online_last_replication_status.clear();
         self.online_last_replicated_player_status.clear();
         self.online_last_terrain_status.clear();
+        self.online_last_authority_status.clear();
+        self.online_last_correction_status.clear();
     }
 
     #[must_use]
@@ -3719,6 +3800,22 @@ impl GameState {
                 "none"
             } else {
                 self.online_last_terrain_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online authority: {}",
+            if self.online_last_authority_status.is_empty() {
+                "host authoritative simulation; joined clients reconcile to host snapshots"
+            } else {
+                self.online_last_authority_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online correction feel: {}",
+            if self.online_last_correction_status.is_empty() {
+                "none yet; small offsets smooth, large offsets snap to prevent desync"
+            } else {
+                self.online_last_correction_status.as_str()
             }
         ));
         lines.push(format!(
@@ -10012,6 +10109,103 @@ mod tests {
         assert!(game.save_dirty);
         assert_eq!(game.online_network_task_request, None);
         assert_eq!(game.modal, None);
+    }
+
+    #[test]
+    fn online_authority_correction_presentation_explains_smooth_and_snap_behavior() {
+        let none = OnlineAuthorityCorrectionPresentation::from_plan(
+            crate::session::CorrectionPlan::None,
+            false,
+        );
+        assert_eq!(none.correction_feel, OnlineCorrectionFeel::NoCorrection);
+        assert!(none.status_line().contains("in sync"));
+
+        let smooth = OnlineAuthorityCorrectionPresentation::from_plan(
+            crate::session::CorrectionPlan::Smooth,
+            false,
+        );
+        assert_eq!(
+            smooth.correction_feel,
+            OnlineCorrectionFeel::SmoothReconcile
+        );
+        assert!(smooth.status_line().contains("small prediction drift"));
+        assert!(smooth.status_line().contains("smooth reconcile"));
+
+        let snap = OnlineAuthorityCorrectionPresentation::from_plan(
+            crate::session::CorrectionPlan::Snap,
+            true,
+        );
+        assert_eq!(
+            snap.correction_feel,
+            OnlineCorrectionFeel::AuthoritativeSnap
+        );
+        assert!(snap.status_line().contains("large prediction drift"));
+        assert!(snap.status_line().contains("snap_applied=true"));
+    }
+
+    #[test]
+    fn online_status_lines_show_host_authority_and_correction_feel() {
+        let mut game = GameState::new();
+        let presentation = OnlineAuthorityCorrectionPresentation::from_plan(
+            crate::session::CorrectionPlan::Smooth,
+            false,
+        );
+        game.apply_online_authority_correction_status(&presentation);
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(
+            |line| line.contains("Online authority") && line.contains("small prediction drift")
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Online correction feel")
+                    && line.contains("smooth reconcile")
+                    && line.contains("host authoritative simulation"))
+        );
+    }
+
+    #[test]
+    fn online_correction_snapshot_status_is_cleared_with_diagnostics() {
+        let mut game = GameState::new();
+        game.apply_online_authority_correction_status(
+            &OnlineAuthorityCorrectionPresentation::from_plan(
+                crate::session::CorrectionPlan::Snap,
+                true,
+            ),
+        );
+        assert!(!game.online_last_authority_status.is_empty());
+        assert!(!game.online_last_correction_status.is_empty());
+
+        game.clear_online_diagnostics();
+        assert!(game.online_last_authority_status.is_empty());
+        assert!(game.online_last_correction_status.is_empty());
+        let lines = game.online_multiplayer_status_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Online correction feel")
+                    && line.contains("small offsets smooth, large offsets snap"))
+        );
+    }
+
+    #[test]
+    fn correction_ux_snapshot_uses_player_facing_authority_language() {
+        let snapshot = RealOnlineSessionUxSnapshot::from_correction(
+            SocketDrivenCorrectionSummary {
+                snapshot_replicated: true,
+                authoritative_tick: crate::multiplayer::SimulationTick::new(77),
+                correction_plan: crate::session::CorrectionPlan::Snap,
+                presentation_x: 12.0,
+                presentation_y: 34.0,
+                snap_applied: true,
+            },
+            Some(2),
+        );
+        assert_eq!(snapshot.state, OnlineSessionUxState::Connected);
+        assert!(snapshot.status_message.contains("Host authority"));
+        assert!(snapshot.status_message.contains("large prediction drift"));
+        assert!(snapshot.status_message.contains("snap_applied=true"));
     }
 
     #[test]
