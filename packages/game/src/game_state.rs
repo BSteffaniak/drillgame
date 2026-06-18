@@ -342,6 +342,159 @@ const fn domain_status(visible: bool) -> &'static str {
     if visible { "visible" } else { "missing" }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineSyncEvidenceQuality {
+    Missing,
+    DiagnosticOnly,
+    LiveReplicated,
+}
+
+impl OnlineSyncEvidenceQuality {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::DiagnosticOnly => "diagnostic-only",
+            Self::LiveReplicated => "live-replicated",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplaySyncEvidenceMatrix {
+    pub movement: OnlineSyncEvidenceQuality,
+    pub drilling_terrain: OnlineSyncEvidenceQuality,
+    pub cargo_economy: OnlineSyncEvidenceQuality,
+    pub survival_hazards: OnlineSyncEvidenceQuality,
+    pub upgrades_inventory: OnlineSyncEvidenceQuality,
+    pub pause_menu_boundaries: OnlineSyncEvidenceQuality,
+    pub reconnect_save_boundaries: OnlineSyncEvidenceQuality,
+    pub authority_corrections: OnlineSyncEvidenceQuality,
+    pub complete_for_mvp_loop: bool,
+    pub status: String,
+}
+
+impl OnlineGameplaySyncEvidenceMatrix {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "sync evidence matrix intentionally evaluates each gameplay domain in one place"
+    )]
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let movement = evidence_quality(
+            !game.online_last_replicated_player_status.is_empty()
+                || !game.online_remote_player_snapshots.is_empty(),
+            game.online_last_live_verification_status
+                .contains("movement=visible")
+                || game
+                    .online_last_gameplay_domain_status
+                    .contains("movement=visible"),
+        );
+        let drilling_terrain = evidence_quality(
+            !game.online_last_terrain_status.is_empty()
+                || game
+                    .online_last_sync_loop_status
+                    .contains("terrain chunk applied"),
+            game.online_last_live_verification_status
+                .contains("terrain=visible")
+                || game
+                    .online_last_gameplay_domain_status
+                    .contains("terrain=visible"),
+        );
+        let cargo_economy = evidence_quality(
+            game.online_last_replicated_player_status.contains("cargo=")
+                || game
+                    .online_last_replicated_player_status
+                    .contains("credits=")
+                || game.online_last_sync_loop_status.contains("cargo=yes"),
+            game.online_last_live_verification_status
+                .contains("cargo_economy=visible")
+                || game
+                    .online_last_gameplay_domain_status
+                    .contains("cargo_economy=visible"),
+        );
+        let survival_hazards = evidence_quality(
+            game.online_last_replicated_player_status.contains("fuel=")
+                || game.online_last_replicated_player_status.contains("hull="),
+            game.online_last_live_verification_status
+                .contains("survival=visible")
+                || game
+                    .online_last_gameplay_domain_status
+                    .contains("survival=visible"),
+        );
+        let upgrades_inventory = evidence_quality(
+            !game.rig_part_inventory.is_empty()
+                || !game.equipped_rig_parts.is_empty()
+                || !game.cosmetic_skins.is_empty()
+                || !game.challenge_badges.is_empty(),
+            game.online_last_live_verification_status
+                .contains("inventory=visible")
+                || game
+                    .online_last_gameplay_domain_status
+                    .contains("inventory=visible"),
+        );
+        let pause_menu_boundaries = evidence_quality(
+            game.online_last_gameplay_domain_status
+                .contains("menu_boundary=visible"),
+            game.modal.is_some() || game.run_mode != RunMode::Playing,
+        );
+        let reconnect_save_boundaries = evidence_quality(
+            game.online_last_ownership_status
+                .contains("reconnect_context=preserved")
+                || game
+                    .online_last_save_boundary_status
+                    .contains("Online save boundary")
+                || game
+                    .online_last_session_boundary_status
+                    .contains("session boundary"),
+            game.online_session_state == OnlineSessionUxState::Reconnecting
+                || !game.online_last_save_boundary_status.is_empty(),
+        );
+        let authority_corrections = evidence_quality(
+            !game.online_last_authority_status.is_empty()
+                || !game.online_last_correction_status.is_empty(),
+            game.online_last_gameplay_domain_status
+                .contains("authority_correction=visible"),
+        );
+        let complete_for_mvp_loop = movement == OnlineSyncEvidenceQuality::LiveReplicated
+            && drilling_terrain == OnlineSyncEvidenceQuality::LiveReplicated
+            && cargo_economy == OnlineSyncEvidenceQuality::LiveReplicated;
+        let status = format!(
+            "Online gameplay sync evidence: movement={} drilling_terrain={} cargo_economy={} survival_hazards={} upgrades_inventory={} pause_menu_boundaries={} reconnect_save_boundaries={} authority_corrections={} mvp_loop_complete={}",
+            movement.label(),
+            drilling_terrain.label(),
+            cargo_economy.label(),
+            survival_hazards.label(),
+            upgrades_inventory.label(),
+            pause_menu_boundaries.label(),
+            reconnect_save_boundaries.label(),
+            authority_corrections.label(),
+            yes_no(complete_for_mvp_loop)
+        );
+        Self {
+            movement,
+            drilling_terrain,
+            cargo_economy,
+            survival_hazards,
+            upgrades_inventory,
+            pause_menu_boundaries,
+            reconnect_save_boundaries,
+            authority_corrections,
+            complete_for_mvp_loop,
+            status,
+        }
+    }
+}
+
+const fn evidence_quality(live: bool, diagnostic: bool) -> OnlineSyncEvidenceQuality {
+    if live {
+        OnlineSyncEvidenceQuality::LiveReplicated
+    } else if diagnostic {
+        OnlineSyncEvidenceQuality::DiagnosticOnly
+    } else {
+        OnlineSyncEvidenceQuality::Missing
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "live verification status reports independent gameplay-system evidence flags"
@@ -3792,6 +3945,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_gameplay_domain_status: String,
     #[serde(default)]
+    pub online_last_gameplay_sync_evidence_status: String,
+    #[serde(default)]
     pub online_last_save_boundary_status: String,
     #[serde(default)]
     pub online_last_descriptor_input_status: String,
@@ -4057,6 +4212,7 @@ impl GameState {
             online_last_ownership_status: String::new(),
             online_last_live_verification_status: String::new(),
             online_last_gameplay_domain_status: String::new(),
+            online_last_gameplay_sync_evidence_status: String::new(),
             online_last_save_boundary_status: String::new(),
             online_last_descriptor_input_status: String::new(),
             online_last_lobby_status: String::new(),
@@ -4615,6 +4771,12 @@ impl GameState {
     pub fn refresh_online_gameplay_domain_status(&mut self) {
         self.online_last_gameplay_domain_status =
             OnlineGameplayDomainStatus::from_game(self).status;
+        self.refresh_online_gameplay_sync_evidence_status();
+    }
+
+    pub fn refresh_online_gameplay_sync_evidence_status(&mut self) {
+        self.online_last_gameplay_sync_evidence_status =
+            OnlineGameplaySyncEvidenceMatrix::from_game(self).status;
     }
 
     pub fn refresh_online_save_boundary_status(&mut self) {
@@ -4674,6 +4836,7 @@ impl GameState {
         self.online_last_sync_loop_status.clear();
         self.online_last_live_verification_status.clear();
         self.online_last_gameplay_domain_status.clear();
+        self.online_last_gameplay_sync_evidence_status.clear();
     }
 
     #[allow(
@@ -4898,6 +5061,13 @@ impl GameState {
         } else {
             self.online_last_gameplay_domain_status.clone()
         });
+        lines.push(
+            if self.online_last_gameplay_sync_evidence_status.is_empty() {
+                OnlineGameplaySyncEvidenceMatrix::from_game(self).status
+            } else {
+                self.online_last_gameplay_sync_evidence_status.clone()
+            },
+        );
         lines.push(if self.online_last_playable_session_status.is_empty() {
             OnlinePlayableSessionStatus::from_game(self).status
         } else {
@@ -11160,6 +11330,116 @@ mod tests {
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
         );
+    }
+
+    #[test]
+    fn gameplay_sync_evidence_matrix_reports_missing_partial_and_full_mvp_loop() {
+        let mut game = GameState::new();
+        let missing = OnlineGameplaySyncEvidenceMatrix::from_game(&game);
+        assert_eq!(missing.movement, OnlineSyncEvidenceQuality::Missing);
+        assert_eq!(missing.drilling_terrain, OnlineSyncEvidenceQuality::Missing);
+        assert_eq!(missing.cargo_economy, OnlineSyncEvidenceQuality::Missing);
+        assert!(!missing.complete_for_mvp_loop);
+        assert!(missing.status.contains("mvp_loop_complete=no"));
+
+        game.online_last_gameplay_domain_status =
+            "Online gameplay domains: movement=visible terrain=missing cargo_economy=missing survival=missing inventory=missing menu_boundary=visible reconnect_recovery=missing authority_correction=missing"
+                .to_owned();
+        let diagnostic = OnlineGameplaySyncEvidenceMatrix::from_game(&game);
+        assert_eq!(
+            diagnostic.movement,
+            OnlineSyncEvidenceQuality::DiagnosticOnly
+        );
+        assert_eq!(
+            diagnostic.pause_menu_boundaries,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+
+        game.apply_online_replicated_player_status(
+            "tick 3: replicated player p1 pos=(4,5) vel=(1,0) fuel=88 hull=77 credits=12 cargo=2",
+        );
+        game.apply_online_terrain_status(
+            "terrain chunk applied: network_tiles=10 visible_tiles=10",
+        );
+        let full = OnlineGameplaySyncEvidenceMatrix::from_game(&game);
+        assert_eq!(full.movement, OnlineSyncEvidenceQuality::LiveReplicated);
+        assert_eq!(
+            full.drilling_terrain,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert_eq!(
+            full.cargo_economy,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert_eq!(
+            full.survival_hazards,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert!(full.complete_for_mvp_loop);
+        assert!(full.status.contains("mvp_loop_complete=yes"));
+    }
+
+    #[test]
+    fn gameplay_sync_evidence_matrix_covers_inventory_reconnect_save_and_authority() {
+        let mut game = GameState::new();
+        game.rig_part_inventory.insert(RigPartKind::CargoBalloon);
+        game.online_last_save_boundary_status =
+            OnlineSaveBoundaryStatus::from_game(&game).status_line();
+        game.online_last_ownership_status =
+            "Online ownership: identity=known reconnect_context=preserved save_authority=LocalPlayer"
+                .to_owned();
+        game.apply_online_authority_correction_status(&OnlineAuthorityCorrectionPresentation {
+            authority: "host authoritative simulation",
+            correction_feel: OnlineCorrectionFeel::SmoothReconcile,
+            correction_label: "smooth reconcile",
+            snap_applied: false,
+            player_message: "host authoritative simulation active".to_owned(),
+        });
+
+        let matrix = OnlineGameplaySyncEvidenceMatrix::from_game(&game);
+        assert_eq!(
+            matrix.upgrades_inventory,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert_eq!(
+            matrix.reconnect_save_boundaries,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert_eq!(
+            matrix.authority_corrections,
+            OnlineSyncEvidenceQuality::LiveReplicated
+        );
+        assert!(matrix.status.contains("upgrades_inventory=live-replicated"));
+        assert!(
+            matrix
+                .status
+                .contains("reconnect_save_boundaries=live-replicated")
+        );
+    }
+
+    #[test]
+    fn gameplay_sync_evidence_status_is_refreshed_and_exposed_in_status_lines() {
+        let mut game = GameState::new();
+        game.apply_online_replicated_player_status(
+            "tick 4: replicated player p1 pos=(7,8) fuel=80 hull=70 credits=44 cargo=3",
+        );
+        assert!(
+            game.online_last_gameplay_sync_evidence_status
+                .contains("movement=live-replicated")
+        );
+        assert!(
+            game.online_last_gameplay_sync_evidence_status
+                .contains("cargo_economy=live-replicated")
+        );
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online gameplay sync evidence")
+                    && line.contains("movement=live-replicated"))
+        );
+
+        game.clear_online_diagnostics();
+        assert!(game.online_last_gameplay_sync_evidence_status.is_empty());
     }
 
     #[test]
