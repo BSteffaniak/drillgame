@@ -202,12 +202,13 @@ pub enum CommandApplicationResponse {
     Rejected(CommandRejection),
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CommandPacketExchangeSummary {
     pub client_id: ClientId,
     pub acknowledged: usize,
     pub rejected: usize,
     pub authoritative_tick: SimulationTick,
+    pub accepted_commands: Vec<SequencedPlayerCommand>,
 }
 
 impl CommandPacketExchangeSummary {
@@ -298,6 +299,21 @@ impl CommandNetworkSession {
         packet: &CommandPacket,
     ) -> (Vec<ProtocolMessage>, CommandPacketExchangeSummary) {
         let responses = self.apply_command_packet(packet);
+        let accepted_sequences = responses
+            .iter()
+            .filter_map(|response| match response {
+                CommandApplicationResponse::Acknowledged(acknowledgement) => {
+                    Some(acknowledgement.acknowledged_sequence)
+                }
+                CommandApplicationResponse::Rejected(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let accepted_commands = packet
+            .commands
+            .iter()
+            .filter(|command| accepted_sequences.contains(&command.sequence))
+            .cloned()
+            .collect();
         let acknowledged = responses
             .iter()
             .filter(|response| matches!(response, CommandApplicationResponse::Acknowledged(_)))
@@ -321,6 +337,7 @@ impl CommandNetworkSession {
                 acknowledged,
                 rejected,
                 authoritative_tick: self.current_tick,
+                accepted_commands,
             },
         )
     }

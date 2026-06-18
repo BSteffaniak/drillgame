@@ -313,7 +313,15 @@ impl OnlineTaskDispatcher {
         local_player_commands: Vec<PlayerCommand>,
     ) -> crate::multiplayer::QuinnSessionTickInput {
         let local_client = session.local_client();
-        let player_id = local_client.controlled_player_id;
+        let online_player_slot = session.game().online_player_slot;
+        let player_id = online_player_slot.map_or(local_client.controlled_player_id, |slot| {
+            crate::multiplayer::PlayerId::new(u64::from(slot))
+        });
+        let client_id = if online_player_slot == Some(2) {
+            crate::multiplayer::ClientId::new(1)
+        } else {
+            local_client.client_id
+        };
         let tick = session.current_tick().get().saturating_add(1);
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
@@ -338,7 +346,7 @@ impl OnlineTaskDispatcher {
         };
         crate::multiplayer::QuinnSessionTickInput {
             command_packet: Some(crate::multiplayer::CommandPacket {
-                client_id: local_client.client_id,
+                client_id,
                 commands: commands
                     .into_iter()
                     .map(|command| crate::multiplayer::SequencedPlayerCommand {
@@ -368,6 +376,52 @@ impl OnlineTaskDispatcher {
             summary.terrain_chunk_response.is_some(),
             summary.correction_summary.is_some()
         )
+    }
+
+    fn apply_accepted_remote_commands(
+        session: &mut GameSession,
+        summary: Option<&crate::multiplayer::CommandPacketExchangeSummary>,
+    ) -> usize {
+        let Some(summary) = summary else {
+            return 0;
+        };
+        if summary.accepted_commands.is_empty() {
+            return 0;
+        }
+        let remote_client_id = if summary.client_id == session.local_client().client_id {
+            crate::multiplayer::ClientId::new(2)
+        } else {
+            summary.client_id
+        };
+        let Some(player_id) = summary
+            .accepted_commands
+            .iter()
+            .map(|command| command.player_id)
+            .find(|player_id| *player_id != session.local_client().controlled_player_id)
+        else {
+            return 0;
+        };
+        if !session.has_client(remote_client_id) {
+            let _added = session.add_local_client_player(remote_client_id, player_id);
+        }
+        let commands = summary
+            .accepted_commands
+            .iter()
+            .filter(|command| command.player_id == player_id)
+            .map(|command| command.command.clone())
+            .collect::<Vec<_>>();
+        if commands.is_empty() {
+            return 0;
+        }
+        let batch = session.route_client_player_commands(
+            remote_client_id,
+            crate::multiplayer::CommandSource::OnlineClient,
+            commands,
+        );
+        if batch.commands.is_empty() {
+            return 0;
+        }
+        session.process_authoritative_commands_for_tick(session.current_tick())
     }
 
     fn drive_scheduled_tick(
@@ -421,9 +475,24 @@ impl OnlineTaskDispatcher {
                 .map(|telemetry| telemetry.summary),
         };
         match result {
-            Ok(summary) => session
-                .game_mut()
-                .apply_online_diagnostics(mode_label, Self::tick_diagnostic(&summary)),
+            Ok(summary) => {
+                let applied_remote_commands = if mode_label == "descriptor-host-accepted" {
+                    Self::apply_accepted_remote_commands(session, summary.command_summary.as_ref())
+                } else {
+                    0
+                };
+                let diagnostic = if applied_remote_commands == 0 {
+                    Self::tick_diagnostic(&summary)
+                } else {
+                    format!(
+                        "{}; applied_remote_commands={applied_remote_commands}",
+                        Self::tick_diagnostic(&summary)
+                    )
+                };
+                session
+                    .game_mut()
+                    .apply_online_diagnostics(mode_label, diagnostic);
+            }
             Err(error) => {
                 session.game_mut().apply_online_network_task_result(
                     OnlineNetworkTaskResult::Failed(format!("{error:?}")),
@@ -973,6 +1042,61 @@ mod tests {
         assert_eq!(packet.commands[0].sequence, packet.commands[1].sequence);
         assert!(input.snapshot.is_some());
         assert!(input.terrain_chunk_request.is_some());
+    }
+
+    #[test]
+    fn live_session_tick_input_uses_joined_client_network_identity() {
+        let mut session = GameSession::new();
+        session.game_mut().online_player_slot = Some(2);
+        let mut dispatcher = OnlineTaskDispatcher::new();
+        let input = dispatcher.live_session_tick_input(
+            &session,
+            vec![PlayerCommand::Movement {
+                horizontal: -1.0,
+                thrust: false,
+                drill_down: false,
+            }],
+        );
+
+        let packet = input.command_packet.expect("command packet is generated");
+        let command = packet.commands.first().expect("sequenced command");
+        assert_eq!(packet.client_id, crate::multiplayer::ClientId::new(1));
+        assert_eq!(command.player_id, crate::multiplayer::PlayerId::new(2));
+    }
+
+    #[test]
+    fn accepted_remote_commands_create_online_client_and_move_remote_player() {
+        let mut session = GameSession::new();
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: crate::multiplayer::ClientId::new(1),
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: session.current_tick(),
+            accepted_commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                sequence: crate::multiplayer::InputSequence::new(7),
+                target_tick: session.current_tick(),
+                command: PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: false,
+                    drill_down: false,
+                },
+            }],
+        };
+
+        let applied =
+            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+
+        assert_eq!(applied, 1);
+        assert!(session.has_client(crate::multiplayer::ClientId::new(2)));
+        let remote_player = session
+            .world_snapshot()
+            .network_snapshot()
+            .players
+            .into_iter()
+            .find(|player| player.player_id == crate::multiplayer::PlayerId::new(2))
+            .expect("remote player exists");
+        assert!(remote_player.velocity_x > 0.0 || remote_player.x > session.game().player.x);
     }
 
     #[test]

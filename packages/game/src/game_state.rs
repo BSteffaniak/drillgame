@@ -10199,6 +10199,7 @@ mod tests {
                 acknowledged: 1,
                 rejected: 0,
                 authoritative_tick: crate::multiplayer::SimulationTick::new(5),
+                accepted_commands: Vec::new(),
             }),
             snapshot_replicated: true,
             delta_replicated: true,

@@ -4185,6 +4185,11 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn has_client(&self, client_id: ClientId) -> bool {
+        self.clients.contains_key(&client_id)
+    }
+
+    #[must_use]
     pub fn secondary_local_client_id(&self) -> Option<ClientId> {
         self.clients
             .keys()
