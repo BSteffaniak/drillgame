@@ -1025,8 +1025,9 @@ impl RealOnlineSessionController {
                     crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
                         let tick = snapshot.tick.get();
                         if let Some(player) = snapshot.players.first() {
+                            apply_network_player_snapshot_to_game(game, player);
                             game.apply_online_replicated_player_status(format!(
-                                "tick {tick}: player {} pos=({:.1},{:.1}) fuel={:.0} hull={:.0} credits={} cargo={}",
+                                "tick {tick}: applied player {} pos=({:.1},{:.1}) fuel={:.0} hull={:.0} credits={} cargo={}",
                                 player.player_id.get(),
                                 player.x,
                                 player.y,
@@ -1548,6 +1549,21 @@ fn live_player_network_snapshot(
             scanner_cooldown_seconds: 0.0,
         }],
     }
+}
+
+const fn apply_network_player_snapshot_to_game(
+    game: &mut GameState,
+    snapshot: &crate::multiplayer::NetworkPlayerSnapshot,
+) {
+    game.player.x = snapshot.x;
+    game.player.y = snapshot.y;
+    game.player.velocity_x = snapshot.velocity_x;
+    game.player.velocity_y = snapshot.velocity_y;
+    game.player.fuel = snapshot.fuel;
+    game.player.hull = snapshot.hull;
+    game.player.credits = snapshot.credits;
+    game.scanner_cooldown_seconds = snapshot.scanner_cooldown_seconds;
+    game.mark_full_terrain_refresh();
 }
 
 fn live_player_terrain_request(game: &GameState) -> (i32, i32, u64, u64) {

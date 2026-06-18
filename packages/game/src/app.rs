@@ -1057,6 +1057,17 @@ mod tests {
         );
         let mut host_session = GameSession::new();
         host_session.game_mut().online_player_name = "Host QA".to_owned();
+        {
+            let host_player = host_session
+                .world_mut()
+                .player_mut(crate::multiplayer::LOCAL_PLAYER_ID)
+                .expect("host local player exists");
+            host_player.x = 123.0;
+            host_player.y = 456.0;
+            host_player.velocity_x = 7.0;
+            host_player.velocity_y = -8.0;
+            host_player.credits = 999;
+        }
         host_session.game_mut().online_local_ready = true;
         host_session.game_mut().run_mode = RunMode::Playing;
         host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
@@ -1106,6 +1117,11 @@ mod tests {
             Some("Host QA")
         );
         assert_eq!(join_session.game().run_mode, RunMode::Playing);
+        assert!((join_session.game().player.x - 123.0).abs() < f32::EPSILON);
+        assert!((join_session.game().player.y - 456.0).abs() < f32::EPSILON);
+        assert!((join_session.game().player.velocity_x - 7.0).abs() < f32::EPSILON);
+        assert!((join_session.game().player.velocity_y + 8.0).abs() < f32::EPSILON);
+        assert_eq!(join_session.game().player.credits, 999);
         assert!(
             join_session
                 .game()
