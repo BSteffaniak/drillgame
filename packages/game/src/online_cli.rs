@@ -46,6 +46,12 @@ pub enum OnlineCliAction {
         client_bind_addr: SocketAddr,
         ticks: u32,
     },
+    TwoInstanceUiRunbookMarkdown {
+        descriptor_path: PathBuf,
+        host_bind_addr: SocketAddr,
+        host_advertise_addr: SocketAddr,
+        client_bind_addr: SocketAddr,
+    },
     InspectDescriptorFile {
         path: PathBuf,
     },
@@ -172,6 +178,18 @@ where
                     ticks,
                 });
             }
+            "--online-two-instance-ui-runbook-md" => {
+                let descriptor_path = PathBuf::from(args.next()?.as_ref());
+                let host_bind_addr = args.next()?.as_ref().parse().ok()?;
+                let host_advertise_addr = args.next()?.as_ref().parse().ok()?;
+                let client_bind_addr = args.next()?.as_ref().parse().ok()?;
+                return Some(OnlineCliAction::TwoInstanceUiRunbookMarkdown {
+                    descriptor_path,
+                    host_bind_addr,
+                    host_advertise_addr,
+                    client_bind_addr,
+                });
+            }
             "--online-host-descriptor-json" => return Some(OnlineCliAction::HostDescriptorJson),
             "--online-inspect-descriptor-file" => {
                 let path = args.next()?;
@@ -266,6 +284,20 @@ where
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TwoInstanceUiRunbook {
+    pub descriptor_path: PathBuf,
+    pub host_bind_addr: SocketAddr,
+    pub host_advertise_addr: SocketAddr,
+    pub client_bind_addr: SocketAddr,
+    pub host_app_command: Vec<String>,
+    pub client_app_command: Vec<String>,
+    pub host_ui_steps: Vec<String>,
+    pub client_ui_steps: Vec<String>,
+    pub pass_criteria: Vec<String>,
+    pub failure_capture: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LanQaCommandPlan {
     pub descriptor_path: PathBuf,
     pub host_bind_addr: SocketAddr,
@@ -295,6 +327,102 @@ impl From<QuinnHostConnectionDescriptor> for HostDescriptorInspection {
             has_certificate_material: !descriptor.certificate_der.is_empty(),
         }
     }
+}
+
+#[must_use]
+pub fn build_two_instance_ui_runbook(
+    descriptor_path: PathBuf,
+    host_bind_addr: SocketAddr,
+    host_advertise_addr: SocketAddr,
+    client_bind_addr: SocketAddr,
+) -> TwoInstanceUiRunbook {
+    let descriptor = descriptor_path.display().to_string();
+    TwoInstanceUiRunbook {
+        descriptor_path,
+        host_bind_addr,
+        host_advertise_addr,
+        client_bind_addr,
+        host_app_command: vec!["drillgame".to_owned()],
+        client_app_command: vec!["drillgame".to_owned()],
+        host_ui_steps: vec![
+            "Launch app instance A from the host command.".to_owned(),
+            "Open Online Multiplayer from the title/pause UI.".to_owned(),
+            format!("Set descriptor path to `{descriptor}`."),
+            format!("Set host bind address to `{host_bind_addr}`."),
+            format!("Set host advertised address to `{host_advertise_addr}`."),
+            "Choose Host direct-connect descriptor.".to_owned(),
+            "Confirm the descriptor/share guidance appears and host save authority is shown.".to_owned(),
+            "Wait for the joined client to appear connected and ready.".to_owned(),
+            "Toggle local ready, then use Start online gameplay once the gate is ready.".to_owned(),
+        ],
+        client_ui_steps: vec![
+            "Launch app instance B from the client command.".to_owned(),
+            "Open Online Multiplayer from the title/pause UI.".to_owned(),
+            format!("Set descriptor path to `{descriptor}` after the host writes/shares it."),
+            format!("Set client bind address to `{client_bind_addr}`."),
+            "Inspect the descriptor before joining; record parse/host/certificate output.".to_owned(),
+            "Choose Join with descriptor file.".to_owned(),
+            "Confirm joined-client role, slot, host-owned save policy, and local-write limitations are shown.".to_owned(),
+            "Toggle local ready and wait for the host to start gameplay.".to_owned(),
+        ],
+        pass_criteria: vec![
+            "Both instances reach the online lobby with correct host/client roles and slots.".to_owned(),
+            "Remote readiness and connection state update from real session messages.".to_owned(),
+            "Both instances enter gameplay through the UI, not through a CLI-only path.".to_owned(),
+            "Client input reaches the host and host replication changes visible gameplay state.".to_owned(),
+            "At least one movement plus drilling/terrain/cargo observation is recorded.".to_owned(),
+            "Client and host can end the session without corrupting dirty local save state.".to_owned(),
+        ],
+        failure_capture: vec![
+            "Record exact step where host or client diverged from the runbook.".to_owned(),
+            "Copy Online status lines: descriptor input, lobby status, playable-session gate, gameplay sync evidence, session boundary, failure help, ownership, and save boundary.".to_owned(),
+            "Save host and client stdout/stderr if launched from terminals.".to_owned(),
+            "Attach descriptor inspection output and note OS/firewall prompts.".to_owned(),
+            "Convert the failure into an item under the Active MVP working-game gate.".to_owned(),
+        ],
+    }
+}
+
+#[must_use]
+pub fn build_two_instance_ui_runbook_markdown(runbook: &TwoInstanceUiRunbook) -> String {
+    fn command_line(command: &[String]) -> String {
+        command.join(" ")
+    }
+
+    fn checklist(items: &[String]) -> String {
+        items
+            .iter()
+            .map(|item| format!("- [ ] {item}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    format!(
+        "# Drillgame Two-Instance UI Multiplayer Runbook\n\n\
+         This runbook is for the next working-game blocker: prove or debug real app UI host/join/play. It is not a substitute for actually running the two windows.\n\n\
+         ## Runtime values\n\n\
+         - Descriptor path: `{}`\n\
+         - Host bind address: `{}`\n\
+         - Host advertised address: `{}`\n\
+         - Client bind address: `{}`\n\n\
+         ## Launch commands\n\n\
+         Host/app instance A:\n\n```bash\n{}\n```\n\n\
+         Client/app instance B:\n\n```bash\n{}\n```\n\n\
+         ## Host UI steps\n\n{}\n\n\
+         ## Client UI steps\n\n{}\n\n\
+         ## Pass criteria\n\n{}\n\n\
+         ## Failure capture\n\n{}\n",
+        runbook.descriptor_path.display(),
+        runbook.host_bind_addr,
+        runbook.host_advertise_addr,
+        runbook.client_bind_addr,
+        command_line(&runbook.host_app_command),
+        command_line(&runbook.client_app_command),
+        checklist(&runbook.host_ui_steps),
+        checklist(&runbook.client_ui_steps),
+        checklist(&runbook.pass_criteria),
+        checklist(&runbook.failure_capture)
+    )
 }
 
 #[must_use]
@@ -402,7 +530,7 @@ pub fn build_lan_qa_checklist_markdown(plan: &LanQaCommandPlan) -> String {
 
 #[must_use]
 pub const fn online_cli_usage() -> &'static str {
-    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-local-soak <ticks>\n  --online-local-soak-json <ticks>\n  --online-local-degraded-soak <ticks>\n  --online-local-degraded-soak-json <ticks>\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-host-descriptor-json\n  --online-inspect-descriptor-file <path>\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
+    "Online multiplayer CLI actions:\n  --online-help\n  --online-local-smoke\n  --online-local-soak <ticks>\n  --online-local-soak-json <ticks>\n  --online-local-degraded-soak <ticks>\n  --online-local-degraded-soak-json <ticks>\n  --online-latency-loss-playtest\n  --online-production-acceptance\n  --online-production-acceptance-json\n  --online-lan-qa-plan-json <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-lan-qa-checklist-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port> <ticks>\n  --online-two-instance-ui-runbook-md <descriptor-path> <host-bind-addr:port> <host-advertise-addr:port> <client-bind-addr:port>\n  --online-host-descriptor-json\n  --online-inspect-descriptor-file <path>\n  --online-host-descriptor-file <path>\n  --online-host-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port>\n  --online-join-descriptor-file <path>\n  --online-join-descriptor-file-on-addr <path> <bind-addr:port>\n  --online-host-gameplay-descriptor-file <path> <ticks>\n  --online-host-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <advertise-addr:port> <ticks>\n  --online-join-gameplay-descriptor-file <path> <ticks>\n  --online-join-gameplay-descriptor-file-on-addr <path> <bind-addr:port> <ticks>"
 }
 
 /// Execute a one-shot online CLI action.
@@ -449,6 +577,17 @@ pub fn run_online_cli_action(action: OnlineCliAction) -> Result<String, String> 
             client_bind_addr,
             ticks,
         ),
+        OnlineCliAction::TwoInstanceUiRunbookMarkdown {
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+        } => Ok(run_two_instance_ui_runbook_markdown_cli_action(
+            descriptor_path,
+            host_bind_addr,
+            host_advertise_addr,
+            client_bind_addr,
+        )),
         OnlineCliAction::HostDescriptorJson => run_host_descriptor_json_cli_action(),
         OnlineCliAction::InspectDescriptorFile { path } => {
             run_inspect_descriptor_file_cli_action(&path)
@@ -636,6 +775,21 @@ fn run_lan_qa_checklist_markdown_cli_action(
     )
     .ok_or_else(|| "LAN QA tick count must be greater than zero".to_owned())?;
     Ok(build_lan_qa_checklist_markdown(&plan))
+}
+
+fn run_two_instance_ui_runbook_markdown_cli_action(
+    descriptor_path: PathBuf,
+    host_bind_addr: SocketAddr,
+    host_advertise_addr: SocketAddr,
+    client_bind_addr: SocketAddr,
+) -> String {
+    let runbook = build_two_instance_ui_runbook(
+        descriptor_path,
+        host_bind_addr,
+        host_advertise_addr,
+        client_bind_addr,
+    );
+    build_two_instance_ui_runbook_markdown(&runbook)
 }
 
 fn run_host_descriptor_json_cli_action() -> Result<String, String> {
@@ -1293,6 +1447,21 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_online_cli_action([
+                "--online-two-instance-ui-runbook-md",
+                "/tmp/drillgame-ui-host.json",
+                "127.0.0.1:4242",
+                "127.0.0.1:4242",
+                "127.0.0.1:0"
+            ]),
+            Some(OnlineCliAction::TwoInstanceUiRunbookMarkdown {
+                descriptor_path: PathBuf::from("/tmp/drillgame-ui-host.json"),
+                host_bind_addr: "127.0.0.1:4242".parse().expect("host bind parses"),
+                host_advertise_addr: "127.0.0.1:4242".parse().expect("host advertise parses"),
+                client_bind_addr: "127.0.0.1:0".parse().expect("client bind parses"),
+            })
+        );
+        assert_eq!(
             parse_online_cli_action(["--online-host-descriptor-json"]),
             Some(OnlineCliAction::HostDescriptorJson)
         );
@@ -1446,6 +1615,85 @@ mod tests {
         assert!(checklist.contains("Record gameplay result: PASS / FAIL"));
         assert!(checklist.contains("host OS/firewall/NAT details"));
         assert!(checklist.contains("movement/drilling/terrain/cargo observation notes"));
+    }
+
+    #[test]
+    fn two_instance_ui_runbook_focuses_on_real_ui_host_join_play() {
+        let runbook = build_two_instance_ui_runbook(
+            PathBuf::from("/tmp/drillgame-ui-host.json"),
+            "127.0.0.1:4242".parse().expect("host bind parses"),
+            "127.0.0.1:4242".parse().expect("host advertise parses"),
+            "127.0.0.1:0".parse().expect("client bind parses"),
+        );
+
+        assert_eq!(
+            runbook.descriptor_path,
+            PathBuf::from("/tmp/drillgame-ui-host.json")
+        );
+        assert!(
+            runbook
+                .host_ui_steps
+                .iter()
+                .any(|step| step.contains("Choose Host direct-connect descriptor"))
+        );
+        assert!(
+            runbook
+                .client_ui_steps
+                .iter()
+                .any(|step| step.contains("Choose Join with descriptor file"))
+        );
+        assert!(runbook
+            .pass_criteria
+            .iter()
+            .any(|criterion| criterion.contains("Both instances enter gameplay through the UI")));
+        assert!(
+            runbook
+                .pass_criteria
+                .iter()
+                .any(|criterion| criterion.contains("Client input reaches the host"))
+        );
+        assert!(
+            runbook
+                .failure_capture
+                .iter()
+                .any(|step| step.contains("Active MVP working-game gate"))
+        );
+    }
+
+    #[test]
+    fn two_instance_ui_runbook_markdown_contains_steps_and_failure_capture() {
+        let runbook = build_two_instance_ui_runbook(
+            PathBuf::from("/tmp/drillgame-ui-host.json"),
+            "127.0.0.1:4242".parse().expect("host bind parses"),
+            "127.0.0.1:4242".parse().expect("host advertise parses"),
+            "127.0.0.1:0".parse().expect("client bind parses"),
+        );
+        let markdown = build_two_instance_ui_runbook_markdown(&runbook);
+
+        assert!(markdown.contains("Drillgame Two-Instance UI Multiplayer Runbook"));
+        assert!(markdown.contains("## Host UI steps"));
+        assert!(markdown.contains("## Client UI steps"));
+        assert!(markdown.contains("## Pass criteria"));
+        assert!(markdown.contains("## Failure capture"));
+        assert!(markdown.contains("/tmp/drillgame-ui-host.json"));
+        assert!(markdown.contains("Client input reaches the host"));
+        assert!(markdown.contains("Online status lines"));
+        assert!(markdown.contains("not a substitute for actually running the two windows"));
+    }
+
+    #[test]
+    fn online_cli_two_instance_runbook_action_emits_markdown() {
+        let markdown = run_online_cli_action(OnlineCliAction::TwoInstanceUiRunbookMarkdown {
+            descriptor_path: PathBuf::from("/tmp/drillgame-ui-host.json"),
+            host_bind_addr: "127.0.0.1:4242".parse().expect("host bind parses"),
+            host_advertise_addr: "127.0.0.1:4242".parse().expect("host advertise parses"),
+            client_bind_addr: "127.0.0.1:0".parse().expect("client bind parses"),
+        })
+        .expect("runbook markdown emits");
+
+        assert!(markdown.contains("Drillgame Two-Instance UI Multiplayer Runbook"));
+        assert!(markdown.contains("Both instances reach the online lobby"));
+        assert!(markdown.contains("failure"));
     }
 
     #[test]
