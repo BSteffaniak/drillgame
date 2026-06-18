@@ -362,17 +362,30 @@ pub fn build_lan_qa_checklist_markdown(plan: &LanQaCommandPlan) -> String {
          Evidence:\n\n\
          - [ ] Host printed descriptor readiness.\n\
          - [ ] Client completed command/snapshot/correction/reconnect exchange.\n\
-         - [ ] Host exited successfully after reconnect exchange.\n\n\
+         - [ ] Host exited successfully after reconnect exchange.\n\
+         - [ ] Record one-shot result: PASS / FAIL.\n\
+         - [ ] Paste host stdout/stderr path or screenshot: __________.\n\
+         - [ ] Paste client stdout/stderr path or screenshot: __________.\n\
+         - [ ] Note descriptor inspection output/version/certificate fingerprint: __________.\n\n\
          ## Multi-tick gameplay descriptor exchange\n\n\
          Host machine:\n\n```bash\n{}\n```\n\n\
          Client machine after host prints readiness:\n\n```bash\n{}\n```\n\n\
          Evidence:\n\n\
          - [ ] Host printed gameplay descriptor readiness.\n\
          - [ ] Client completed the requested gameplay tick exchange.\n\
-         - [ ] Host reported `ran {} ticks`.\n\n\
+         - [ ] Host reported `ran {} ticks`.\n\
+         - [ ] Record gameplay result: PASS / FAIL.\n\
+         - [ ] Record observed latency/jitter/desync symptoms: __________.\n\
+         - [ ] Record movement/drilling/terrain/cargo observation notes: __________.\n\
+         - [ ] Paste host gameplay log path or screenshot: __________.\n\
+         - [ ] Paste client gameplay log path or screenshot: __________.\n\n\
          ## Notes\n\n\
          - [ ] Host firewall allows the advertised UDP port.\n\
          - [ ] Both machines are on the intended LAN/VPN.\n\
+         - [ ] Record host OS/firewall/NAT details: __________.\n\
+         - [ ] Record client OS/firewall/NAT details: __________.\n\
+         - [ ] Record exact Drillgame commit/build identifier: __________.\n\
+         - [ ] File implementation issues for every FAIL before marking multiplayer complete.\n\
          - [ ] Attach stdout/stderr logs or screenshots to the release QA record.\n",
         plan.descriptor_path.display(),
         plan.host_bind_addr,
@@ -1419,6 +1432,10 @@ mod tests {
         assert!(checklist.contains("Drillgame LAN Multiplayer QA Checklist"));
         assert!(checklist.contains("--online-host-gameplay-descriptor-file-on-addr"));
         assert!(checklist.contains("--online-join-gameplay-descriptor-file-on-addr"));
+        assert!(checklist.contains("Record one-shot result: PASS / FAIL"));
+        assert!(checklist.contains("Record gameplay result: PASS / FAIL"));
+        assert!(checklist.contains("host OS/firewall/NAT details"));
+        assert!(checklist.contains("movement/drilling/terrain/cargo observation notes"));
     }
 
     #[test]
