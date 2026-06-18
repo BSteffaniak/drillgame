@@ -3154,6 +3154,7 @@ impl GameState {
             },
             if self.request_exit { "yes" } else { "no" }
         ));
+        lines.push(self.online_start_readiness_line());
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
@@ -3170,6 +3171,35 @@ impl GameState {
         } else {
             "Choose Host to own the session/save or Join to connect with a descriptor from the host."
         }
+    }
+
+    #[must_use]
+    pub fn online_start_readiness_line(&self) -> String {
+        let start_state = if self.online_session_state != OnlineSessionUxState::Connected {
+            "blocked: connect host and client"
+        } else if !self.online_remote_player_connected {
+            "blocked: waiting for remote connection"
+        } else if !self.online_local_ready {
+            "blocked: local player not ready"
+        } else if !self.online_remote_player_ready {
+            "blocked: remote player not ready"
+        } else {
+            "ready: both players can start gameplay"
+        };
+        format!(
+            "Start readiness: {start_state} | local_ready={} remote_ready={} remote_connected={}",
+            if self.online_local_ready { "yes" } else { "no" },
+            if self.online_remote_player_ready {
+                "yes"
+            } else {
+                "no"
+            },
+            if self.online_remote_player_connected {
+                "yes"
+            } else {
+                "no"
+            }
+        )
     }
 
     #[must_use]
@@ -8117,6 +8147,34 @@ mod tests {
         }));
         assert_ne!(game.online_gameplay_ticks, initial_ticks);
         assert!(game.message.contains("Gameplay smoke tick count selected"));
+    }
+
+    #[test]
+    fn online_start_readiness_line_reports_blockers_and_ready_state() {
+        let mut game = GameState::new();
+        assert!(
+            game.online_start_readiness_line()
+                .contains("blocked: connect host and client")
+        );
+
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_remote_player_connected = true;
+        assert!(
+            game.online_start_readiness_line()
+                .contains("blocked: local player not ready")
+        );
+
+        game.online_local_ready = true;
+        assert!(
+            game.online_start_readiness_line()
+                .contains("blocked: remote player not ready")
+        );
+
+        game.online_remote_player_ready = true;
+        assert!(
+            game.online_start_readiness_line()
+                .contains("ready: both players can start gameplay")
+        );
     }
 
     #[test]
