@@ -262,6 +262,72 @@ impl CosmeticRigSkin {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "sync checklist status reports independent snapshot/delta/terrain/cargo coverage"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSyncLoopStatus {
+    pub snapshot_applied: bool,
+    pub player_delta_applied: bool,
+    pub terrain_applied: bool,
+    pub cargo_applied: bool,
+    pub status: String,
+}
+
+impl OnlineSyncLoopStatus {
+    #[must_use]
+    pub fn snapshot(player_count: usize, cargo_applied: bool) -> Self {
+        Self {
+            snapshot_applied: true,
+            player_delta_applied: false,
+            terrain_applied: false,
+            cargo_applied,
+            status: format!(
+                "snapshot applied: players={player_count} cargo={} survival/economy=yes",
+                if cargo_applied { "yes" } else { "no" }
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn player_delta(player_count: usize, visible_count: usize) -> Self {
+        Self {
+            snapshot_applied: false,
+            player_delta_applied: visible_count > 0,
+            terrain_applied: false,
+            cargo_applied: false,
+            status: format!(
+                "player delta applied: ids={player_count} visible_remote_updates={visible_count}"
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn terrain(tile_count: usize, visible_tiles: usize) -> Self {
+        Self {
+            snapshot_applied: false,
+            player_delta_applied: false,
+            terrain_applied: visible_tiles > 0,
+            cargo_applied: false,
+            status: format!(
+                "terrain chunk applied: network_tiles={tile_count} visible_tiles={visible_tiles}"
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn keyframe_required() -> Self {
+        Self {
+            snapshot_applied: false,
+            player_delta_applied: false,
+            terrain_applied: false,
+            cargo_applied: false,
+            status: "delta requested keyframe: waiting for host snapshot".to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlinePeerLobbyPresentation {
     pub name: String,
@@ -1431,9 +1497,19 @@ impl RealOnlineSessionController {
                                 )
                             }
                             crate::multiplayer::NetworkDeltaPayload::Players { players } => {
-                                format!("tick {tick_value}: {} player delta(s)", players.len())
+                                let visible_updates =
+                                    apply_network_player_delta_to_remote_presentations(
+                                        game, players,
+                                    );
+                                format!(
+                                    "tick {tick_value}: {} player delta(s), {visible_updates} visible remote update(s)",
+                                    players.len()
+                                )
                             }
                             crate::multiplayer::NetworkDeltaPayload::KeyframeRequired => {
+                                game.apply_online_sync_loop_status(
+                                    OnlineSyncLoopStatus::keyframe_required(),
+                                );
                                 format!("tick {tick_value}: keyframe required")
                             }
                         };
@@ -1996,7 +2072,7 @@ fn apply_network_terrain_chunk_to_game(
     chunk_y: i32,
     revision: u64,
     tiles: &[crate::multiplayer::NetworkTerrainTile],
-) {
+) -> usize {
     let mut changed_tiles = Vec::new();
     for tile in tiles {
         let position = TilePosition {
@@ -2020,12 +2096,19 @@ fn apply_network_terrain_chunk_to_game(
         game.apply_online_terrain_status(format!(
             "received chunk ({chunk_x},{chunk_y}) rev {revision} with no visible tile changes"
         ));
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::terrain(tiles.len(), 0));
+        0
     } else {
+        let visible_tiles = changed_tiles.len();
         game.visual_changes.changed_tiles.extend(changed_tiles);
         game.apply_online_terrain_status(format!(
-            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {} visible tiles",
-            tiles.len()
+            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {visible_tiles} visible tiles"
         ));
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::terrain(
+            tiles.len(),
+            visible_tiles,
+        ));
+        visible_tiles
     }
 }
 
@@ -2056,6 +2139,42 @@ fn apply_network_snapshot_remote_players(
         })
         .collect();
     game.online_remote_player_connected = !game.online_remote_player_snapshots.is_empty();
+    let cargo_applied = snapshot.players.iter().any(|player| {
+        player.cargo_used > 0
+            || !player.cargo.is_empty()
+            || !player.artifacts.is_empty()
+            || !player.materials.is_empty()
+    });
+    game.apply_online_sync_loop_status(OnlineSyncLoopStatus::snapshot(
+        snapshot.players.len(),
+        cargo_applied,
+    ));
+}
+
+fn apply_network_player_delta_to_remote_presentations(
+    game: &mut GameState,
+    players: &[crate::multiplayer::PlayerId],
+) -> usize {
+    let mut visible_updates = 0;
+    for player_id in players {
+        if let Some(remote) = game
+            .online_remote_player_snapshots
+            .iter_mut()
+            .find(|remote| remote.player_id == *player_id)
+        {
+            remote.x += remote.velocity_x;
+            remote.y += remote.velocity_y;
+            visible_updates += 1;
+        }
+    }
+    if !players.is_empty() {
+        game.online_remote_player_connected = true;
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::player_delta(
+            players.len(),
+            visible_updates,
+        ));
+    }
+    visible_updates
 }
 
 fn apply_network_player_snapshot_to_game(
@@ -2842,6 +2961,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_correction_status: String,
     #[serde(default)]
+    pub online_last_sync_loop_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3093,6 +3214,7 @@ impl GameState {
             online_last_terrain_status: String::new(),
             online_last_authority_status: String::new(),
             online_last_correction_status: String::new(),
+            online_last_sync_loop_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -3601,6 +3723,10 @@ impl GameState {
         self.online_last_correction_status = presentation.status_line();
     }
 
+    pub fn apply_online_sync_loop_status(&mut self, status: OnlineSyncLoopStatus) {
+        self.online_last_sync_loop_status = status.status;
+    }
+
     pub fn clear_online_diagnostics(&mut self) {
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
@@ -3609,6 +3735,7 @@ impl GameState {
         self.online_last_terrain_status.clear();
         self.online_last_authority_status.clear();
         self.online_last_correction_status.clear();
+        self.online_last_sync_loop_status.clear();
     }
 
     #[must_use]
@@ -3792,6 +3919,14 @@ impl GameState {
                 "none"
             } else {
                 self.online_last_replicated_player_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online sync loop: {}",
+            if self.online_last_sync_loop_status.is_empty() {
+                "none yet; snapshot, delta, terrain, and cargo updates report here"
+            } else {
+                self.online_last_sync_loop_status.as_str()
             }
         ));
         lines.push(format!(
@@ -8651,6 +8786,7 @@ fn input_changes_game(input: PlayerInput) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
@@ -10109,6 +10245,148 @@ mod tests {
         assert!(game.save_dirty);
         assert_eq!(game.online_network_task_request, None);
         assert_eq!(game.modal, None);
+    }
+
+    #[test]
+    fn online_sync_loop_status_reports_snapshot_delta_terrain_and_keyframe_paths() {
+        let snapshot_status = OnlineSyncLoopStatus::snapshot(2, true);
+        assert!(snapshot_status.snapshot_applied);
+        assert!(snapshot_status.cargo_applied);
+        assert!(snapshot_status.status.contains("snapshot applied"));
+        assert!(snapshot_status.status.contains("cargo=yes"));
+
+        let delta_status = OnlineSyncLoopStatus::player_delta(1, 1);
+        assert!(delta_status.player_delta_applied);
+        assert!(delta_status.status.contains("visible_remote_updates=1"));
+
+        let terrain_status = OnlineSyncLoopStatus::terrain(4, 3);
+        assert!(terrain_status.terrain_applied);
+        assert!(terrain_status.status.contains("visible_tiles=3"));
+
+        let keyframe_status = OnlineSyncLoopStatus::keyframe_required();
+        assert!(!keyframe_status.snapshot_applied);
+        assert!(keyframe_status.status.contains("waiting for host snapshot"));
+    }
+
+    #[test]
+    fn snapshot_application_updates_sync_loop_for_visible_gameplay_and_cargo() {
+        let mut game = GameState::new();
+        game.online_player_slot = Some(2);
+        let mut cargo = BTreeMap::new();
+        cargo.insert(MineralKind::Iron, 3);
+        let snapshot = crate::multiplayer::NetworkWorldSnapshot {
+            tick: crate::multiplayer::SimulationTick::new(44),
+            players: vec![crate::multiplayer::NetworkPlayerSnapshot {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                x: 12.0,
+                y: 34.0,
+                velocity_x: 1.5,
+                velocity_y: -0.5,
+                fuel: 90.0,
+                hull: 80.0,
+                credits: 77,
+                cargo_used: 3,
+                cargo,
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+                scanner_cooldown_seconds: 0.25,
+            }],
+        };
+
+        apply_network_snapshot_remote_players(&mut game, &snapshot);
+
+        assert!(game.online_remote_player_connected);
+        assert_eq!(game.online_remote_player_snapshots.len(), 1);
+        assert_eq!(game.online_remote_player_snapshots[0].cargo_used, 3);
+        assert!(
+            game.online_last_sync_loop_status
+                .contains("snapshot applied")
+        );
+        assert!(game.online_last_sync_loop_status.contains("cargo=yes"));
+    }
+
+    #[test]
+    fn player_delta_updates_visible_remote_presentation_instead_of_only_diagnostics() {
+        let mut game = GameState::new();
+        game.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                x: 10.0,
+                y: 20.0,
+                velocity_x: 2.0,
+                velocity_y: -1.0,
+                fuel: 50.0,
+                hull: 60.0,
+                credits: 70,
+                cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+
+        let updated = apply_network_player_delta_to_remote_presentations(
+            &mut game,
+            &[crate::multiplayer::PlayerId::new(1)],
+        );
+
+        assert_eq!(updated, 1);
+        assert!((game.online_remote_player_snapshots[0].x - 12.0).abs() < f32::EPSILON);
+        assert!((game.online_remote_player_snapshots[0].y - 19.0).abs() < f32::EPSILON);
+        assert!(game.online_remote_player_connected);
+        assert!(
+            game.online_last_sync_loop_status
+                .contains("player delta applied")
+        );
+        assert!(
+            game.online_last_sync_loop_status
+                .contains("visible_remote_updates=1")
+        );
+    }
+
+    #[test]
+    fn terrain_chunk_application_reports_visible_sync_loop_status() {
+        let mut game = GameState::new();
+        let position = TilePosition { x: 3, y: 4 };
+        let before = game.terrain.tile(position).expect("tile exists");
+        let new_kind = if before.kind == TileKind::Dirt {
+            TileKind::Stone
+        } else {
+            TileKind::Dirt
+        };
+        let changed = apply_network_terrain_chunk_to_game(
+            &mut game,
+            0,
+            0,
+            9,
+            &[crate::multiplayer::NetworkTerrainTile {
+                x: position.x,
+                y: position.y,
+                kind: new_kind,
+                durability: before.durability,
+            }],
+        );
+
+        assert_eq!(changed, 1);
+        assert!(game.online_last_terrain_status.contains("visible tiles"));
+        assert!(
+            game.online_last_sync_loop_status
+                .contains("terrain chunk applied")
+        );
+        assert!(
+            game.online_last_sync_loop_status
+                .contains("visible_tiles=1")
+        );
+    }
+
+    #[test]
+    fn online_status_lines_include_sync_loop_status_for_snapshot_delta_terrain_cargo() {
+        let mut game = GameState::new();
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::snapshot(2, true));
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(|line| line.contains("Online sync loop")
+            && line.contains("snapshot applied")
+            && line.contains("cargo=yes")));
     }
 
     #[test]
