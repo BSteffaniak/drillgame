@@ -3421,6 +3421,20 @@ impl GameState {
         );
     }
 
+    fn adjust_online_multiplayer_selection(&mut self) {
+        match self.selected_menu_item {
+            3 => self.cycle_online_descriptor_path(),
+            5 => self.cycle_online_host_address_preset(),
+            6 => self.cycle_online_gameplay_ticks(),
+            _ => {
+                "Select descriptor path, host address, or gameplay ticks to adjust with left/right."
+                    .clone_into(&mut self.online_session_status_message);
+            }
+        }
+        self.message = self.online_session_status_message.clone();
+        self.sound_cues.push(SoundCue::Ui);
+    }
+
     fn confirm_online_multiplayer(&mut self) {
         match self.selected_menu_item {
             0 => {
@@ -4330,6 +4344,11 @@ impl GameState {
                 self.selected_menu_item =
                     (self.selected_menu_item + 1).min(upgrade_offers(&self.player).len() - 1);
             }
+        }
+
+        if matches!(modal, ModalScreen::OnlineMultiplayer) && (input.menu_left || input.menu_right)
+        {
+            self.adjust_online_multiplayer_selection();
         }
 
         if let Some(index) = input.selected_upgrade {
@@ -8065,6 +8084,39 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Host owns save: false"))
         );
+    }
+
+    #[test]
+    fn online_modal_left_right_adjusts_selected_connection_configuration() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+
+        let initial_descriptor = game.online_descriptor_path.clone();
+        game.selected_menu_item = 3;
+        assert!(game.handle_modal(PlayerInput {
+            menu_right: true,
+            ..PlayerInput::default()
+        }));
+        assert_ne!(game.online_descriptor_path, initial_descriptor);
+        assert!(game.message.contains("Descriptor path selected"));
+
+        let initial_host_bind = game.online_host_bind_addr;
+        game.selected_menu_item = 5;
+        assert!(game.handle_modal(PlayerInput {
+            menu_right: true,
+            ..PlayerInput::default()
+        }));
+        assert_ne!(game.online_host_bind_addr, initial_host_bind);
+        assert!(game.message.contains("Host address preset selected"));
+
+        let initial_ticks = game.online_gameplay_ticks;
+        game.selected_menu_item = 6;
+        assert!(game.handle_modal(PlayerInput {
+            menu_left: true,
+            ..PlayerInput::default()
+        }));
+        assert_ne!(game.online_gameplay_ticks, initial_ticks);
+        assert!(game.message.contains("Gameplay smoke tick count selected"));
     }
 
     #[test]

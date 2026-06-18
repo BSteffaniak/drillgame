@@ -790,10 +790,10 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Host descriptor session",
         "Join descriptor session",
         "Reconnect",
-        "Cycle descriptor path",
+        "Cycle descriptor path (Left/Right)",
         "Inspect descriptor file",
-        "Cycle host address preset",
-        "Cycle gameplay tick count",
+        "Cycle host address preset (Left/Right)",
+        "Cycle gameplay tick count (Left/Right)",
         "Simulate timeout",
         "Show error",
         "Shutdown session",
@@ -839,7 +839,7 @@ fn draw_options_list(
     options: &[String],
 ) {
     draw.draw_text(
-        "Up/Down choose | Enter/E confirm | Backspace/Esc close",
+        "Up/Down choose | Left/Right adjust selected config | Enter/E confirm | Backspace/Esc close",
         x,
         y - 35,
         18,
