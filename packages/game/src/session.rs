@@ -4242,7 +4242,9 @@ impl GameSession {
         let tolerance_nanos = fixed_nanos / 1_000;
         let steps = (self.simulation_accumulator.as_nanos() + tolerance_nanos) / fixed_nanos;
         let capped_steps = u32::try_from(steps).unwrap_or(u32::MAX);
-        self.simulation_accumulator -= fixed_delta.saturating_mul(capped_steps);
+        self.simulation_accumulator = self
+            .simulation_accumulator
+            .saturating_sub(fixed_delta.saturating_mul(capped_steps));
         capped_steps
     }
 
