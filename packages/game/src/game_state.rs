@@ -262,6 +262,74 @@ impl CosmeticRigSkin {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineOwnershipStatus {
+    pub identity: String,
+    pub slot: Option<u8>,
+    pub role_label: &'static str,
+    pub save_authority: OnlineSaveAuthority,
+    pub host_owns_save: bool,
+    pub reconnect_allowed: bool,
+    pub player_message: String,
+}
+
+impl OnlineOwnershipStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let save_authority = if game.online_host_owns_save {
+            OnlineSaveAuthority::LocalPlayer
+        } else {
+            OnlineSaveAuthority::RemoteHost
+        };
+        let reconnect_allowed = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+                | OnlineSessionUxState::Shutdown
+        );
+        let player_message = if game.online_host_owns_save {
+            "You are the host/save owner; local save/load remains allowed when policy permits."
+                .to_owned()
+        } else {
+            "You are a joined client; host owns the authoritative save, so local writes stay blocked."
+                .to_owned()
+        };
+        Self {
+            identity: game.online_player_name.clone(),
+            slot: game.online_player_slot,
+            role_label: game.online_role_label(),
+            save_authority,
+            host_owns_save: game.online_host_owns_save,
+            reconnect_allowed,
+            player_message,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Reconnect ownership / Online ownership: identity={} slot={} role={} save_authority={:?} save_owner={} host_owns_save={} reconnect_context={} | {}",
+            self.identity,
+            self.slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            self.role_label,
+            self.save_authority,
+            if self.host_owns_save {
+                "local-host"
+            } else {
+                "remote-host"
+            },
+            if self.host_owns_save { "yes" } else { "no" },
+            if self.reconnect_allowed {
+                "preserved"
+            } else {
+                "pending"
+            },
+            self.player_message
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineFailureCategory {
     VersionMismatch,
@@ -2460,7 +2528,7 @@ impl RealOnlineSessionUxSnapshot {
     pub fn from_reconnect(player_slot: Option<u8>) -> Self {
         Self {
             state: OnlineSessionUxState::Connected,
-            host_owns_save: true,
+            host_owns_save: player_slot != Some(2),
             player_slot,
             status_message: "Reconnected through real localhost Quinn session.".to_owned(),
         }
@@ -3155,6 +3223,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_failure_status: String,
     #[serde(default)]
+    pub online_last_ownership_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3409,6 +3479,7 @@ impl GameState {
             online_last_sync_loop_status: String::new(),
             online_last_session_boundary_status: String::new(),
             online_last_failure_status: String::new(),
+            online_last_ownership_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -3831,6 +3902,7 @@ impl GameState {
                 OnlineTaskResultTransitionKind::Shutdown
             }
         };
+        self.refresh_online_ownership_status();
         OnlineTaskResultTransition::from_game(
             transition_kind,
             self,
@@ -3852,6 +3924,7 @@ impl GameState {
         }
         self.online_session_status_message = snapshot.status_message;
         self.message = self.online_session_status_message.clone();
+        self.refresh_online_ownership_status();
     }
 
     pub fn apply_online_remote_identity(
@@ -3923,6 +3996,7 @@ impl GameState {
         self.online_session_status_message
             .clone_from(&status.player_message);
         self.message.clone_from(&self.online_session_status_message);
+        self.refresh_online_ownership_status();
     }
 
     pub fn apply_online_failure_status(&mut self, status: &OnlineFailureStatus) {
@@ -3930,6 +4004,11 @@ impl GameState {
         self.online_session_status_message
             .clone_from(&status.player_message);
         self.message.clone_from(&self.online_session_status_message);
+        self.refresh_online_ownership_status();
+    }
+
+    pub fn refresh_online_ownership_status(&mut self) {
+        self.online_last_ownership_status = OnlineOwnershipStatus::from_game(self).status_line();
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -4041,18 +4120,11 @@ impl GameState {
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
-        lines.push(format!(
-            "Reconnect ownership: identity={} slot={} authority={} save_owner={}",
-            self.online_player_name,
-            self.online_player_slot
-                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
-            self.online_role_label(),
-            if self.online_host_owns_save {
-                "local-host"
-            } else {
-                "remote-host"
-            }
-        ));
+        lines.push(if self.online_last_ownership_status.is_empty() {
+            OnlineOwnershipStatus::from_game(self).status_line()
+        } else {
+            self.online_last_ownership_status.clone()
+        });
         lines.push(format!(
             "Role guidance: {}",
             self.online_role_guidance_line()
@@ -10399,6 +10471,102 @@ mod tests {
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
         );
+    }
+
+    #[test]
+    fn online_ownership_status_explains_host_and_joined_client_save_authority() {
+        let mut host = GameState::new();
+        host.online_player_name = "Host Ada".to_owned();
+        host.online_player_slot = Some(1);
+        host.online_host_owns_save = true;
+        host.online_session_state = OnlineSessionUxState::Connected;
+        let host_status = OnlineOwnershipStatus::from_game(&host);
+        assert_eq!(host_status.identity, "Host Ada");
+        assert_eq!(host_status.slot, Some(1));
+        assert_eq!(host_status.role_label, "host");
+        assert_eq!(host_status.save_authority, OnlineSaveAuthority::LocalPlayer);
+        assert!(host_status.reconnect_allowed);
+        assert!(host_status.status_line().contains("host/save owner"));
+
+        let mut client = GameState::new();
+        client.online_player_name = "Client Bert".to_owned();
+        client.online_player_slot = Some(2);
+        client.online_host_owns_save = false;
+        client.online_session_state = OnlineSessionUxState::Connected;
+        let client_status = OnlineOwnershipStatus::from_game(&client);
+        assert_eq!(client_status.identity, "Client Bert");
+        assert_eq!(client_status.slot, Some(2));
+        assert_eq!(client_status.role_label, "client");
+        assert_eq!(
+            client_status.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
+        assert!(client_status.reconnect_allowed);
+        assert!(
+            client_status
+                .status_line()
+                .contains("host owns the authoritative save")
+        );
+        assert!(
+            client_status
+                .status_line()
+                .contains("local writes stay blocked")
+        );
+    }
+
+    #[test]
+    fn ownership_status_refreshes_through_join_reconnect_failure_and_shutdown_reducers() {
+        let mut game = GameState::new();
+        game.online_player_name = "Joined Miner".to_owned();
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::JoinedDescriptor(
+            RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
+                Some(2),
+                &default_online_descriptor_path(),
+            ),
+        ));
+        assert!(game.online_last_ownership_status.contains("Joined Miner"));
+        assert!(game.online_last_ownership_status.contains("slot=2"));
+        assert!(game.online_last_ownership_status.contains("role=client"));
+        assert!(
+            game.online_last_ownership_status
+                .contains("save_authority=RemoteHost")
+        );
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Reconnected(
+            RealOnlineSessionUxSnapshot::from_reconnect(Some(2)),
+        ));
+        assert!(
+            game.online_last_ownership_status
+                .contains("reconnect_context=preserved")
+        );
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Failed(
+            "session token reconnect failed".to_owned(),
+        ));
+        assert!(game.online_last_failure_status.contains("Reconnect"));
+        assert!(game.online_last_ownership_status.contains("Joined Miner"));
+        assert!(game.online_last_ownership_status.contains("RemoteHost"));
+
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        assert!(
+            game.online_last_session_boundary_status
+                .contains("ShutdownAcknowledged")
+        );
+        assert!(game.online_last_ownership_status.contains("Joined Miner"));
+    }
+
+    #[test]
+    fn online_status_lines_use_structured_ownership_status() {
+        let mut game = GameState::new();
+        game.online_player_name = "Status Miner".to_owned();
+        game.online_player_slot = Some(1);
+        game.online_host_owns_save = true;
+        game.refresh_online_ownership_status();
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(lines.iter().any(|line| line.contains("Online ownership")
+            && line.contains("Status Miner")
+            && line.contains("save_authority=LocalPlayer")));
     }
 
     #[test]
