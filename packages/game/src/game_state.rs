@@ -4605,6 +4605,29 @@ impl GameState {
         dead_code,
         reason = "online task request drain is exercised by tests until desktop event-loop ownership calls it"
     )]
+    pub fn request_online_shutdown_from_gameplay_exit(&mut self) -> bool {
+        if !matches!(
+            self.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+        ) {
+            return false;
+        }
+        if self.online_network_task_request == Some(OnlineNetworkTaskRequest::Shutdown) {
+            return false;
+        }
+        self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
+        self.online_local_ready = false;
+        self.online_remote_player_ready = false;
+        self.online_remote_player_connected = false;
+        self.apply_online_session_boundary_status(
+            &OnlineSessionBoundaryStatus::local_shutdown_requested(),
+        );
+        true
+    }
+
     pub fn take_online_network_task_request(&mut self) -> Option<OnlineNetworkTaskRequest> {
         mem::take(&mut self.online_network_task_request)
     }
@@ -5375,14 +5398,8 @@ impl GameState {
                 | OnlineSessionUxState::Connected
                 | OnlineSessionUxState::Reconnecting
         ) {
-            self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
-            self.online_local_ready = false;
-            self.online_remote_player_ready = false;
-            self.online_remote_player_connected = false;
+            let _requested = self.request_online_shutdown_from_gameplay_exit();
             self.modal = None;
-            self.apply_online_session_boundary_status(
-                &OnlineSessionBoundaryStatus::local_shutdown_requested(),
-            );
             return;
         }
 
@@ -12385,6 +12402,30 @@ mod tests {
                 .any(|line| line.contains("Online session boundary")
                     && line.contains("ShutdownAcknowledged"))
         );
+    }
+
+    #[test]
+    fn gameplay_exit_requests_online_transport_shutdown_once() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+
+        assert!(game.request_online_shutdown_from_gameplay_exit());
+
+        assert_eq!(
+            game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::Shutdown)
+        );
+        assert!(!game.online_local_ready);
+        assert!(!game.online_remote_player_ready);
+        assert!(!game.online_remote_player_connected);
+        assert!(
+            game.online_last_session_boundary_status
+                .contains("LocalShutdownRequested")
+        );
+        assert!(!game.request_online_shutdown_from_gameplay_exit());
     }
 
     #[test]

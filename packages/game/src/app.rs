@@ -307,6 +307,20 @@ impl OnlineTaskDispatcher {
         }
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "pixel coordinates are intentionally mapped onto bounded terrain tile/chunk indices for network chunk requests"
+    )]
+    fn player_network_chunk(game: &GameState) -> (i32, i32) {
+        const NETWORK_TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+        let tile_x = (game.player.x / crate::game_state::TILE_SIZE).floor() as i32;
+        let tile_y = (game.player.y / crate::game_state::TILE_SIZE).floor() as i32;
+        (
+            tile_x.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
+            tile_y.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
+        )
+    }
+
     fn live_session_tick_input(
         &mut self,
         session: &GameSession,
@@ -325,7 +339,7 @@ impl OnlineTaskDispatcher {
         let tick = session.current_tick().get().saturating_add(1);
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
-        let chunk_coord = i32::try_from(tick).unwrap_or(i32::MAX);
+        let chunk_coord = Self::player_network_chunk(session.game());
         let snapshot = session.world_snapshot().network_snapshot();
         let correction_probe = snapshot.players.first().map(|player| {
             (
@@ -344,6 +358,17 @@ impl OnlineTaskDispatcher {
         } else {
             local_player_commands
         };
+        let delta_payload = if snapshot.players.is_empty() {
+            crate::multiplayer::NetworkDeltaPayload::Noop
+        } else {
+            crate::multiplayer::NetworkDeltaPayload::Players {
+                players: snapshot
+                    .players
+                    .iter()
+                    .map(|player| player.player_id)
+                    .collect(),
+            }
+        };
         crate::multiplayer::QuinnSessionTickInput {
             command_packet: Some(crate::multiplayer::CommandPacket {
                 client_id,
@@ -360,9 +385,9 @@ impl OnlineTaskDispatcher {
             snapshot: Some(snapshot),
             delta: Some((
                 crate::multiplayer::SimulationTick::new(tick.saturating_add(1)),
-                crate::multiplayer::NetworkDeltaPayload::Noop,
+                delta_payload,
             )),
-            terrain_chunk_request: Some((chunk_coord, chunk_coord, 1, 2)),
+            terrain_chunk_request: Some((chunk_coord.0, chunk_coord.1, 0, 0)),
             correction_probe,
         }
     }
@@ -613,6 +638,15 @@ pub fn run() {
             crate::multiplayer::LOCAL_CLIENT_ID,
             &mapped_input.client_actions,
         );
+        if mapped_input
+            .client_actions
+            .contains(&crate::multiplayer::ClientAction::ExitRequested)
+            && session
+                .game_mut()
+                .request_online_shutdown_from_gameplay_exit()
+        {
+            online_tasks.drain_and_execute(session.game_mut());
+        }
         let secondary_input = (session.client_count() > 1).then(|| {
             let keyboard = read_secondary_keyboard_input(&raylib);
             read_gamepad_input(&raylib, 0)
@@ -1079,6 +1113,10 @@ mod tests {
         assert_eq!(packet.commands[1].command, PlayerCommand::UseScanner);
         assert_eq!(packet.commands[0].sequence, packet.commands[1].sequence);
         assert!(input.snapshot.is_some());
+        assert!(matches!(
+            input.delta,
+            Some((_, crate::multiplayer::NetworkDeltaPayload::Players { .. }))
+        ));
         assert!(input.terrain_chunk_request.is_some());
     }
 
@@ -1135,6 +1173,18 @@ mod tests {
             .find(|player| player.player_id == crate::multiplayer::PlayerId::new(2))
             .expect("remote player exists");
         assert!(remote_player.velocity_x > 0.0 || remote_player.x > session.game().player.x);
+    }
+
+    #[test]
+    fn live_session_tick_input_requests_chunk_containing_visible_player() {
+        let mut session = GameSession::new();
+        session.game_mut().player.x = crate::game_state::TILE_SIZE * 33.0;
+        session.game_mut().player.y = crate::game_state::TILE_SIZE * 18.0;
+        let mut dispatcher = OnlineTaskDispatcher::new();
+
+        let input = dispatcher.live_session_tick_input(&session, Vec::new());
+
+        assert_eq!(input.terrain_chunk_request, Some((2, 1, 0, 0)));
     }
 
     #[test]
@@ -1322,6 +1372,8 @@ mod tests {
 
         let mut join_session = GameSession::new();
         join_session.game_mut().online_player_name = "Client QA".to_owned();
+        join_session.game_mut().player.x = crate::game_state::TILE_SIZE * 18.0;
+        join_session.game_mut().player.y = crate::game_state::TILE_SIZE * 19.0;
         join_session.game_mut().online_local_ready = true;
         join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS, Vec::new());
         assert!(
