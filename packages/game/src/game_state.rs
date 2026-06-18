@@ -262,6 +262,99 @@ impl CosmeticRigSkin {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineSessionBoundaryCause {
+    HostEndedSession,
+    ClientLeftSession,
+    TransportClosed,
+    LocalShutdownRequested,
+    ShutdownAcknowledged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSessionBoundaryStatus {
+    pub cause: OnlineSessionBoundaryCause,
+    pub remote_connected: bool,
+    pub local_session_active: bool,
+    pub player_message: String,
+}
+
+impl OnlineSessionBoundaryStatus {
+    #[must_use]
+    pub fn host_ended(reason: &str) -> Self {
+        Self {
+            cause: OnlineSessionBoundaryCause::HostEndedSession,
+            remote_connected: false,
+            local_session_active: false,
+            player_message: format!(
+                "Online session ended by host: {reason}. Return to the online menu to reconnect or start a new session."
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn client_left(reason: &str) -> Self {
+        Self {
+            cause: OnlineSessionBoundaryCause::ClientLeftSession,
+            remote_connected: false,
+            local_session_active: true,
+            player_message: format!(
+                "Joined client left the online session: {reason}. Host save/session remains local and safe."
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn transport_closed(error: &str) -> Self {
+        Self {
+            cause: OnlineSessionBoundaryCause::TransportClosed,
+            remote_connected: false,
+            local_session_active: false,
+            player_message: format!(
+                "Online session ended by host or transport closed unexpectedly: {error}. The session is stopped; local save policy remains unchanged."
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn local_shutdown_requested() -> Self {
+        Self {
+            cause: OnlineSessionBoundaryCause::LocalShutdownRequested,
+            remote_connected: false,
+            local_session_active: false,
+            player_message: "Online session shutdown requested; notifying peer when connected."
+                .to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn shutdown_acknowledged() -> Self {
+        Self {
+            cause: OnlineSessionBoundaryCause::ShutdownAcknowledged,
+            remote_connected: false,
+            local_session_active: false,
+            player_message:
+                "Online session shutdown acknowledged; local save/session state preserved."
+                    .to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Online session boundary: cause={:?} remote_connected={} local_session_active={} | {}",
+            self.cause,
+            if self.remote_connected { "yes" } else { "no" },
+            if self.local_session_active {
+                "yes"
+            } else {
+                "no"
+            },
+            self.player_message
+        )
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "sync checklist status reports independent snapshot/delta/terrain/cargo coverage"
@@ -1182,9 +1275,9 @@ impl RealOnlineSessionController {
                     received_any = true;
                 }
                 crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
-                    game.apply_online_remote_disconnected(&format!(
-                        "Joined client left the online session: {reason}"
-                    ));
+                    game.apply_online_session_boundary_status(
+                        &OnlineSessionBoundaryStatus::client_left(&reason),
+                    );
                     received_any = true;
                 }
                 other => {
@@ -1415,9 +1508,9 @@ impl RealOnlineSessionController {
                             );
                         }
                         crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
-                            game.apply_online_remote_disconnected(&format!(
-                                "Online session ended by host: {reason}"
-                            ));
+                            game.apply_online_session_boundary_status(
+                                &OnlineSessionBoundaryStatus::host_ended(&reason),
+                            );
                             game.online_session_state = OnlineSessionUxState::Shutdown;
                             game.modal = None;
                         }
@@ -1426,15 +1519,13 @@ impl RealOnlineSessionController {
                     received_count += 1;
                 }
                 Ok(Err(error)) => {
-                    game.online_remote_player_connected = false;
-                    game.online_remote_player_ready = false;
-                    game.online_remote_player_snapshots.clear();
+                    game.apply_online_session_boundary_status(
+                        &OnlineSessionBoundaryStatus::transport_closed(&format!(
+                            "reliable channel closed ({error:?})"
+                        )),
+                    );
                     game.online_session_state = OnlineSessionUxState::Shutdown;
                     game.modal = None;
-                    game.online_session_status_message = format!(
-                        "Online session ended by host: reliable channel closed ({error:?})"
-                    );
-                    game.message.clone_from(&game.online_session_status_message);
                     return Ok(received_count);
                 }
                 Err(_) => break,
@@ -2963,6 +3054,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_sync_loop_status: String,
     #[serde(default)]
+    pub online_last_session_boundary_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3215,6 +3308,7 @@ impl GameState {
             online_last_authority_status: String::new(),
             online_last_correction_status: String::new(),
             online_last_sync_loop_status: String::new(),
+            online_last_session_boundary_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -3631,9 +3725,9 @@ impl GameState {
                 self.online_remote_player_connected = false;
                 self.modal = None;
                 self.clear_online_diagnostics();
-                "Online session shutdown acknowledged."
-                    .clone_into(&mut self.online_session_status_message);
-                self.message = self.online_session_status_message.clone();
+                self.apply_online_session_boundary_status(
+                    &OnlineSessionBoundaryStatus::shutdown_acknowledged(),
+                );
                 OnlineTaskResultTransitionKind::Shutdown
             }
         };
@@ -3685,14 +3779,6 @@ impl GameState {
         );
     }
 
-    pub fn apply_online_remote_disconnected(&mut self, reason: &str) {
-        self.online_remote_player_connected = false;
-        self.online_remote_player_ready = false;
-        self.online_remote_player_snapshots.clear();
-        reason.clone_into(&mut self.online_session_status_message);
-        self.message.clone_from(&self.online_session_status_message);
-    }
-
     pub fn apply_online_diagnostics(
         &mut self,
         controller_mode: impl Into<String>,
@@ -3725,6 +3811,18 @@ impl GameState {
 
     pub fn apply_online_sync_loop_status(&mut self, status: OnlineSyncLoopStatus) {
         self.online_last_sync_loop_status = status.status;
+    }
+
+    pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
+        self.online_last_session_boundary_status = status.status_line();
+        self.online_remote_player_connected = status.remote_connected;
+        if !status.remote_connected {
+            self.online_remote_player_ready = false;
+            self.online_remote_player_snapshots.clear();
+        }
+        self.online_session_status_message
+            .clone_from(&status.player_message);
+        self.message.clone_from(&self.online_session_status_message);
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -3951,6 +4049,14 @@ impl GameState {
                 "none yet; small offsets smooth, large offsets snap to prevent desync"
             } else {
                 self.online_last_correction_status.as_str()
+            }
+        ));
+        lines.push(format!(
+            "Online session boundary: {}",
+            if self.online_last_session_boundary_status.is_empty() {
+                "none; active sessions will report host-ended, client-left, transport-closed, and shutdown acknowledgements here"
+            } else {
+                self.online_last_session_boundary_status.as_str()
             }
         ));
         lines.push(format!(
@@ -4256,9 +4362,9 @@ impl GameState {
             self.online_remote_player_ready = false;
             self.online_remote_player_connected = false;
             self.modal = None;
-            "Closed online multiplayer menu; disconnect/end-session requested."
-                .clone_into(&mut self.online_session_status_message);
-            self.message.clone_from(&self.online_session_status_message);
+            self.apply_online_session_boundary_status(
+                &OnlineSessionBoundaryStatus::local_shutdown_requested(),
+            );
             return;
         }
 
@@ -4678,8 +4784,9 @@ impl GameState {
                 self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
                 self.online_local_ready = false;
                 self.modal = None;
-                "Online session shutdown requested."
-                    .clone_into(&mut self.online_session_status_message);
+                self.apply_online_session_boundary_status(
+                    &OnlineSessionBoundaryStatus::local_shutdown_requested(),
+                );
             }
             12 => {
                 self.online_local_ready = !self.online_local_ready;
@@ -10193,7 +10300,114 @@ mod tests {
         assert!(!game.online_local_ready);
         assert!(!game.online_remote_player_ready);
         assert!(!game.online_remote_player_connected);
-        assert!(game.message.contains("disconnect/end-session requested"));
+        assert!(game.message.contains("shutdown requested"));
+        assert!(
+            game.online_last_session_boundary_status
+                .contains("LocalShutdownRequested")
+        );
+    }
+
+    #[test]
+    fn online_session_boundary_statuses_are_player_facing_and_preserve_context() {
+        let host_ended = OnlineSessionBoundaryStatus::host_ended("host clicked End Session");
+        assert_eq!(
+            host_ended.cause,
+            OnlineSessionBoundaryCause::HostEndedSession
+        );
+        assert!(!host_ended.remote_connected);
+        assert!(!host_ended.local_session_active);
+        assert!(host_ended.player_message.contains("ended by host"));
+        assert!(host_ended.status_line().contains("reconnect"));
+
+        let client_left = OnlineSessionBoundaryStatus::client_left("client quit");
+        assert_eq!(
+            client_left.cause,
+            OnlineSessionBoundaryCause::ClientLeftSession
+        );
+        assert!(!client_left.remote_connected);
+        assert!(client_left.local_session_active);
+        assert!(
+            client_left
+                .player_message
+                .contains("Host save/session remains local and safe")
+        );
+
+        let transport_closed = OnlineSessionBoundaryStatus::transport_closed("network reset");
+        assert_eq!(
+            transport_closed.cause,
+            OnlineSessionBoundaryCause::TransportClosed
+        );
+        assert!(transport_closed.player_message.contains("transport closed"));
+        assert!(
+            transport_closed
+                .player_message
+                .contains("save policy remains unchanged")
+        );
+    }
+
+    #[test]
+    fn applying_session_boundary_status_clears_remote_runtime_state_but_keeps_message_visible() {
+        let mut game = GameState::new();
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 1.0,
+                y: 2.0,
+                velocity_x: 0.0,
+                velocity_y: 0.0,
+                fuel: 3.0,
+                hull: 4.0,
+                credits: 5,
+                cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+
+        game.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::client_left(
+            "test disconnect",
+        ));
+
+        assert!(!game.online_remote_player_ready);
+        assert!(!game.online_remote_player_connected);
+        assert!(game.online_remote_player_snapshots.is_empty());
+        assert!(game.message.contains("test disconnect"));
+        assert!(
+            game.online_last_session_boundary_status
+                .contains("ClientLeftSession")
+        );
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online session boundary")
+                    && line.contains("Host save/session remains local and safe"))
+        );
+    }
+
+    #[test]
+    fn shutdown_result_preserves_boundary_status_after_diagnostic_clear() {
+        let mut game = GameState::new();
+        game.online_last_replication_status = "old replication".to_owned();
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+
+        let transition = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+
+        assert_eq!(transition.kind, OnlineTaskResultTransitionKind::Shutdown);
+        assert!(game.online_last_replication_status.is_empty());
+        assert!(
+            game.online_last_session_boundary_status
+                .contains("ShutdownAcknowledged")
+        );
+        assert!(game.message.contains("local save/session state preserved"));
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online session boundary")
+                    && line.contains("ShutdownAcknowledged"))
+        );
     }
 
     #[test]
@@ -10608,7 +10822,9 @@ mod tests {
                 .any(|line| line.contains("Tunnel Guest") && line.contains("ready yes"))
         );
 
-        game.apply_online_remote_disconnected("Joined client left the online session: test");
+        game.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::client_left(
+            "test",
+        ));
         assert!(!game.online_remote_player_connected);
         assert!(!game.online_remote_player_ready);
         assert!(game.online_remote_player_snapshots.is_empty());
