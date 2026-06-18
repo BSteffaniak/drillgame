@@ -1076,8 +1076,13 @@ mod tests {
             host_player.y = 456.0;
             host_player.velocity_x = 7.0;
             host_player.velocity_y = -8.0;
+            host_player.fuel = 321.0;
+            host_player.hull = 654.0;
             host_player.credits = 999;
         }
+        host_session
+            .world_mut()
+            .set_scanner_cooldown_seconds(crate::multiplayer::LOCAL_PLAYER_ID, 3.5);
         host_session.game_mut().online_local_ready = true;
         host_session.game_mut().run_mode = RunMode::Playing;
         host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
@@ -1131,7 +1136,10 @@ mod tests {
         assert!((join_session.game().player.y - 456.0).abs() < f32::EPSILON);
         assert!((join_session.game().player.velocity_x - 7.0).abs() < f32::EPSILON);
         assert!((join_session.game().player.velocity_y + 8.0).abs() < f32::EPSILON);
+        assert!((join_session.game().player.fuel - 321.0).abs() < f32::EPSILON);
+        assert!((join_session.game().player.hull - 654.0).abs() < f32::EPSILON);
         assert_eq!(join_session.game().player.credits, 999);
+        assert!((join_session.game().scanner_cooldown_seconds - 3.5).abs() < f32::EPSILON);
         assert!(
             join_session
                 .game()
