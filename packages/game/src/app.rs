@@ -310,6 +310,7 @@ impl OnlineTaskDispatcher {
     fn live_session_tick_input(
         &mut self,
         session: &GameSession,
+        local_player_commands: Vec<PlayerCommand>,
     ) -> crate::multiplayer::QuinnSessionTickInput {
         let local_client = session.local_client();
         let player_id = local_client.controlled_player_id;
@@ -326,19 +327,27 @@ impl OnlineTaskDispatcher {
                 crate::multiplayer::SimulationTick::new(tick.saturating_add(2)),
             )
         });
+        let commands = if local_player_commands.is_empty() {
+            vec![crate::multiplayer::PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            }]
+        } else {
+            local_player_commands
+        };
         crate::multiplayer::QuinnSessionTickInput {
             command_packet: Some(crate::multiplayer::CommandPacket {
                 client_id: local_client.client_id,
-                commands: vec![crate::multiplayer::SequencedPlayerCommand {
-                    player_id,
-                    sequence: crate::multiplayer::InputSequence::new(sequence),
-                    target_tick: crate::multiplayer::SimulationTick::new(tick),
-                    command: crate::multiplayer::PlayerCommand::Movement {
-                        horizontal: 0.0,
-                        thrust: false,
-                        drill_down: false,
-                    },
-                }],
+                commands: commands
+                    .into_iter()
+                    .map(|command| crate::multiplayer::SequencedPlayerCommand {
+                        player_id,
+                        sequence: crate::multiplayer::InputSequence::new(sequence),
+                        target_tick: crate::multiplayer::SimulationTick::new(tick),
+                        command,
+                    })
+                    .collect(),
             }),
             snapshot: Some(snapshot),
             delta: Some((
@@ -361,7 +370,12 @@ impl OnlineTaskDispatcher {
         )
     }
 
-    fn drive_scheduled_tick(&mut self, session: &mut GameSession, delta_seconds: f32) {
+    fn drive_scheduled_tick(
+        &mut self,
+        session: &mut GameSession,
+        delta_seconds: f32,
+        local_player_commands: Vec<PlayerCommand>,
+    ) {
         if self.controller.is_none() {
             self.tick_accumulator_seconds = 0.0;
             return;
@@ -371,7 +385,7 @@ impl OnlineTaskDispatcher {
             return;
         }
         self.tick_accumulator_seconds = 0.0;
-        let input = self.live_session_tick_input(session);
+        let input = self.live_session_tick_input(session, local_player_commands);
         let Some(controller) = &mut self.controller else {
             return;
         };
@@ -483,7 +497,11 @@ pub fn run() {
                 .mark_local_multiplayer_active(player_slots);
         }
         online_tasks.drain_and_execute(session.game_mut());
-        online_tasks.drive_scheduled_tick(&mut session, delta_seconds);
+        online_tasks.drive_scheduled_tick(
+            &mut session,
+            delta_seconds,
+            mapped_input.player_commands.clone(),
+        );
         session.apply_client_actions(
             crate::multiplayer::LOCAL_CLIENT_ID,
             &mapped_input.client_actions,
@@ -926,6 +944,56 @@ mod tests {
     }
 
     #[test]
+    fn live_session_tick_input_uses_real_local_player_commands() {
+        let session = GameSession::new();
+        let mut dispatcher = OnlineTaskDispatcher::new();
+        let input = dispatcher.live_session_tick_input(
+            &session,
+            vec![
+                PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: true,
+                    drill_down: true,
+                },
+                PlayerCommand::UseScanner,
+            ],
+        );
+
+        let packet = input.command_packet.expect("command packet is generated");
+        assert_eq!(packet.commands.len(), 2);
+        assert_eq!(
+            packet.commands[0].command,
+            PlayerCommand::Movement {
+                horizontal: 1.0,
+                thrust: true,
+                drill_down: true,
+            }
+        );
+        assert_eq!(packet.commands[1].command, PlayerCommand::UseScanner);
+        assert_eq!(packet.commands[0].sequence, packet.commands[1].sequence);
+        assert!(input.snapshot.is_some());
+        assert!(input.terrain_chunk_request.is_some());
+    }
+
+    #[test]
+    fn live_session_tick_input_keeps_idle_movement_when_no_commands_are_available() {
+        let session = GameSession::new();
+        let mut dispatcher = OnlineTaskDispatcher::new();
+        let input = dispatcher.live_session_tick_input(&session, Vec::new());
+
+        let packet = input.command_packet.expect("idle packet is generated");
+        assert_eq!(packet.commands.len(), 1);
+        assert_eq!(
+            packet.commands[0].command,
+            PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            }
+        );
+    }
+
+    #[test]
     fn online_task_dispatcher_executes_queued_connect_scheduled_tick_and_shutdown() {
         let mut game = GameState::new();
         let mut session = GameSession::new();
@@ -934,7 +1002,7 @@ mod tests {
         game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDirectConnect);
         dispatcher.drain_and_execute(&mut game);
         wait_for_online_completion(&mut dispatcher, &mut game);
-        dispatcher.drive_scheduled_tick(&mut session, FIXED_DELTA_SECONDS);
+        dispatcher.drive_scheduled_tick(&mut session, FIXED_DELTA_SECONDS, Vec::new());
 
         assert_eq!(
             session.game().online_session_state,
@@ -1058,7 +1126,7 @@ mod tests {
         let mut join_session = GameSession::new();
         join_session.game_mut().online_player_name = "Client QA".to_owned();
         join_session.game_mut().online_local_ready = true;
-        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS, Vec::new());
         assert!(
             join_session
                 .game()
@@ -1099,7 +1167,7 @@ mod tests {
         );
         host_session.game_mut().online_local_ready = true;
         host_session.game_mut().run_mode = RunMode::Playing;
-        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
+        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS, Vec::new());
         assert!(
             host_session
                 .game()
@@ -1133,7 +1201,7 @@ mod tests {
                 .online_diagnostic_last_tick
                 .contains("command=true")
         );
-        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS, Vec::new());
         assert!(
             join_session
                 .game()
@@ -1241,7 +1309,7 @@ mod tests {
             host_session.game().online_session_state,
             OnlineSessionUxState::Shutdown
         );
-        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS);
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS, Vec::new());
         assert_eq!(
             join_session.game().online_session_state,
             OnlineSessionUxState::Shutdown
@@ -1276,7 +1344,7 @@ mod tests {
     fn online_task_dispatcher_builds_tick_payload_from_live_session_state() {
         let mut dispatcher = OnlineTaskDispatcher::new();
         let session = GameSession::new();
-        let input = dispatcher.live_session_tick_input(&session);
+        let input = dispatcher.live_session_tick_input(&session, Vec::new());
         let packet = input.command_packet.expect("command packet");
         let command = packet.commands.first().expect("sequenced command");
 
