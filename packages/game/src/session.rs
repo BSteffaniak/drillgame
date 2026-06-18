@@ -14,11 +14,11 @@ use crate::{
     input_mapping::CommandProducer,
     multiplayer::{
         ClientAction, ClientId, CommandAcknowledgement, CommandApplicationResponse,
-        CommandNetworkSession, CommandPacket, CommandRejection, CommandSource, FIXED_DELTA_SECONDS,
-        InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID, NetworkDeltaPayload,
-        NetworkPlayerSnapshot, NetworkTerrainChunkRevision, NetworkWorldSnapshot, PlayerCommand,
-        PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, SIMULATION_HZ,
-        SequencedPlayerCommand, SessionToken, SimulationTick,
+        CommandNetworkSession, CommandPacket, CommandPacketExchangeSummary, CommandRejection,
+        CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
+        NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
+        NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind,
+        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -192,6 +192,21 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
             plan: FixedTickMigrationPlan::KeepVariablePresentationOnly,
         },
     ]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionAuthorityUpdateSummary {
+    pub used_legacy_presentation_adapter: bool,
+    pub local_movement_authority: bool,
+    pub command_adapter_count: usize,
+    pub current_tick: SimulationTick,
+}
+
+impl SessionAuthorityUpdateSummary {
+    #[must_use]
+    pub const fn legacy_bridge_active(self) -> bool {
+        self.used_legacy_presentation_adapter
+    }
 }
 
 #[allow(
@@ -4573,7 +4588,70 @@ impl GameSession {
             .collect()
     }
 
-    pub fn update_legacy_input_from_authoritative_commands(
+    pub fn apply_accepted_online_remote_commands(
+        &mut self,
+        summary: &CommandPacketExchangeSummary,
+    ) -> usize {
+        let remote_client_id = if summary.client_id == self.local_client().client_id {
+            ClientId::new(2)
+        } else {
+            summary.client_id
+        };
+        let Some(player_id) = summary
+            .accepted_commands
+            .iter()
+            .map(|command| command.player_id)
+            .find(|player_id| *player_id != self.local_client().controlled_player_id)
+        else {
+            return 0;
+        };
+        if !self.has_client(remote_client_id) {
+            let _added = self.add_local_client_player(remote_client_id, player_id);
+        }
+        let accepted: Vec<SequencedPlayerCommand> = summary
+            .accepted_commands
+            .iter()
+            .filter(|command| command.player_id != self.local_client().controlled_player_id)
+            .cloned()
+            .collect();
+        if accepted.is_empty() {
+            return 0;
+        }
+        let accepted_count = accepted.len();
+        self.route_client_player_commands(
+            remote_client_id,
+            CommandSource::OnlineClient,
+            accepted
+                .iter()
+                .map(|command| command.command.clone())
+                .collect(),
+        );
+        let target_ticks: BTreeSet<SimulationTick> =
+            accepted.iter().map(|command| command.target_tick).collect();
+        for target_tick in target_ticks {
+            self.process_authoritative_commands_for_tick(target_tick);
+            self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
+            self.process_authoritative_drill_progress();
+        }
+        accepted_count
+    }
+
+    pub fn update_frame_from_session_authority(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+    ) -> SessionAuthorityUpdateSummary {
+        let authoritative_input = self.legacy_presentation_input_from_authoritative_commands(input);
+        self.update_legacy(authoritative_input, delta_seconds);
+        SessionAuthorityUpdateSummary {
+            used_legacy_presentation_adapter: true,
+            local_movement_authority: self.latest_local_movement_intent.is_some(),
+            command_adapter_count: self.latest_local_authoritative_commands.len(),
+            current_tick: self.current_tick,
+        }
+    }
+
+    fn legacy_presentation_input_from_authoritative_commands(
         &self,
         input: PlayerInput,
     ) -> PlayerInput {
@@ -6916,7 +6994,41 @@ mod tests {
     }
 
     #[test]
-    fn routed_local_movement_overrides_legacy_variable_delta_movement() {
+    fn accepted_online_remote_commands_apply_to_session_world_without_app_legacy_routing() {
+        let mut session = GameSession::new();
+        let remote_player = PlayerId::new(2);
+        let target_tick = session.current_tick();
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: ClientId::new(2),
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: target_tick,
+            accepted_commands: vec![SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: InputSequence::new(1),
+                target_tick,
+                command: PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: false,
+                    drill_down: false,
+                },
+            }],
+        };
+
+        let applied = session.apply_accepted_online_remote_commands(&summary);
+
+        assert_eq!(applied, 1);
+        assert!(session.has_client(ClientId::new(2)));
+        let player = session
+            .world()
+            .player(remote_player)
+            .expect("remote player exists in authoritative world");
+        assert!(player.velocity_x > 0.0);
+        assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn production_session_authority_update_uses_routed_command_instead_of_raw_input() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
         session.route_local_player_commands(vec![PlayerCommand::Movement {
@@ -6924,15 +7036,18 @@ mod tests {
             thrust: false,
             drill_down: false,
         }]);
-        let input = session.update_legacy_input_from_authoritative_commands(PlayerInput {
-            horizontal: 1.0,
-            ..PlayerInput::default()
-        });
 
-        assert!((input.horizontal - 0.0).abs() < f32::EPSILON);
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                horizontal: 1.0,
+                ..PlayerInput::default()
+            },
+            0.016,
+        );
 
-        session.update_legacy(input, 0.016);
-
+        assert!(summary.legacy_bridge_active());
+        assert!(summary.local_movement_authority);
+        assert_eq!(summary.command_adapter_count, 1);
         let world_player = session
             .world()
             .player(LOCAL_PLAYER_ID)
@@ -8283,21 +8398,31 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_commands_restore_legacy_action_input() {
+    fn production_session_authority_update_routes_action_commands_without_public_legacy_adapter() {
         let mut session = GameSession::new();
-        session.route_local_player_commands(vec![
-            PlayerCommand::UseScanner,
-            PlayerCommand::PlaceBomb,
-            PlayerCommand::PlaceInfrastructure { slot: 2 },
-            PlayerCommand::Interact,
-        ]);
+        session.game.run_mode = RunMode::Playing;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.fuel = 10.0;
+            player.hull = 20.0;
+            player.credits = 10_000;
+        }
+        session.route_local_player_commands(vec![PlayerCommand::Refuel, PlayerCommand::Repair]);
 
-        let input = session.update_legacy_input_from_authoritative_commands(PlayerInput::default());
+        let summary = session
+            .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
 
-        assert!(input.scan);
-        assert!(input.bomb);
-        assert!(input.place_lift);
-        assert!(input.interact);
+        assert!(summary.legacy_bridge_active());
+        assert_eq!(summary.command_adapter_count, 2);
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert!(player.fuel > 10.0);
+        assert!(player.hull > 20.0);
     }
 
     #[test]

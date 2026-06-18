@@ -407,46 +407,9 @@ impl OnlineTaskDispatcher {
         session: &mut GameSession,
         summary: Option<&crate::multiplayer::CommandPacketExchangeSummary>,
     ) -> usize {
-        let Some(summary) = summary else {
-            return 0;
-        };
-        if summary.accepted_commands.is_empty() {
-            return 0;
-        }
-        let remote_client_id = if summary.client_id == session.local_client().client_id {
-            crate::multiplayer::ClientId::new(2)
-        } else {
-            summary.client_id
-        };
-        let Some(player_id) = summary
-            .accepted_commands
-            .iter()
-            .map(|command| command.player_id)
-            .find(|player_id| *player_id != session.local_client().controlled_player_id)
-        else {
-            return 0;
-        };
-        if !session.has_client(remote_client_id) {
-            let _added = session.add_local_client_player(remote_client_id, player_id);
-        }
-        let commands = summary
-            .accepted_commands
-            .iter()
-            .filter(|command| command.player_id == player_id)
-            .map(|command| command.command.clone())
-            .collect::<Vec<_>>();
-        if commands.is_empty() {
-            return 0;
-        }
-        let batch = session.route_client_player_commands(
-            remote_client_id,
-            crate::multiplayer::CommandSource::OnlineClient,
-            commands,
-        );
-        if batch.commands.is_empty() {
-            return 0;
-        }
-        session.process_authoritative_commands_for_tick(session.current_tick())
+        summary.map_or(0, |summary| {
+            session.apply_accepted_online_remote_commands(summary)
+        })
     }
 
     fn sync_remote_presentations_to_session(session: &mut GameSession) -> usize {
@@ -668,8 +631,8 @@ pub fn run() {
         }
         observe_multiplayer_scaffolding(&mut session, delta_seconds);
 
-        let authoritative_input = session.update_legacy_input_from_authoritative_commands(input);
-        session.update_legacy(authoritative_input, delta_seconds);
+        let authority_update = session.update_frame_from_session_authority(input, delta_seconds);
+        let _legacy_bridge_active = authority_update.legacy_bridge_active();
         let world_delta = session.drain_world_delta();
         let _world_delta_is_empty = world_delta.is_empty();
         if input.fullscreen {
