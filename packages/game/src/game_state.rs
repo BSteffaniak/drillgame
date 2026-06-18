@@ -765,6 +765,87 @@ impl OnlinePeerLobbyPresentation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineLobbyReadinessState {
+    Ready,
+    NotReady,
+    WaitingForConnection,
+}
+
+impl OnlineLobbyReadinessState {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NotReady => "not-ready",
+            Self::WaitingForConnection => "waiting-for-connection",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLobbyStatus {
+    pub local: OnlinePeerLobbyPresentation,
+    pub remote: OnlinePeerLobbyPresentation,
+    pub local_readiness: OnlineLobbyReadinessState,
+    pub remote_readiness: OnlineLobbyReadinessState,
+    pub can_start: bool,
+    pub blocker: Option<OnlineGameplayStartBlocker>,
+    pub status: String,
+}
+
+impl OnlineLobbyStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let presentation = game.online_lobby_presentation();
+        let local_readiness = if presentation.local.ready {
+            OnlineLobbyReadinessState::Ready
+        } else {
+            OnlineLobbyReadinessState::NotReady
+        };
+        let remote_readiness = if !presentation.remote.connected {
+            OnlineLobbyReadinessState::WaitingForConnection
+        } else if presentation.remote.ready {
+            OnlineLobbyReadinessState::Ready
+        } else {
+            OnlineLobbyReadinessState::NotReady
+        };
+        let can_start = presentation.start_gate.ready;
+        let blocker = presentation.start_gate.blocker;
+        let status = format!(
+            "Online lobby status: local={} slot={} role={} ready={} connected={} save_authority={:?}; remote={} slot={} role={} ready={} connected={} save_authority={:?}; start_ready={} blocker={:?}",
+            presentation.local.name,
+            presentation
+                .local
+                .slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            presentation.local.role_label,
+            local_readiness.label(),
+            yes_no(presentation.local.connected),
+            presentation.local.save_authority,
+            presentation.remote.name,
+            presentation
+                .remote
+                .slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            presentation.remote.role_label,
+            remote_readiness.label(),
+            yes_no(presentation.remote.connected),
+            presentation.remote.save_authority,
+            yes_no(can_start),
+            blocker
+        );
+        Self {
+            local: presentation.local,
+            remote: presentation.remote,
+            local_readiness,
+            remote_readiness,
+            can_start,
+            blocker,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineLobbyPresentation {
     pub local: OnlinePeerLobbyPresentation,
@@ -3615,6 +3696,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_descriptor_input_status: String,
     #[serde(default)]
+    pub online_last_lobby_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3874,6 +3957,7 @@ impl GameState {
             online_last_gameplay_domain_status: String::new(),
             online_last_save_boundary_status: String::new(),
             online_last_descriptor_input_status: String::new(),
+            online_last_lobby_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -4330,6 +4414,7 @@ impl GameState {
         self.online_remote_player_connected = true;
         self.online_session_status_message =
             format!("Remote player identity synced: p{} {name}", player_id.get());
+        self.refresh_online_lobby_status();
     }
 
     pub fn apply_online_remote_ready_state(
@@ -4344,6 +4429,7 @@ impl GameState {
             player_id.get(),
             if ready { "ready" } else { "not ready" }
         );
+        self.refresh_online_lobby_status();
     }
 
     pub fn apply_online_diagnostics(
@@ -4452,11 +4538,16 @@ impl GameState {
         self.online_last_descriptor_input_status = status.status_line();
     }
 
+    pub fn refresh_online_lobby_status(&mut self) {
+        self.online_last_lobby_status = OnlineLobbyStatus::from_game(self).status;
+    }
+
     pub fn refresh_online_runtime_statuses(&mut self) {
         self.refresh_online_ownership_status();
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
         self.refresh_online_save_boundary_status();
+        self.refresh_online_lobby_status();
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -4749,6 +4840,11 @@ impl GameState {
         }
         lines.push(self.online_start_readiness_line());
         lines.push(self.online_save_policy_line());
+        lines.push(if self.online_last_lobby_status.is_empty() {
+            OnlineLobbyStatus::from_game(self).status
+        } else {
+            self.online_last_lobby_status.clone()
+        });
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
@@ -5435,6 +5531,7 @@ impl GameState {
                     "Local player not ready."
                 }
                 .clone_into(&mut self.online_session_status_message);
+                self.refresh_online_lobby_status();
             }
             13 => {
                 self.request_online_gameplay_start();
@@ -10943,6 +11040,117 @@ mod tests {
         assert!(
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
+        );
+    }
+
+    #[test]
+    fn online_lobby_status_summarizes_local_remote_readiness_and_start_gate() {
+        let mut game = GameState::new();
+        game.online_player_name = "Host Lobby".to_owned();
+        game.online_player_slot = Some(1);
+        game.online_host_owns_save = true;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_local_ready = true;
+        game.online_remote_player_name = Some("Client Lobby".to_owned());
+        game.online_remote_player_connected = true;
+        game.online_remote_player_ready = false;
+
+        let blocked = OnlineLobbyStatus::from_game(&game);
+        assert_eq!(blocked.local.name, "Host Lobby");
+        assert_eq!(blocked.remote.name, "Client Lobby");
+        assert_eq!(blocked.local_readiness, OnlineLobbyReadinessState::Ready);
+        assert_eq!(
+            blocked.remote_readiness,
+            OnlineLobbyReadinessState::NotReady
+        );
+        assert!(!blocked.can_start);
+        assert_eq!(
+            blocked.blocker,
+            Some(OnlineGameplayStartBlocker::RemoteNotReady)
+        );
+        assert!(blocked.status.contains("local=Host Lobby"));
+        assert!(blocked.status.contains("remote=Client Lobby"));
+        assert!(blocked.status.contains("ready=not-ready"));
+
+        game.online_remote_player_ready = true;
+        let ready = OnlineLobbyStatus::from_game(&game);
+        assert!(ready.can_start);
+        assert_eq!(ready.blocker, None);
+        assert_eq!(ready.remote_readiness, OnlineLobbyReadinessState::Ready);
+        assert!(ready.status.contains("start_ready=yes"));
+    }
+
+    #[test]
+    fn online_lobby_status_reports_waiting_remote_connection_for_joined_client() {
+        let mut game = GameState::new();
+        game.online_player_name = "Joined Lobby".to_owned();
+        game.online_player_slot = Some(2);
+        game.online_host_owns_save = false;
+        game.online_session_state = OnlineSessionUxState::Joining;
+        game.online_remote_player_name = Some("Host Lobby".to_owned());
+        game.online_remote_player_connected = false;
+
+        let status = OnlineLobbyStatus::from_game(&game);
+        assert_eq!(status.local.role_label, "client");
+        assert_eq!(status.remote.role_label, "host");
+        assert_eq!(
+            status.remote_readiness,
+            OnlineLobbyReadinessState::WaitingForConnection
+        );
+        assert_eq!(status.local.save_authority, OnlineSaveAuthority::RemoteHost);
+        assert_eq!(
+            status.remote.save_authority,
+            OnlineSaveAuthority::LocalPlayer
+        );
+        assert!(status.status.contains("waiting-for-connection"));
+        assert!(status.status.contains("save_authority=RemoteHost"));
+    }
+
+    #[test]
+    fn online_lobby_status_refreshes_from_identity_ready_and_boundary_reducers() {
+        let mut game = GameState::new();
+        game.online_player_slot = Some(1);
+        game.online_host_owns_save = true;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        let remote_id = crate::multiplayer::PlayerId::new(2);
+
+        game.apply_online_remote_identity(remote_id, "Remote Dana");
+        assert!(game.online_last_lobby_status.contains("Remote Dana"));
+        assert!(game.online_last_lobby_status.contains("ready=not-ready"));
+
+        game.apply_online_remote_ready_state(remote_id, true);
+        assert!(game.online_last_lobby_status.contains("remote=Remote Dana"));
+        assert!(game.online_last_lobby_status.contains("ready=ready"));
+        assert!(game.online_remote_player_connected);
+
+        game.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::client_left(
+            "Remote Dana disconnected",
+        ));
+        assert!(!game.online_remote_player_connected);
+        assert!(!game.online_remote_player_ready);
+        assert!(
+            game.online_last_lobby_status
+                .contains("waiting-for-connection")
+        );
+    }
+
+    #[test]
+    fn local_ready_toggle_refreshes_lobby_status_line() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_remote_player_connected = true;
+        game.selected_menu_item = 12;
+
+        game.confirm_online_multiplayer();
+        assert!(game.online_local_ready);
+        assert!(game.online_last_lobby_status.contains("local="));
+        assert!(game.online_last_lobby_status.contains("ready=ready"));
+
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online lobby status") && line.contains("ready=ready"))
         );
     }
 
