@@ -81,7 +81,7 @@ impl OnlineTaskDispatcher {
                     "descriptor-host-accepted",
                     "client accepted; awaiting ticks",
                 );
-                game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(
                         Some(1),
                     ),
@@ -1023,6 +1023,7 @@ mod tests {
             host_game.online_session_state,
             OnlineSessionUxState::Connected
         );
+        assert_ne!(host_game.run_mode, RunMode::Playing);
         assert_eq!(
             join_game.online_session_state,
             OnlineSessionUxState::Connected
