@@ -778,6 +778,14 @@ impl RealOnlineSessionController {
                     ));
                     received_any = true;
                 }
+                crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
+                    game.online_remote_player_connected = false;
+                    game.online_remote_player_ready = false;
+                    game.online_session_status_message =
+                        format!("Joined client left the online session: {reason}");
+                    game.message.clone_from(&game.online_session_status_message);
+                    received_any = true;
+                }
                 other => {
                     return Err(
                         crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other),
@@ -918,6 +926,28 @@ impl RealOnlineSessionController {
                 .await?;
         }
         Ok(Some(summary))
+    }
+
+    pub async fn descriptor_client_send_session_ended(
+        &mut self,
+        reason: &str,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorClientConnected { packet_io, .. } = &mut self.mode
+        else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "connected descriptor client packet io",
+                ),
+            );
+        };
+        packet_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::SessionEnded {
+                    reason: reason.to_owned(),
+                },
+            ))
+            .await?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]

@@ -282,12 +282,22 @@ impl OnlineTaskDispatcher {
                 }
             }
             OnlineNetworkTaskRequest::Shutdown => {
-                if let (Some(runtime), Some(controller)) = (&self.runtime, &mut self.controller)
-                    && controller.mode_label() == "descriptor-host-accepted"
-                {
-                    let _ignored = runtime.block_on(
-                        controller.descriptor_host_send_session_ended("host ended the session"),
-                    );
+                if let (Some(runtime), Some(controller)) = (&self.runtime, &mut self.controller) {
+                    match controller.mode_label() {
+                        "descriptor-host-accepted" => {
+                            let _ignored = runtime.block_on(
+                                controller
+                                    .descriptor_host_send_session_ended("host ended the session"),
+                            );
+                        }
+                        "descriptor-client-connected" => {
+                            let _ignored =
+                                runtime.block_on(controller.descriptor_client_send_session_ended(
+                                    "joined client left the session",
+                                ));
+                        }
+                        _ => {}
+                    }
                 }
                 self.controller = None;
                 self.pending_completion = None;
