@@ -788,6 +788,7 @@ impl RealOnlineSessionController {
                 crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
                     game.online_remote_player_connected = false;
                     game.online_remote_player_ready = false;
+                    game.online_remote_player_snapshots.clear();
                     game.online_session_status_message =
                         format!("Joined client left the online session: {reason}");
                     game.message.clone_from(&game.online_session_status_message);
@@ -1023,6 +1024,7 @@ impl RealOnlineSessionController {
                         crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
                             game.online_remote_player_connected = false;
                             game.online_remote_player_ready = false;
+                            game.online_remote_player_snapshots.clear();
                             game.online_session_state = OnlineSessionUxState::Shutdown;
                             game.modal = None;
                             game.online_session_status_message =
@@ -1036,6 +1038,7 @@ impl RealOnlineSessionController {
                 Ok(Err(error)) => {
                     game.online_remote_player_connected = false;
                     game.online_remote_player_ready = false;
+                    game.online_remote_player_snapshots.clear();
                     game.online_session_state = OnlineSessionUxState::Shutdown;
                     game.modal = None;
                     game.online_session_status_message = format!(
@@ -1060,6 +1063,7 @@ impl RealOnlineSessionController {
                 })?;
                 match message {
                     crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
+                        apply_network_snapshot_remote_players(game, &snapshot);
                         let tick = snapshot.tick.get();
                         if let Some(player) = snapshot.players.first() {
                             apply_network_player_snapshot_to_game(game, player);
@@ -1595,6 +1599,32 @@ const fn is_allowed_descriptor_path_character(character: char) -> bool {
 
 const fn is_allowed_socket_address_character(character: char) -> bool {
     character.is_ascii_digit() || matches!(character, '.' | ':' | '[' | ']')
+}
+
+fn apply_network_snapshot_remote_players(
+    game: &mut GameState,
+    snapshot: &crate::multiplayer::NetworkWorldSnapshot,
+) {
+    let local_player_id = game
+        .online_player_slot
+        .map(|slot| crate::multiplayer::PlayerId::new(u64::from(slot)));
+    game.online_remote_player_snapshots = snapshot
+        .players
+        .iter()
+        .filter(|player| Some(player.player_id) != local_player_id)
+        .map(|player| OnlineRemotePlayerPresentation {
+            player_id: player.player_id,
+            x: player.x,
+            y: player.y,
+            velocity_x: player.velocity_x,
+            velocity_y: player.velocity_y,
+            fuel: player.fuel,
+            hull: player.hull,
+            credits: player.credits,
+            cargo_used: player.cargo_used,
+        })
+        .collect();
+    game.online_remote_player_connected = !game.online_remote_player_snapshots.is_empty();
 }
 
 const fn apply_network_player_snapshot_to_game(
@@ -2291,6 +2321,19 @@ pub enum SoundCue {
     Ui,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct OnlineRemotePlayerPresentation {
+    pub player_id: crate::multiplayer::PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+    pub fuel: f32,
+    pub hull: f32,
+    pub credits: u32,
+    pub cargo_used: u32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct VisualChanges {
     pub full_terrain_refresh: bool,
@@ -2326,6 +2369,8 @@ pub struct GameState {
     pub online_remote_player_ready: bool,
     #[serde(default)]
     pub online_remote_player_connected: bool,
+    #[serde(default)]
+    pub online_remote_player_snapshots: Vec<OnlineRemotePlayerPresentation>,
     #[serde(default = "default_online_descriptor_path")]
     pub online_descriptor_path: PathBuf,
     #[serde(default)]
@@ -2589,6 +2634,7 @@ impl GameState {
             online_remote_player_name: None,
             online_remote_player_ready: false,
             online_remote_player_connected: false,
+            online_remote_player_snapshots: Vec::new(),
             online_descriptor_path: default_online_descriptor_path(),
             online_descriptor_path_editing: false,
             online_descriptor_path_draft: String::new(),
@@ -3228,6 +3274,26 @@ impl GameState {
             },
             if self.request_exit { "yes" } else { "no" }
         ));
+        if !self.online_remote_player_snapshots.is_empty() {
+            let summaries = self
+                .online_remote_player_snapshots
+                .iter()
+                .map(|player| {
+                    format!(
+                        "p{} ({:.0},{:.0}) fuel {:.0} hull {:.0} cr {} cargo {}",
+                        player.player_id.get(),
+                        player.x,
+                        player.y,
+                        player.fuel,
+                        player.hull,
+                        player.credits,
+                        player.cargo_used
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            lines.push(format!("Remote snapshot players: {summaries}"));
+        }
         if self.online_descriptor_path_editing {
             lines.push(format!(
                 "Descriptor path edit: {}_",

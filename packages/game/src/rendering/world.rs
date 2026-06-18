@@ -346,6 +346,50 @@ pub(super) fn draw_scanner_marks(
     clippy::too_many_lines,
     reason = "player rendering includes upgrade visual variants"
 )]
+pub(super) fn draw_remote_player_at(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    player_x: f32,
+    player_y: f32,
+) {
+    draw.draw_rectangle(
+        (player_x - 12.0) as i32,
+        (player_y - 9.0) as i32,
+        24,
+        20,
+        Color::new(80, 170, 245, 180),
+    );
+    draw.draw_rectangle_lines(
+        (player_x - 12.0) as i32,
+        (player_y - 9.0) as i32,
+        24,
+        20,
+        Color::BLUE,
+    );
+    draw.draw_rectangle(
+        (player_x - 6.0) as i32,
+        (player_y - 16.0) as i32,
+        12,
+        7,
+        Color::new(155, 220, 255, 220),
+    );
+    draw.draw_circle(
+        (player_x - 8.0) as i32,
+        (player_y + 12.0) as i32,
+        3.0,
+        Color::DARKBLUE,
+    );
+    draw.draw_circle(
+        (player_x + 8.0) as i32,
+        (player_y + 12.0) as i32,
+        3.0,
+        Color::DARKBLUE,
+    );
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "player rendering includes upgrade visual variants"
+)]
 pub(super) fn draw_player(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
     draw_player_at(draw, game, game.player.x, game.player.y);
 }

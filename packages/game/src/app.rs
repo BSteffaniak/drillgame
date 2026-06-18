@@ -1140,6 +1140,19 @@ mod tests {
         assert!((join_session.game().player.hull - 654.0).abs() < f32::EPSILON);
         assert_eq!(join_session.game().player.credits, 999);
         assert!((join_session.game().scanner_cooldown_seconds - 3.5).abs() < f32::EPSILON);
+        assert_eq!(join_session.game().online_remote_player_snapshots.len(), 1);
+        let remote_player = &join_session.game().online_remote_player_snapshots[0];
+        assert_eq!(remote_player.player_id, crate::multiplayer::LOCAL_PLAYER_ID);
+        assert!((remote_player.x - 123.0).abs() < f32::EPSILON);
+        assert!((remote_player.y - 456.0).abs() < f32::EPSILON);
+        assert_eq!(remote_player.credits, 999);
+        assert!(
+            join_session
+                .game()
+                .online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Remote snapshot players") && line.contains("p1"))
+        );
         assert!(
             join_session
                 .game()
