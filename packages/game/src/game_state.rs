@@ -262,6 +262,86 @@ impl CosmeticRigSkin {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplayDomainStatus {
+    pub movement: &'static str,
+    pub terrain: &'static str,
+    pub cargo_economy: &'static str,
+    pub survival: &'static str,
+    pub inventory: &'static str,
+    pub menu_boundary: &'static str,
+    pub reconnect_recovery: &'static str,
+    pub authority_correction: &'static str,
+    pub status: String,
+}
+
+impl OnlineGameplayDomainStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let movement = domain_status(
+            !game.online_last_replicated_player_status.is_empty()
+                || !game.online_remote_player_snapshots.is_empty(),
+        );
+        let terrain = domain_status(
+            !game.online_last_terrain_status.is_empty()
+                || game.online_last_sync_loop_status.contains("terrain"),
+        );
+        let cargo_economy = domain_status(
+            game.online_last_replicated_player_status.contains("cargo=")
+                || game
+                    .online_last_replicated_player_status
+                    .contains("credits=")
+                || game.online_last_sync_loop_status.contains("cargo=yes"),
+        );
+        let survival = domain_status(
+            game.online_last_replicated_player_status.contains("fuel=")
+                || game.online_last_replicated_player_status.contains("hull="),
+        );
+        let inventory = domain_status(
+            !game.rig_part_inventory.is_empty()
+                || !game.equipped_rig_parts.is_empty()
+                || !game.cosmetic_skins.is_empty()
+                || !game.challenge_badges.is_empty(),
+        );
+        let menu_boundary = domain_status(true);
+        let reconnect_recovery = domain_status(
+            game.online_last_ownership_status
+                .contains("reconnect_context=preserved")
+                || game.online_last_failure_status.contains("Reconnect")
+                || game.online_session_state == OnlineSessionUxState::Reconnecting,
+        );
+        let authority_correction = domain_status(
+            !game.online_last_authority_status.is_empty()
+                || !game.online_last_correction_status.is_empty(),
+        );
+        let status = format!(
+            "Online gameplay domains: movement={movement} terrain={terrain} cargo_economy={cargo_economy} survival={survival} inventory={inventory} menu_boundary={menu_boundary} reconnect_recovery={reconnect_recovery} authority_correction={authority_correction} | run_mode={:?} modal={} slot={} role={}",
+            game.run_mode,
+            game.modal
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |modal| format!("{modal:?}")),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            game.online_role_label()
+        );
+        Self {
+            movement,
+            terrain,
+            cargo_economy,
+            survival,
+            inventory,
+            menu_boundary,
+            reconnect_recovery,
+            authority_correction,
+            status,
+        }
+    }
+}
+
+const fn domain_status(visible: bool) -> &'static str {
+    if visible { "visible" } else { "missing" }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "live verification status reports independent gameplay-system evidence flags"
@@ -3300,6 +3380,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_live_verification_status: String,
     #[serde(default)]
+    pub online_last_gameplay_domain_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3556,6 +3638,7 @@ impl GameState {
             online_last_failure_status: String::new(),
             online_last_ownership_status: String::new(),
             online_last_live_verification_status: String::new(),
+            online_last_gameplay_domain_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -4040,16 +4123,19 @@ impl GameState {
     pub fn apply_online_replication_status(&mut self, status: impl Into<String>) {
         self.online_last_replication_status = status.into();
         self.refresh_online_live_verification_status();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn apply_online_replicated_player_status(&mut self, status: impl Into<String>) {
         self.online_last_replicated_player_status = status.into();
         self.refresh_online_live_verification_status();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn apply_online_terrain_status(&mut self, status: impl Into<String>) {
         self.online_last_terrain_status = status.into();
         self.refresh_online_live_verification_status();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn apply_online_authority_correction_status(
@@ -4059,11 +4145,13 @@ impl GameState {
         self.online_last_authority_status
             .clone_from(&presentation.player_message);
         self.online_last_correction_status = presentation.status_line();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn apply_online_sync_loop_status(&mut self, status: OnlineSyncLoopStatus) {
         self.online_last_sync_loop_status = status.status;
         self.refresh_online_live_verification_status();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
@@ -4096,9 +4184,15 @@ impl GameState {
             OnlineLiveVerificationStatus::from_game(self).status;
     }
 
+    pub fn refresh_online_gameplay_domain_status(&mut self) {
+        self.online_last_gameplay_domain_status =
+            OnlineGameplayDomainStatus::from_game(self).status;
+    }
+
     pub fn refresh_online_runtime_statuses(&mut self) {
         self.refresh_online_ownership_status();
         self.refresh_online_live_verification_status();
+        self.refresh_online_gameplay_domain_status();
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -4111,6 +4205,7 @@ impl GameState {
         self.online_last_correction_status.clear();
         self.online_last_sync_loop_status.clear();
         self.online_last_live_verification_status.clear();
+        self.online_last_gameplay_domain_status.clear();
     }
 
     #[allow(
@@ -4320,6 +4415,11 @@ impl GameState {
             OnlineLiveVerificationStatus::from_game(self).status
         } else {
             self.online_last_live_verification_status.clone()
+        });
+        lines.push(if self.online_last_gameplay_domain_status.is_empty() {
+            OnlineGameplayDomainStatus::from_game(self).status
+        } else {
+            self.online_last_gameplay_domain_status.clone()
         });
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
@@ -10567,6 +10667,84 @@ mod tests {
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
         );
+    }
+
+    #[test]
+    fn gameplay_domain_status_summarizes_multiplayer_playtest_domains() {
+        let mut game = GameState::new();
+        game.online_player_slot = Some(2);
+        game.online_host_owns_save = false;
+        game.online_session_state = OnlineSessionUxState::Reconnecting;
+        game.apply_online_replicated_player_status(
+            "tick 11: applied player 2 pos=(5.0,6.0) fuel=44 hull=55 credits=66 cargo=7",
+        );
+        game.apply_online_terrain_status("applied chunk (1,2) rev 3: 9 visible tiles");
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::snapshot(2, true));
+        game.apply_online_authority_correction_status(
+            &OnlineAuthorityCorrectionPresentation::from_plan(
+                crate::session::CorrectionPlan::Smooth,
+                true,
+            ),
+        );
+        game.refresh_online_runtime_statuses();
+
+        let status = OnlineGameplayDomainStatus::from_game(&game);
+        assert_eq!(status.movement, "visible");
+        assert_eq!(status.terrain, "visible");
+        assert_eq!(status.cargo_economy, "visible");
+        assert_eq!(status.survival, "visible");
+        assert_eq!(status.menu_boundary, "visible");
+        assert_eq!(status.reconnect_recovery, "visible");
+        assert_eq!(status.authority_correction, "visible");
+        assert!(status.status.contains("role=client"));
+        assert!(status.status.contains("slot=2"));
+    }
+
+    #[test]
+    fn gameplay_domain_status_is_refreshed_and_exposed_in_status_lines() {
+        let mut game = GameState::new();
+        game.apply_online_replicated_player_status(
+            "tick 12: applied player 1 pos=(1.0,1.0) fuel=90 hull=95 credits=10 cargo=2",
+        );
+        assert!(
+            game.online_last_gameplay_domain_status
+                .contains("movement=visible")
+        );
+        assert!(
+            game.online_last_gameplay_domain_status
+                .contains("cargo_economy=visible")
+        );
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Online gameplay domains")
+                    && line.contains("movement=visible")
+                    && line.contains("survival=visible"))
+        );
+
+        game.clear_online_diagnostics();
+        assert!(game.online_last_gameplay_domain_status.is_empty());
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online gameplay domains")
+                    && line.contains("movement=missing"))
+        );
+    }
+
+    #[test]
+    fn gameplay_domain_status_keeps_pause_menu_boundary_visible_even_without_network_evidence() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = None;
+
+        let status = OnlineGameplayDomainStatus::from_game(&game);
+
+        assert_eq!(status.menu_boundary, "visible");
+        assert!(status.status.contains("run_mode=Playing"));
+        assert!(status.status.contains("modal=none"));
     }
 
     #[test]
