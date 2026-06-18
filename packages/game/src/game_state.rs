@@ -1383,6 +1383,106 @@ impl OnlineTaskResultTransition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlinePlayableSessionPhase {
+    NotStarted,
+    HostWaiting,
+    JoinedWaiting,
+    ReadyToStart,
+    Playing,
+    Blocked,
+    Ended,
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "playable-session gate reports independent UI milestone and sync-evidence flags"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlinePlayableSessionStatus {
+    pub phase: OnlinePlayableSessionPhase,
+    pub host_from_ui: bool,
+    pub joined_from_ui: bool,
+    pub both_entered_gameplay: bool,
+    pub movement_visible: bool,
+    pub terrain_or_cargo_visible: bool,
+    pub blocker: Option<OnlineGameplayStartBlocker>,
+    pub status: String,
+}
+
+impl OnlinePlayableSessionStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let start_gate = game.online_gameplay_start_gate();
+        let host_from_ui = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Hosting | OnlineSessionUxState::Connected
+        ) && game.online_host_owns_save
+            && game.online_player_slot == Some(1);
+        let joined_from_ui = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Joining | OnlineSessionUxState::Connected
+        ) && !game.online_host_owns_save
+            && game.online_player_slot == Some(2);
+        let both_entered_gameplay = game.run_mode == RunMode::Playing
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected)
+            && game.modal.is_none();
+        let movement_visible = !game.online_last_replicated_player_status.is_empty()
+            || !game.online_remote_player_snapshots.is_empty();
+        let terrain_or_cargo_visible = !game.online_last_terrain_status.is_empty()
+            || game.online_last_sync_loop_status.contains("terrain")
+            || game.online_last_sync_loop_status.contains("cargo=yes")
+            || game.online_last_replicated_player_status.contains("cargo=");
+        let phase = if matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Shutdown
+                | OnlineSessionUxState::Error
+                | OnlineSessionUxState::Disconnected
+        ) {
+            OnlinePlayableSessionPhase::Ended
+        } else if both_entered_gameplay {
+            OnlinePlayableSessionPhase::Playing
+        } else if start_gate.ready {
+            OnlinePlayableSessionPhase::ReadyToStart
+        } else if matches!(game.online_session_state, OnlineSessionUxState::Hosting) {
+            OnlinePlayableSessionPhase::HostWaiting
+        } else if matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Joining | OnlineSessionUxState::Connected
+        ) && !game.online_host_owns_save
+        {
+            OnlinePlayableSessionPhase::JoinedWaiting
+        } else if matches!(game.online_session_state, OnlineSessionUxState::Idle) {
+            OnlinePlayableSessionPhase::NotStarted
+        } else {
+            OnlinePlayableSessionPhase::Blocked
+        };
+        let status = format!(
+            "Online playable session gate: phase={phase:?} host_from_ui={} joined_from_ui={} gameplay_active={} movement={} terrain_or_cargo={} start_ready={} blocker={:?} role={} slot={}",
+            yes_no(host_from_ui),
+            yes_no(joined_from_ui),
+            yes_no(both_entered_gameplay),
+            yes_no(movement_visible),
+            yes_no(terrain_or_cargo_visible),
+            yes_no(start_gate.ready),
+            start_gate.blocker,
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        );
+        Self {
+            phase,
+            host_from_ui,
+            joined_from_ui,
+            both_entered_gameplay,
+            movement_visible,
+            terrain_or_cargo_visible,
+            blocker: start_gate.blocker,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineGameplayStartBlocker {
     NotConnected,
     LocalNotReady,
@@ -3698,6 +3798,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_lobby_status: String,
     #[serde(default)]
+    pub online_last_playable_session_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3958,6 +4060,7 @@ impl GameState {
             online_last_save_boundary_status: String::new(),
             online_last_descriptor_input_status: String::new(),
             online_last_lobby_status: String::new(),
+            online_last_playable_session_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -4445,18 +4548,21 @@ impl GameState {
         self.online_last_replication_status = status.into();
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
+        self.refresh_online_playable_session_status();
     }
 
     pub fn apply_online_replicated_player_status(&mut self, status: impl Into<String>) {
         self.online_last_replicated_player_status = status.into();
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
+        self.refresh_online_playable_session_status();
     }
 
     pub fn apply_online_terrain_status(&mut self, status: impl Into<String>) {
         self.online_last_terrain_status = status.into();
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
+        self.refresh_online_playable_session_status();
     }
 
     pub fn apply_online_authority_correction_status(
@@ -4473,6 +4579,7 @@ impl GameState {
         self.online_last_sync_loop_status = status.status;
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
+        self.refresh_online_playable_session_status();
     }
 
     pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
@@ -4542,12 +4649,18 @@ impl GameState {
         self.online_last_lobby_status = OnlineLobbyStatus::from_game(self).status;
     }
 
+    pub fn refresh_online_playable_session_status(&mut self) {
+        self.online_last_playable_session_status =
+            OnlinePlayableSessionStatus::from_game(self).status;
+    }
+
     pub fn refresh_online_runtime_statuses(&mut self) {
         self.refresh_online_ownership_status();
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
         self.refresh_online_save_boundary_status();
         self.refresh_online_lobby_status();
+        self.refresh_online_playable_session_status();
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -4784,6 +4897,11 @@ impl GameState {
             OnlineGameplayDomainStatus::from_game(self).status
         } else {
             self.online_last_gameplay_domain_status.clone()
+        });
+        lines.push(if self.online_last_playable_session_status.is_empty() {
+            OnlinePlayableSessionStatus::from_game(self).status
+        } else {
+            self.online_last_playable_session_status.clone()
         });
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
@@ -5045,6 +5163,7 @@ impl GameState {
         if gate.ready {
             self.enter_online_playing_session();
         }
+        self.refresh_online_playable_session_status();
     }
 
     fn close_online_multiplayer_menu(&mut self) {
@@ -11041,6 +11160,113 @@ mod tests {
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
         );
+    }
+
+    #[test]
+    fn playable_session_status_tracks_host_join_ready_and_playing_phases() {
+        let mut host = GameState::new();
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        host.online_session_state = OnlineSessionUxState::Hosting;
+        let hosting = OnlinePlayableSessionStatus::from_game(&host);
+        assert_eq!(hosting.phase, OnlinePlayableSessionPhase::HostWaiting);
+        assert!(hosting.host_from_ui);
+        assert!(!hosting.joined_from_ui);
+        assert!(!hosting.both_entered_gameplay);
+        assert_eq!(
+            hosting.blocker,
+            Some(OnlineGameplayStartBlocker::NotConnected)
+        );
+
+        let mut client = GameState::new();
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_local_ready = true;
+        client.online_remote_player_connected = true;
+        client.online_remote_player_ready = false;
+        let joined = OnlinePlayableSessionStatus::from_game(&client);
+        assert_eq!(joined.phase, OnlinePlayableSessionPhase::JoinedWaiting);
+        assert!(joined.joined_from_ui);
+        assert_eq!(
+            joined.blocker,
+            Some(OnlineGameplayStartBlocker::RemoteNotReady)
+        );
+
+        client.online_remote_player_ready = true;
+        let ready = OnlinePlayableSessionStatus::from_game(&client);
+        assert_eq!(ready.phase, OnlinePlayableSessionPhase::ReadyToStart);
+        assert!(ready.status.contains("start_ready=yes"));
+
+        client.request_online_gameplay_start();
+        let playing = OnlinePlayableSessionStatus::from_game(&client);
+        assert_eq!(playing.phase, OnlinePlayableSessionPhase::Playing);
+        assert!(playing.both_entered_gameplay);
+        assert!(
+            client
+                .online_last_playable_session_status
+                .contains("phase=Playing")
+        );
+    }
+
+    #[test]
+    fn playable_session_status_tracks_gameplay_sync_evidence_for_mvp_loop() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.run_mode = RunMode::Playing;
+        game.modal = None;
+        game.online_host_owns_save = false;
+        game.online_player_slot = Some(2);
+
+        let empty = OnlinePlayableSessionStatus::from_game(&game);
+        assert_eq!(empty.phase, OnlinePlayableSessionPhase::Playing);
+        assert!(!empty.movement_visible);
+        assert!(!empty.terrain_or_cargo_visible);
+
+        game.apply_online_replicated_player_status(
+            "tick 2: applied player 1 pos=(1.0,2.0) fuel=99 hull=100 credits=3 cargo=1",
+        );
+        assert!(
+            game.online_last_playable_session_status
+                .contains("movement=yes")
+        );
+        assert!(
+            game.online_last_playable_session_status
+                .contains("terrain_or_cargo=yes")
+        );
+
+        game.apply_online_terrain_status("applied chunk (0,0) rev 4: 5 visible tiles");
+        let synced = OnlinePlayableSessionStatus::from_game(&game);
+        assert!(synced.movement_visible);
+        assert!(synced.terrain_or_cargo_visible);
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online playable session gate")
+                    && line.contains("phase=Playing"))
+        );
+    }
+
+    #[test]
+    fn playable_session_status_reports_not_started_blocked_and_ended_states() {
+        let idle = GameState::new();
+        let not_started = OnlinePlayableSessionStatus::from_game(&idle);
+        assert_eq!(not_started.phase, OnlinePlayableSessionPhase::NotStarted);
+        assert_eq!(
+            not_started.blocker,
+            Some(OnlineGameplayStartBlocker::NotConnected)
+        );
+
+        let mut reconnecting = GameState::new();
+        reconnecting.online_session_state = OnlineSessionUxState::Reconnecting;
+        let blocked = OnlinePlayableSessionStatus::from_game(&reconnecting);
+        assert_eq!(blocked.phase, OnlinePlayableSessionPhase::Blocked);
+
+        let mut ended = GameState::new();
+        ended.online_session_state = OnlineSessionUxState::Shutdown;
+        let shutdown = OnlinePlayableSessionStatus::from_game(&ended);
+        assert_eq!(shutdown.phase, OnlinePlayableSessionPhase::Ended);
+        assert!(shutdown.status.contains("phase=Ended"));
     }
 
     #[test]
