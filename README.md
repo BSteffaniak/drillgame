@@ -125,7 +125,9 @@ Use these commands when testing two instances on the same LAN/VPN. Replace `192.
 ### Direct-connect save/session behavior
 
 - The host owns the authoritative online session and is the only peer allowed to write local saves during an online session.
-- Joined clients are blocked from local save writes and should rely on the host-owned session/save.
+- Host-owned sessions keep local save, load, and dirty Save+Exit behavior available to the host.
+- Joined clients are blocked from local save writes and local loads while connected to a host-owned online session.
+- If a joined client has unsaved local changes, Save+Exit is blocked because the host owns the online save; the client must cancel or discard rather than writing a local save.
 - Shutting down an online session does not clear local unsaved-change state; save prompts and dirty-save behavior remain local UI responsibilities.
 - Host migration is not supported. If the host leaves, the direct-connect session ends and players must start/join a new session.
 
