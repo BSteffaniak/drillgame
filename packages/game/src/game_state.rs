@@ -278,6 +278,68 @@ pub enum OnlineAddressEditTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineAddressValidationSeverity {
+    Accepted,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineAddressValidation {
+    pub severity: OnlineAddressValidationSeverity,
+    pub target: OnlineAddressEditTarget,
+    pub address: Option<SocketAddr>,
+    pub message: String,
+}
+
+impl OnlineAddressValidation {
+    #[must_use]
+    pub fn accepted(target: OnlineAddressEditTarget, address: SocketAddr) -> Self {
+        Self {
+            severity: OnlineAddressValidationSeverity::Accepted,
+            target,
+            address: Some(address),
+            message: format!(
+                "{} address accepted: {address}",
+                GameState::online_address_edit_target_label(target)
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn warning(
+        target: OnlineAddressEditTarget,
+        address: SocketAddr,
+        message: String,
+    ) -> Self {
+        Self {
+            severity: OnlineAddressValidationSeverity::Warning,
+            target,
+            address: Some(address),
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn error(target: OnlineAddressEditTarget, message: String) -> Self {
+        Self {
+            severity: OnlineAddressValidationSeverity::Error,
+            target,
+            address: None,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_accepted(&self) -> bool {
+        matches!(
+            self.severity,
+            OnlineAddressValidationSeverity::Accepted | OnlineAddressValidationSeverity::Warning
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineSaveAuthority {
     LocalPlayer,
     RemoteHost,
@@ -3426,6 +3488,7 @@ impl GameState {
             "Descriptor file: {} | inspect before join: yes | share after host publish: yes",
             self.online_descriptor_path.display()
         ));
+        lines.push(self.online_address_guidance_line());
         lines.push(self.online_session_status_message.clone());
         lines.push(format!(
             "Online diagnostics: controller={}, last tick={}",
@@ -3815,7 +3878,7 @@ impl GameState {
             self.online_host_advertise_addr = default_online_host_advertise_addr();
         }
         self.online_session_status_message = format!(
-            "Host address preset selected: bind {}, advertise {}",
+            "Host address preset selected: bind {}, advertise {}. Share the advertised address/descriptor with joiners; use 0.0.0.0 bind for LAN/VPN hosting.",
             self.online_host_bind_addr, self.online_host_advertise_addr
         );
     }
@@ -3912,32 +3975,106 @@ impl GameState {
         }
     }
 
+    fn online_address_guidance_line(&self) -> String {
+        format!(
+            "Address guidance: host bind listens locally; host advertise is what friends type; client bind is this machine's UDP socket. Current bind {}, advertise {}, client {}.",
+            self.online_host_bind_addr,
+            self.online_host_advertise_addr,
+            self.online_client_bind_addr
+        )
+    }
+
+    fn validate_online_address_edit(
+        target: OnlineAddressEditTarget,
+        raw_text: &str,
+    ) -> OnlineAddressValidation {
+        let trimmed = raw_text.trim();
+        if trimmed.is_empty() {
+            return OnlineAddressValidation::error(
+                target,
+                format!(
+                    "Invalid {} address: enter a host:port such as 0.0.0.0:5000 or 192.168.1.10:5000.",
+                    Self::online_address_edit_target_label(target)
+                ),
+            );
+        }
+        let Ok(address) = trimmed.parse::<SocketAddr>() else {
+            return OnlineAddressValidation::error(
+                target,
+                format!(
+                    "Invalid {} address `{trimmed}`: use host:port, for example 0.0.0.0:5000, 127.0.0.1:5000, or [::1]:5000.",
+                    Self::online_address_edit_target_label(target)
+                ),
+            );
+        };
+        if address.port() == 0
+            && !matches!(
+                target,
+                OnlineAddressEditTarget::HostBind | OnlineAddressEditTarget::ClientBind
+            )
+        {
+            return OnlineAddressValidation::error(
+                target,
+                format!(
+                    "Invalid {} address `{address}`: advertised addresses need a real port, not :0.",
+                    Self::online_address_edit_target_label(target)
+                ),
+            );
+        }
+        let ip = address.ip();
+        if matches!(target, OnlineAddressEditTarget::HostAdvertise) && ip.is_unspecified() {
+            return OnlineAddressValidation::warning(
+                target,
+                address,
+                format!(
+                    "Host advertise address `{address}` uses a wildcard IP. LAN/VPN joiners usually need this machine's reachable IP and a nonzero port."
+                ),
+            );
+        }
+        if matches!(target, OnlineAddressEditTarget::HostAdvertise) && ip.is_loopback() {
+            return OnlineAddressValidation::warning(
+                target,
+                address,
+                format!(
+                    "Host advertise address `{address}` is loopback; only clients on this same machine can join. Use a LAN/VPN IP for another computer."
+                ),
+            );
+        }
+        if matches!(target, OnlineAddressEditTarget::HostBind)
+            && !ip.is_unspecified()
+            && !ip.is_loopback()
+        {
+            return OnlineAddressValidation::warning(
+                target,
+                address,
+                format!(
+                    "Host bind address `{address}` is specific to one interface. Use 0.0.0.0:{port} to listen on all IPv4 interfaces if LAN players cannot connect.",
+                    port = address.port()
+                ),
+            );
+        }
+        OnlineAddressValidation::accepted(target, address)
+    }
+
+    fn apply_online_address_validation(&mut self, validation: OnlineAddressValidation) {
+        if validation.is_accepted() {
+            let address = validation.address.expect("accepted address has value");
+            match validation.target {
+                OnlineAddressEditTarget::HostBind => self.online_host_bind_addr = address,
+                OnlineAddressEditTarget::HostAdvertise => self.online_host_advertise_addr = address,
+                OnlineAddressEditTarget::ClientBind => self.online_client_bind_addr = address,
+            }
+        }
+        self.online_session_status_message = validation.message;
+    }
+
     fn commit_online_address_edit(&mut self) {
         let Some(target) = self.online_address_edit_target else {
             return;
         };
-        let trimmed = self.online_address_edit_draft.trim();
-        match trimmed.parse::<SocketAddr>() {
-            Ok(address) => {
-                match target {
-                    OnlineAddressEditTarget::HostBind => self.online_host_bind_addr = address,
-                    OnlineAddressEditTarget::HostAdvertise => {
-                        self.online_host_advertise_addr = address;
-                    }
-                    OnlineAddressEditTarget::ClientBind => self.online_client_bind_addr = address,
-                }
-                self.online_session_status_message = format!(
-                    "{} address set from typed input: {address}",
-                    Self::online_address_edit_target_label(target)
-                );
-            }
-            Err(error) => {
-                self.online_session_status_message = format!(
-                    "Invalid {} address `{trimmed}`: {error}",
-                    Self::online_address_edit_target_label(target)
-                );
-            }
-        }
+        let validation =
+            Self::validate_online_address_edit(target, &self.online_address_edit_draft);
+        self.apply_online_address_validation(validation);
         self.online_address_edit_target = None;
         self.online_address_edit_draft.clear();
     }
@@ -3982,6 +4119,11 @@ impl GameState {
                 "Editing {} address: {}",
                 Self::online_address_edit_target_label(target),
                 self.online_address_edit_draft
+            );
+        } else if let Some(character) = input.text_input {
+            self.online_session_status_message = format!(
+                "Ignored invalid {} address character `{character}`. Use digits, '.', ':', '[', and ']'.",
+                Self::online_address_edit_target_label(target)
             );
         } else {
             return false;
@@ -8827,6 +8969,164 @@ mod tests {
             game.message
                 .contains("Descriptor path set from typed input")
         );
+    }
+
+    #[test]
+    fn online_modal_rejects_invalid_advertise_port_and_keeps_previous_address() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 6;
+        let previous = game.online_host_advertise_addr;
+
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft = "127.0.0.1:0".to_owned();
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+
+        assert_eq!(game.online_host_advertise_addr, previous);
+        assert_eq!(game.online_address_edit_target, None);
+        assert!(
+            game.message
+                .contains("advertised addresses need a real port")
+        );
+    }
+
+    #[test]
+    fn online_modal_warns_for_loopback_and_wildcard_advertise_addresses() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 6;
+
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft = "127.0.0.1:5001".to_owned();
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_host_advertise_addr,
+            "127.0.0.1:5001".parse::<SocketAddr>().expect("socket addr")
+        );
+        assert!(game.message.contains("only clients on this same machine"));
+
+        game.selected_menu_item = 6;
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft = "0.0.0.0:5001".to_owned();
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_host_advertise_addr,
+            "0.0.0.0:5001".parse::<SocketAddr>().expect("socket addr")
+        );
+        assert!(game.message.contains("wildcard IP"));
+    }
+
+    #[test]
+    fn online_modal_warns_for_interface_specific_host_bind_and_rejects_bad_characters() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 5;
+
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        game.online_address_edit_draft = "192.168.1.44:5001".to_owned();
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert_eq!(
+            game.online_host_bind_addr,
+            "192.168.1.44:5001"
+                .parse::<SocketAddr>()
+                .expect("socket addr")
+        );
+        assert!(game.message.contains("specific to one interface"));
+
+        game.selected_menu_item = 5;
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        let before = game.online_address_edit_draft.clone();
+        assert!(game.handle_modal(PlayerInput {
+            text_input: Some('x'),
+            ..PlayerInput::default()
+        }));
+        assert_eq!(game.online_address_edit_draft, before);
+        assert!(
+            game.message
+                .contains("Ignored invalid host bind address character")
+        );
+    }
+
+    #[test]
+    fn online_status_lines_explain_address_roles_for_lan_and_vpn_setup() {
+        let game = GameState::new();
+        let lines = game.online_multiplayer_status_lines();
+
+        assert!(lines.iter().any(|line| line.contains("Address guidance")
+            && line.contains("host bind listens locally")
+            && line.contains("host advertise is what friends type")
+            && line.contains("client bind is this machine")));
+        assert!(
+            lines.iter().any(|line| line.contains("Host flow")
+                && line.contains("share the generated descriptor"))
+        );
+    }
+
+    #[test]
+    fn online_address_validator_describes_errors_warnings_and_acceptance() {
+        let invalid = GameState::validate_online_address_edit(
+            OnlineAddressEditTarget::HostAdvertise,
+            "not-an-address",
+        );
+        assert_eq!(invalid.severity, OnlineAddressValidationSeverity::Error);
+        assert!(invalid.message.contains("use host:port"));
+
+        let advertise_zero = GameState::validate_online_address_edit(
+            OnlineAddressEditTarget::HostAdvertise,
+            "127.0.0.1:0",
+        );
+        assert_eq!(
+            advertise_zero.severity,
+            OnlineAddressValidationSeverity::Error
+        );
+        assert!(advertise_zero.message.contains("real port"));
+
+        let client_ephemeral = GameState::validate_online_address_edit(
+            OnlineAddressEditTarget::ClientBind,
+            "0.0.0.0:0",
+        );
+        assert_eq!(
+            client_ephemeral.severity,
+            OnlineAddressValidationSeverity::Accepted
+        );
+        assert!(client_ephemeral.is_accepted());
+
+        let loopback_advertise = GameState::validate_online_address_edit(
+            OnlineAddressEditTarget::HostAdvertise,
+            "127.0.0.1:5000",
+        );
+        assert_eq!(
+            loopback_advertise.severity,
+            OnlineAddressValidationSeverity::Warning
+        );
+        assert!(loopback_advertise.message.contains("same machine"));
     }
 
     #[test]
