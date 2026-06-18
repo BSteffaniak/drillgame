@@ -262,6 +262,79 @@ impl CosmeticRigSkin {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "live verification status reports independent gameplay-system evidence flags"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLiveVerificationStatus {
+    pub movement_visible: bool,
+    pub terrain_visible: bool,
+    pub cargo_economy_visible: bool,
+    pub survival_visible: bool,
+    pub inventory_visible: bool,
+    pub ready_start_visible: bool,
+    pub session_boundary_visible: bool,
+    pub status: String,
+}
+
+impl OnlineLiveVerificationStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let movement_visible = !game.online_last_replicated_player_status.is_empty()
+            || !game.online_remote_player_snapshots.is_empty();
+        let terrain_visible = !game.online_last_terrain_status.is_empty()
+            || game.online_last_sync_loop_status.contains("terrain");
+        let cargo_economy_visible = game.online_last_replicated_player_status.contains("cargo=")
+            || game
+                .online_last_replicated_player_status
+                .contains("credits=")
+            || game.online_last_sync_loop_status.contains("cargo=yes");
+        let survival_visible = game.online_last_replicated_player_status.contains("fuel=")
+            || game.online_last_replicated_player_status.contains("hull=");
+        let inventory_visible = !game.rig_part_inventory.is_empty()
+            || !game.equipped_rig_parts.is_empty()
+            || !game.cosmetic_skins.is_empty()
+            || !game.challenge_badges.is_empty();
+        let start_gate = game.online_gameplay_start_gate();
+        let ready_start_visible = start_gate.ready
+            || matches!(
+                start_gate.blocker,
+                Some(
+                    OnlineGameplayStartBlocker::NotConnected
+                        | OnlineGameplayStartBlocker::RemoteNotConnected
+                        | OnlineGameplayStartBlocker::LocalNotReady
+                        | OnlineGameplayStartBlocker::RemoteNotReady,
+                )
+            );
+        let session_boundary_visible = !game.online_last_session_boundary_status.is_empty();
+        let status = format!(
+            "Online live verification: movement={} terrain={} cargo_economy={} survival={} inventory={} ready_start={} session_boundary={}",
+            yes_no(movement_visible),
+            yes_no(terrain_visible),
+            yes_no(cargo_economy_visible),
+            yes_no(survival_visible),
+            yes_no(inventory_visible),
+            yes_no(ready_start_visible),
+            yes_no(session_boundary_visible)
+        );
+        Self {
+            movement_visible,
+            terrain_visible,
+            cargo_economy_visible,
+            survival_visible,
+            inventory_visible,
+            ready_start_visible,
+            session_boundary_visible,
+            status,
+        }
+    }
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineOwnershipStatus {
     pub identity: String,
@@ -3225,6 +3298,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_ownership_status: String,
     #[serde(default)]
+    pub online_last_live_verification_status: String,
+    #[serde(default)]
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
@@ -3480,6 +3555,7 @@ impl GameState {
             online_last_session_boundary_status: String::new(),
             online_last_failure_status: String::new(),
             online_last_ownership_status: String::new(),
+            online_last_live_verification_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
             local_multiplayer_requested: false,
@@ -3902,7 +3978,7 @@ impl GameState {
                 OnlineTaskResultTransitionKind::Shutdown
             }
         };
-        self.refresh_online_ownership_status();
+        self.refresh_online_runtime_statuses();
         OnlineTaskResultTransition::from_game(
             transition_kind,
             self,
@@ -3924,7 +4000,7 @@ impl GameState {
         }
         self.online_session_status_message = snapshot.status_message;
         self.message = self.online_session_status_message.clone();
-        self.refresh_online_ownership_status();
+        self.refresh_online_runtime_statuses();
     }
 
     pub fn apply_online_remote_identity(
@@ -3963,14 +4039,17 @@ impl GameState {
 
     pub fn apply_online_replication_status(&mut self, status: impl Into<String>) {
         self.online_last_replication_status = status.into();
+        self.refresh_online_live_verification_status();
     }
 
     pub fn apply_online_replicated_player_status(&mut self, status: impl Into<String>) {
         self.online_last_replicated_player_status = status.into();
+        self.refresh_online_live_verification_status();
     }
 
     pub fn apply_online_terrain_status(&mut self, status: impl Into<String>) {
         self.online_last_terrain_status = status.into();
+        self.refresh_online_live_verification_status();
     }
 
     pub fn apply_online_authority_correction_status(
@@ -3984,6 +4063,7 @@ impl GameState {
 
     pub fn apply_online_sync_loop_status(&mut self, status: OnlineSyncLoopStatus) {
         self.online_last_sync_loop_status = status.status;
+        self.refresh_online_live_verification_status();
     }
 
     pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
@@ -3996,7 +4076,7 @@ impl GameState {
         self.online_session_status_message
             .clone_from(&status.player_message);
         self.message.clone_from(&self.online_session_status_message);
-        self.refresh_online_ownership_status();
+        self.refresh_online_runtime_statuses();
     }
 
     pub fn apply_online_failure_status(&mut self, status: &OnlineFailureStatus) {
@@ -4004,11 +4084,21 @@ impl GameState {
         self.online_session_status_message
             .clone_from(&status.player_message);
         self.message.clone_from(&self.online_session_status_message);
-        self.refresh_online_ownership_status();
+        self.refresh_online_runtime_statuses();
     }
 
     pub fn refresh_online_ownership_status(&mut self) {
         self.online_last_ownership_status = OnlineOwnershipStatus::from_game(self).status_line();
+    }
+
+    pub fn refresh_online_live_verification_status(&mut self) {
+        self.online_last_live_verification_status =
+            OnlineLiveVerificationStatus::from_game(self).status;
+    }
+
+    pub fn refresh_online_runtime_statuses(&mut self) {
+        self.refresh_online_ownership_status();
+        self.refresh_online_live_verification_status();
     }
 
     pub fn clear_online_diagnostics(&mut self) {
@@ -4020,6 +4110,7 @@ impl GameState {
         self.online_last_authority_status.clear();
         self.online_last_correction_status.clear();
         self.online_last_sync_loop_status.clear();
+        self.online_last_live_verification_status.clear();
     }
 
     #[allow(
@@ -4225,6 +4316,11 @@ impl GameState {
                 self.online_last_failure_status.as_str()
             }
         ));
+        lines.push(if self.online_last_live_verification_status.is_empty() {
+            OnlineLiveVerificationStatus::from_game(self).status
+        } else {
+            self.online_last_live_verification_status.clone()
+        });
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
             self.rig_part_inventory.len(),
@@ -10471,6 +10567,89 @@ mod tests {
             game.online_last_session_boundary_status
                 .contains("LocalShutdownRequested")
         );
+    }
+
+    #[test]
+    fn live_verification_status_reports_visible_online_gameplay_systems() {
+        let mut game = GameState::new();
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.apply_online_replicated_player_status(
+            "tick 5: applied player 2 pos=(10.0,20.0) fuel=80 hull=90 credits=123 cargo=4",
+        );
+        game.apply_online_terrain_status("applied chunk (0,0) rev 2: 3 visible tiles");
+        game.apply_online_sync_loop_status(OnlineSyncLoopStatus::snapshot(2, true));
+        game.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::client_left(
+            "test boundary",
+        ));
+
+        let status = OnlineLiveVerificationStatus::from_game(&game);
+        assert!(status.movement_visible);
+        assert!(status.terrain_visible);
+        assert!(status.cargo_economy_visible);
+        assert!(status.survival_visible);
+        assert!(status.ready_start_visible);
+        assert!(status.session_boundary_visible);
+        assert!(status.status.contains("movement=yes"));
+        assert!(status.status.contains("cargo_economy=yes"));
+        assert!(status.status.contains("session_boundary=yes"));
+    }
+
+    #[test]
+    fn live_verification_status_is_exposed_and_refreshed_by_runtime_diagnostics() {
+        let mut game = GameState::new();
+        game.apply_online_replicated_player_status(
+            "tick 7: applied player 1 pos=(1.0,2.0) fuel=60 hull=70 credits=8 cargo=1",
+        );
+        assert!(
+            game.online_last_live_verification_status
+                .contains("movement=yes")
+        );
+        assert!(
+            game.online_last_live_verification_status
+                .contains("survival=yes")
+        );
+        assert!(
+            game.online_last_live_verification_status
+                .contains("cargo_economy=yes")
+        );
+
+        let lines = game.online_multiplayer_status_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Online live verification")
+                    && line.contains("movement=yes")
+                    && line.contains("survival=yes"))
+        );
+
+        game.clear_online_diagnostics();
+        assert!(game.online_last_live_verification_status.is_empty());
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Online live verification")
+                    && line.contains("movement=no"))
+        );
+    }
+
+    #[test]
+    fn live_verification_status_tracks_ready_start_gate_before_gameplay() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_remote_player_connected = true;
+        game.online_local_ready = false;
+        game.online_remote_player_ready = true;
+        let blocked = OnlineLiveVerificationStatus::from_game(&game);
+        assert!(blocked.ready_start_visible);
+        assert!(blocked.status.contains("ready_start=yes"));
+
+        game.online_local_ready = true;
+        let ready = OnlineLiveVerificationStatus::from_game(&game);
+        assert!(ready.ready_start_visible);
+        assert!(game.online_gameplay_start_gate().ready);
     }
 
     #[test]
