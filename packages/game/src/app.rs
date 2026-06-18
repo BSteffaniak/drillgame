@@ -1079,6 +1079,12 @@ mod tests {
             host_player.fuel = 321.0;
             host_player.hull = 654.0;
             host_player.credits = 999;
+            host_player
+                .cargo
+                .insert(crate::terrain::MineralKind::Copper, 3);
+            host_player
+                .cargo
+                .insert(crate::terrain::MineralKind::Gold, 2);
         }
         host_session
             .world_mut()
@@ -1147,6 +1153,23 @@ mod tests {
         assert!((join_session.game().player.fuel - 321.0).abs() < f32::EPSILON);
         assert!((join_session.game().player.hull - 654.0).abs() < f32::EPSILON);
         assert_eq!(join_session.game().player.credits, 999);
+        assert_eq!(
+            join_session
+                .game()
+                .player
+                .cargo
+                .get(&crate::terrain::MineralKind::Copper),
+            Some(&3)
+        );
+        assert_eq!(
+            join_session
+                .game()
+                .player
+                .cargo
+                .get(&crate::terrain::MineralKind::Gold),
+            Some(&2)
+        );
+        assert_eq!(join_session.game().player.cargo_used(), 5);
         assert!((join_session.game().scanner_cooldown_seconds - 3.5).abs() < f32::EPSILON);
         assert_eq!(join_session.game().online_remote_player_snapshots.len(), 1);
         let remote_player = &join_session.game().online_remote_player_snapshots[0];
@@ -1154,12 +1177,23 @@ mod tests {
         assert!((remote_player.x - 123.0).abs() < f32::EPSILON);
         assert!((remote_player.y - 456.0).abs() < f32::EPSILON);
         assert_eq!(remote_player.credits, 999);
+        assert_eq!(remote_player.cargo_used, 5);
+        assert_eq!(
+            remote_player
+                .cargo
+                .get(&crate::terrain::MineralKind::Copper),
+            Some(&3)
+        );
         assert!(
             join_session
                 .game()
                 .online_multiplayer_status_lines()
                 .iter()
-                .any(|line| line.contains("Remote snapshot players") && line.contains("p1"))
+                .any(|line| {
+                    line.contains("Remote snapshot players")
+                        && line.contains("p1")
+                        && line.contains("Copperx3")
+                })
         );
         assert!(
             join_session

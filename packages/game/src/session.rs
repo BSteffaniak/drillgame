@@ -23,7 +23,10 @@ use crate::{
     player::Player,
     rendering::render_camera,
     save::SettingsFile,
-    terrain::{MineResult, Terrain, TileKind, TilePosition},
+    terrain::{
+        ArtifactKind, MineResult, MineralKind, StrategicResourceKind, Terrain, TileKind,
+        TilePosition,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -479,6 +482,9 @@ pub struct PlayerSnapshot {
     pub hull: f32,
     pub credits: u32,
     pub cargo_used: u32,
+    pub cargo: BTreeMap<MineralKind, u32>,
+    pub artifacts: BTreeMap<ArtifactKind, u32>,
+    pub materials: BTreeMap<StrategicResourceKind, u32>,
     pub scanner_cooldown_seconds: f32,
 }
 
@@ -495,6 +501,9 @@ impl PlayerSnapshot {
             hull: player.hull,
             credits: player.credits,
             cargo_used: player.cargo_used(),
+            cargo: player.cargo.clone(),
+            artifacts: player.artifacts.clone(),
+            materials: player.materials.clone(),
             scanner_cooldown_seconds: 0.0,
         }
     }
@@ -614,6 +623,9 @@ impl WorldSnapshot {
                     hull: player.hull,
                     credits: player.credits,
                     cargo_used: player.cargo_used,
+                    cargo: player.cargo.clone(),
+                    artifacts: player.artifacts.clone(),
+                    materials: player.materials.clone(),
                     scanner_cooldown_seconds: player.scanner_cooldown_seconds,
                 })
                 .collect(),
@@ -3384,6 +3396,9 @@ impl ClientPredictionState {
             hull: 1.0,
             credits: 0,
             cargo_used: 0,
+            cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+            materials: BTreeMap::new(),
             scanner_cooldown_seconds: 0.0,
         };
         let replay = Self::replay_unacknowledged_movement(&authoritative, self.replay_commands());
@@ -5075,7 +5090,7 @@ impl Default for GameSession {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::BTreeMap, time::Duration};
 
     use crate::{
         game_state::{
@@ -5219,6 +5234,9 @@ mod tests {
                 hull: 1.0,
                 credits: 0,
                 cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
                 scanner_cooldown_seconds: 0.0,
             });
         let plan = session.render_frame_plan();
@@ -5247,6 +5265,9 @@ mod tests {
                 hull: 1.0,
                 credits: 0,
                 cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
                 scanner_cooldown_seconds: 0.0,
             });
         let frame_plan = session.render_frame_plan();
@@ -5518,11 +5539,14 @@ mod tests {
             hull: 1.0,
             credits: 0,
             cargo_used: 0,
+            cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+            materials: BTreeMap::new(),
             scanner_cooldown_seconds: 0.0,
         };
         let next = super::PlayerSnapshot {
             x: 10.0,
-            ..previous
+            ..previous.clone()
         };
         let interpolated = super::ClientPredictionState::remote_player_presentation(
             &previous,
@@ -5632,6 +5656,9 @@ mod tests {
                 hull: 1.0,
                 credits: 0,
                 cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
                 scanner_cooldown_seconds: 0.0,
             });
         {
@@ -6553,6 +6580,9 @@ mod tests {
             hull: 4.0,
             credits: 6,
             cargo_used: 0,
+            cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+            materials: BTreeMap::new(),
             scanner_cooldown_seconds: 0.0,
         });
 
@@ -6610,6 +6640,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "broad prediction presentation regression covers local reconciliation and remote projection together"
+    )]
     fn prediction_state_projects_local_reconciliation_and_remote_presentation() {
         let previous = super::PlayerSnapshot {
             player_id: LOCAL_PLAYER_ID,
@@ -6621,12 +6655,15 @@ mod tests {
             hull: 4.0,
             credits: 6,
             cargo_used: 0,
+            cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+            materials: BTreeMap::new(),
             scanner_cooldown_seconds: 0.0,
         };
         let next = super::PlayerSnapshot {
             x: 20.0,
             y: 30.0,
-            ..previous
+            ..previous.clone()
         };
 
         let predicted = super::ClientPredictionState::predict_local_movement(&previous, 0.5);
@@ -7970,6 +8007,9 @@ mod tests {
             hull: 10.0,
             credits: 100,
             cargo_used: 0,
+            cargo: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+            materials: BTreeMap::new(),
             scanner_cooldown_seconds: 0.0,
         };
         let commands = vec![

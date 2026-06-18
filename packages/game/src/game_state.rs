@@ -1591,7 +1591,10 @@ fn live_player_network_snapshot(
             fuel: game.player.fuel,
             hull: game.player.hull,
             credits: game.player.credits,
-            cargo_used: game.player.cargo.values().copied().sum(),
+            cargo_used: game.player.cargo_used(),
+            cargo: game.player.cargo.clone(),
+            artifacts: game.player.artifacts.clone(),
+            materials: game.player.materials.clone(),
             scanner_cooldown_seconds: 0.0,
         }],
     }
@@ -1631,6 +1634,34 @@ fn network_terrain_chunk_tiles(
         }
     }
     tiles
+}
+
+fn online_cargo_manifest_summary(
+    cargo: &std::collections::BTreeMap<crate::terrain::MineralKind, u32>,
+    artifacts: &std::collections::BTreeMap<crate::terrain::ArtifactKind, u32>,
+    materials: &std::collections::BTreeMap<crate::terrain::StrategicResourceKind, u32>,
+) -> String {
+    let mut entries = Vec::new();
+    entries.extend(
+        cargo
+            .iter()
+            .map(|(kind, count)| format!("{kind:?}x{count}")),
+    );
+    entries.extend(
+        artifacts
+            .iter()
+            .map(|(kind, count)| format!("{kind:?}x{count}")),
+    );
+    entries.extend(
+        materials
+            .iter()
+            .map(|(kind, count)| format!("{kind:?}x{count}")),
+    );
+    if entries.is_empty() {
+        "empty".to_owned()
+    } else {
+        entries.join(",")
+    }
 }
 
 fn apply_network_terrain_chunk_to_game(
@@ -1693,12 +1724,15 @@ fn apply_network_snapshot_remote_players(
             hull: player.hull,
             credits: player.credits,
             cargo_used: player.cargo_used,
+            cargo: player.cargo.clone(),
+            artifacts: player.artifacts.clone(),
+            materials: player.materials.clone(),
         })
         .collect();
     game.online_remote_player_connected = !game.online_remote_player_snapshots.is_empty();
 }
 
-const fn apply_network_player_snapshot_to_game(
+fn apply_network_player_snapshot_to_game(
     game: &mut GameState,
     snapshot: &crate::multiplayer::NetworkPlayerSnapshot,
 ) {
@@ -1709,6 +1743,9 @@ const fn apply_network_player_snapshot_to_game(
     game.player.fuel = snapshot.fuel;
     game.player.hull = snapshot.hull;
     game.player.credits = snapshot.credits;
+    game.player.cargo = snapshot.cargo.clone();
+    game.player.artifacts = snapshot.artifacts.clone();
+    game.player.materials = snapshot.materials.clone();
     game.scanner_cooldown_seconds = snapshot.scanner_cooldown_seconds;
     game.mark_full_terrain_refresh();
 }
@@ -2403,6 +2440,9 @@ pub struct OnlineRemotePlayerPresentation {
     pub hull: f32,
     pub credits: u32,
     pub cargo_used: u32,
+    pub cargo: std::collections::BTreeMap<crate::terrain::MineralKind, u32>,
+    pub artifacts: std::collections::BTreeMap<crate::terrain::ArtifactKind, u32>,
+    pub materials: std::collections::BTreeMap<crate::terrain::StrategicResourceKind, u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -3351,14 +3391,19 @@ impl GameState {
                 .iter()
                 .map(|player| {
                     format!(
-                        "p{} ({:.0},{:.0}) fuel {:.0} hull {:.0} cr {} cargo {}",
+                        "p{} ({:.0},{:.0}) fuel {:.0} hull {:.0} cr {} cargo {} [{}]",
                         player.player_id.get(),
                         player.x,
                         player.y,
                         player.fuel,
                         player.hull,
                         player.credits,
-                        player.cargo_used
+                        player.cargo_used,
+                        online_cargo_manifest_summary(
+                            &player.cargo,
+                            &player.artifacts,
+                            &player.materials
+                        )
                     )
                 })
                 .collect::<Vec<_>>()

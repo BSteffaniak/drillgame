@@ -1435,6 +1435,9 @@ impl QuinnOnlineSession {
             hull: authoritative.hull,
             credits: authoritative.credits,
             cargo_used: authoritative.cargo_used,
+            cargo: authoritative.cargo.clone(),
+            artifacts: authoritative.artifacts.clone(),
+            materials: authoritative.materials.clone(),
             scanner_cooldown_seconds: authoritative.scanner_cooldown_seconds,
         };
         let predicted = crate::session::PredictedMovement {
@@ -1659,6 +1662,9 @@ pub async fn local_online_smoke_summary() -> Result<LocalOnlineSmokeSummary, Qui
                     hull: 40.0,
                     credits: 7,
                     cargo_used: 0,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
                     scanner_cooldown_seconds: 0.0,
                 },
                 SimulationTick::new(204),
@@ -1756,6 +1762,9 @@ pub async fn local_online_soak_summary(
                         hull: 100.0,
                         credits: offset,
                         cargo_used: offset,
+                        cargo: BTreeMap::new(),
+                        artifacts: BTreeMap::new(),
+                        materials: BTreeMap::new(),
                         scanner_cooldown_seconds: 0.0,
                     }],
                 }),
@@ -1779,6 +1788,9 @@ pub async fn local_online_soak_summary(
                         hull: 95.0,
                         credits: offset,
                         cargo_used: offset,
+                        cargo: BTreeMap::new(),
+                        artifacts: BTreeMap::new(),
+                        materials: BTreeMap::new(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(tick + 3),
@@ -3390,6 +3402,9 @@ pub struct NetworkPlayerSnapshot {
     pub hull: f32,
     pub credits: u32,
     pub cargo_used: u32,
+    pub cargo: BTreeMap<crate::terrain::MineralKind, u32>,
+    pub artifacts: BTreeMap<crate::terrain::ArtifactKind, u32>,
+    pub materials: BTreeMap<crate::terrain::StrategicResourceKind, u32>,
     pub scanner_cooldown_seconds: f32,
 }
 
@@ -3970,6 +3985,8 @@ pub fn scaffolded_edge_case_proof() -> EdgeCaseProofSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         ClientId, ClientSessionRuntime, CommandAcceptance, CommandNetworkSession, CommandPacket,
         CommandSequenceTracker, CommandSource, FaithfulPacketIoSimulator, HostSessionRuntime,
@@ -4434,6 +4451,9 @@ mod tests {
                 hull: 88.0,
                 credits: 77,
                 cargo_used: 3,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
                 scanner_cooldown_seconds: 0.0,
             }],
         };
@@ -4591,6 +4611,9 @@ mod tests {
                     hull: 75.0,
                     credits: 10,
                     cargo_used: 1,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
                     scanner_cooldown_seconds: 0.0,
                 },
                 SimulationTick::new(91),
@@ -4652,6 +4675,9 @@ mod tests {
                         hull: 10.0,
                         credits: 0,
                         cargo_used: 0,
+                        cargo: BTreeMap::new(),
+                        artifacts: BTreeMap::new(),
+                        materials: BTreeMap::new(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(104),
@@ -4718,6 +4744,9 @@ mod tests {
                         hull: 30.0,
                         credits: 5,
                         cargo_used: 0,
+                        cargo: BTreeMap::new(),
+                        artifacts: BTreeMap::new(),
+                        materials: BTreeMap::new(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(124),
