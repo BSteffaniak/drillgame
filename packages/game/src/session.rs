@@ -4300,6 +4300,7 @@ impl GameSession {
             chunk_x: terrain_position.x,
             chunk_y: terrain_position.y,
             revision: recovery.recovered_revision().unwrap_or(known_revision),
+            tiles: Vec::new(),
         }
     }
 

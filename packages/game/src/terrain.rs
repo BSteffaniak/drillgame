@@ -368,6 +368,19 @@ impl Terrain {
         self.tile(position).map(|tile| tile_hardness(tile.kind))
     }
 
+    pub fn set_tile_from_network(
+        &mut self,
+        position: TilePosition,
+        kind: TileKind,
+        durability: u8,
+    ) -> bool {
+        let Some(index) = self.index(position) else {
+            return false;
+        };
+        self.tiles[index] = Tile { kind, durability };
+        true
+    }
+
     pub fn set_kind(&mut self, position: TilePosition, kind: TileKind) -> bool {
         let Some(index) = self.index(position) else {
             return false;

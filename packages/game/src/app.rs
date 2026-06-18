@@ -1083,6 +1083,14 @@ mod tests {
         host_session
             .world_mut()
             .set_scanner_cooldown_seconds(crate::multiplayer::LOCAL_PLAYER_ID, 3.5);
+        host_session.game_mut().terrain.set_kind(
+            crate::terrain::TilePosition { x: 18, y: 19 },
+            crate::terrain::TileKind::Lava,
+        );
+        join_session.game_mut().terrain.set_kind(
+            crate::terrain::TilePosition { x: 18, y: 19 },
+            crate::terrain::TileKind::Air,
+        );
         host_session.game_mut().online_local_ready = true;
         host_session.game_mut().run_mode = RunMode::Playing;
         host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS);
@@ -1169,7 +1177,23 @@ mod tests {
             join_session
                 .game()
                 .online_last_terrain_status
-                .contains("received chunk")
+                .contains("applied chunk")
+        );
+        assert_eq!(
+            join_session
+                .game()
+                .terrain
+                .tile(crate::terrain::TilePosition { x: 18, y: 19 })
+                .expect("replicated terrain tile exists")
+                .kind,
+            crate::terrain::TileKind::Lava
+        );
+        assert!(
+            join_session
+                .game()
+                .visual_changes
+                .changed_tiles
+                .contains(&crate::terrain::TilePosition { x: 18, y: 19 })
         );
         assert_eq!(
             join_session.game().online_diagnostic_controller_mode,

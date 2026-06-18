@@ -771,12 +771,14 @@ impl RealOnlineSessionController {
                     known_revision,
                 } => {
                     let revision = known_revision.saturating_add(1);
+                    let tiles = network_terrain_chunk_tiles(&game.terrain, chunk_x, chunk_y);
                     host_io
                         .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
                             crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
                                 chunk_x,
                                 chunk_y,
                                 revision,
+                                tiles,
                             },
                         ))
                         .await?;
@@ -1009,15 +1011,17 @@ impl RealOnlineSessionController {
                             chunk_x,
                             chunk_y,
                             revision,
+                            tiles,
                         } => {
-                            game.apply_online_terrain_status(format!(
-                                "received chunk ({chunk_x},{chunk_y}) rev {revision}"
-                            ));
+                            apply_network_terrain_chunk_to_game(
+                                game, chunk_x, chunk_y, revision, &tiles,
+                            );
                             client_runtime.handle_message(
                                 crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
                                     chunk_x,
                                     chunk_y,
                                     revision,
+                                    tiles,
                                 },
                             );
                         }
@@ -1281,6 +1285,7 @@ impl RealOnlineSessionController {
                 chunk_x,
                 chunk_y,
                 revision: response_revision,
+                tiles: Vec::new(),
             },
             other => {
                 return Err(crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other));
@@ -1599,6 +1604,72 @@ const fn is_allowed_descriptor_path_character(character: char) -> bool {
 
 const fn is_allowed_socket_address_character(character: char) -> bool {
     character.is_ascii_digit() || matches!(character, '.' | ':' | '[' | ']')
+}
+
+fn network_terrain_chunk_tiles(
+    terrain: &crate::terrain::Terrain,
+    chunk_x: i32,
+    chunk_y: i32,
+) -> Vec<crate::multiplayer::NetworkTerrainTile> {
+    const NETWORK_TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+    let start_x = chunk_x * NETWORK_TERRAIN_CHUNK_SIZE_TILES;
+    let start_y = chunk_y * NETWORK_TERRAIN_CHUNK_SIZE_TILES;
+    let end_x = (start_x + NETWORK_TERRAIN_CHUNK_SIZE_TILES).min(terrain.width());
+    let end_y = (start_y + NETWORK_TERRAIN_CHUNK_SIZE_TILES).min(terrain.height());
+    let mut tiles = Vec::new();
+    for y in start_y.max(0)..end_y.max(0) {
+        for x in start_x.max(0)..end_x.max(0) {
+            let position = TilePosition { x, y };
+            if let Some(tile) = terrain.tile(position) {
+                tiles.push(crate::multiplayer::NetworkTerrainTile {
+                    x,
+                    y,
+                    kind: tile.kind,
+                    durability: tile.durability,
+                });
+            }
+        }
+    }
+    tiles
+}
+
+fn apply_network_terrain_chunk_to_game(
+    game: &mut GameState,
+    chunk_x: i32,
+    chunk_y: i32,
+    revision: u64,
+    tiles: &[crate::multiplayer::NetworkTerrainTile],
+) {
+    let mut changed_tiles = Vec::new();
+    for tile in tiles {
+        let position = TilePosition {
+            x: tile.x,
+            y: tile.y,
+        };
+        if let Some(current) = game.terrain.tile(position)
+            && current.kind == tile.kind
+            && current.durability == tile.durability
+        {
+            continue;
+        }
+        if game
+            .terrain
+            .set_tile_from_network(position, tile.kind, tile.durability)
+        {
+            changed_tiles.push(position);
+        }
+    }
+    if changed_tiles.is_empty() {
+        game.apply_online_terrain_status(format!(
+            "received chunk ({chunk_x},{chunk_y}) rev {revision} with no visible tile changes"
+        ));
+    } else {
+        game.visual_changes.changed_tiles.extend(changed_tiles);
+        game.apply_online_terrain_status(format!(
+            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {} visible tiles",
+            tiles.len()
+        ));
+    }
 }
 
 fn apply_network_snapshot_remote_players(
@@ -8141,6 +8212,7 @@ mod tests {
             chunk_x: 4,
             chunk_y: 5,
             revision: 9,
+            tiles: Vec::new(),
         };
         assert_eq!(
             terrain_response.expect("host responds to terrain request"),
@@ -8187,6 +8259,7 @@ mod tests {
                 chunk_x: 42,
                 chunk_y: 17,
                 revision: 4,
+                tiles: Vec::new(),
             })
         );
         assert!(matches!(
@@ -8228,6 +8301,7 @@ mod tests {
                     chunk_x: 1,
                     chunk_y: 2,
                     revision: 3,
+                    tiles: Vec::new(),
                 },
             ),
             correction_summary: Some(SocketDrivenCorrectionSummary {

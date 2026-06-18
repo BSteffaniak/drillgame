@@ -919,6 +919,7 @@ async fn run_host_descriptor_file_packet_exchange(
                 chunk_x,
                 chunk_y,
                 revision: 1,
+                tiles: Vec::new(),
             },
         ))
         .await

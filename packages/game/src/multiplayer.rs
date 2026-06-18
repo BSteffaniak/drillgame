@@ -1394,6 +1394,7 @@ impl QuinnOnlineSession {
                     chunk_x,
                     chunk_y,
                     revision: response_revision,
+                    tiles: Vec::new(),
                 };
                 self.host_io
                     .send_packet(VersionedProtocolPacket::new(response.clone()))
@@ -3132,6 +3133,7 @@ pub fn recovery_coverage_summary() -> RecoveryCoverageSummary {
         chunk_x: 0,
         chunk_y: 0,
         revision: 2,
+        tiles: Vec::new(),
     });
     client.handle_message(ProtocolMessage::SnapshotKeyframe { snapshot });
     RecoveryCoverageSummary {
@@ -3156,6 +3158,7 @@ pub fn high_latency_simulation_summary() -> HighLatencySimulationSummary {
                 chunk_x: index,
                 chunk_y: 0,
                 revision: 1,
+                tiles: Vec::new(),
             },
         );
     }
@@ -3179,6 +3182,7 @@ pub fn packet_io_recovery_summary() -> PacketIoRecoverySummary {
         chunk_x: 2,
         chunk_y: 3,
         revision: 7,
+        tiles: Vec::new(),
     });
     io.send(ProtocolMessage::SnapshotKeyframe {
         snapshot: NetworkWorldSnapshot {
@@ -3355,6 +3359,14 @@ pub struct NetworkTerrainChunkRevision {
     pub revision: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkTerrainTile {
+    pub x: i32,
+    pub y: i32,
+    pub kind: crate::terrain::TileKind,
+    pub durability: u8,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum NetworkDeltaPayload {
     Noop,
@@ -3465,6 +3477,7 @@ pub enum ProtocolMessage {
         chunk_x: i32,
         chunk_y: i32,
         revision: u64,
+        tiles: Vec<NetworkTerrainTile>,
     },
 }
 
@@ -4458,6 +4471,7 @@ mod tests {
                 chunk_x: 4,
                 chunk_y: 7,
                 revision: 12,
+                tiles: Vec::new(),
             }
         );
         assert_eq!(session.client_runtime.pending_messages.len(), 1);
