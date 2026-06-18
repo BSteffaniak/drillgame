@@ -40,6 +40,8 @@ pub struct PlayerInput {
     pub place_pump: bool,
     pub place_processor: bool,
     pub exit_requested: bool,
+    pub text_input: Option<char>,
+    pub text_backspace: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -58,14 +60,17 @@ pub struct GamepadInputState {
 }
 
 #[must_use]
-pub fn read_input(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
+pub fn read_input(raylib: &mut RaylibHandle, exit_requested: bool) -> PlayerInput {
     let mut input = read_primary_keyboard_input(raylib);
     input.exit_requested = exit_requested;
     input
 }
 
 #[must_use]
-pub fn read_input_with_arrow_aliases(raylib: &RaylibHandle, exit_requested: bool) -> PlayerInput {
+pub fn read_input_with_arrow_aliases(
+    raylib: &mut RaylibHandle,
+    exit_requested: bool,
+) -> PlayerInput {
     let mut input = read_primary_keyboard_input_with_arrow_aliases(raylib);
     input.exit_requested = exit_requested;
     input
@@ -149,21 +154,23 @@ pub fn combine_player_input(primary: PlayerInput, secondary: PlayerInput) -> Pla
         place_pump: primary.place_pump || secondary.place_pump,
         place_processor: primary.place_processor || secondary.place_processor,
         exit_requested: primary.exit_requested || secondary.exit_requested,
+        text_input: primary.text_input.or(secondary.text_input),
+        text_backspace: primary.text_backspace || secondary.text_backspace,
     }
 }
 
 #[must_use]
-pub fn read_primary_keyboard_input(raylib: &RaylibHandle) -> PlayerInput {
+pub fn read_primary_keyboard_input(raylib: &mut RaylibHandle) -> PlayerInput {
     read_primary_keyboard_input_with_options(raylib, false)
 }
 
 #[must_use]
-pub fn read_primary_keyboard_input_with_arrow_aliases(raylib: &RaylibHandle) -> PlayerInput {
+pub fn read_primary_keyboard_input_with_arrow_aliases(raylib: &mut RaylibHandle) -> PlayerInput {
     read_primary_keyboard_input_with_options(raylib, true)
 }
 
 fn read_primary_keyboard_input_with_options(
-    raylib: &RaylibHandle,
+    raylib: &mut RaylibHandle,
     include_arrow_aliases: bool,
 ) -> PlayerInput {
     let left = raylib.is_key_down(KeyboardKey::KEY_A)
@@ -175,6 +182,7 @@ fn read_primary_keyboard_input_with_options(
         || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_UP));
     let down = raylib.is_key_down(KeyboardKey::KEY_S)
         || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_DOWN));
+    let text_input = raylib.get_char_pressed();
 
     PlayerInput {
         horizontal: horizontal_axis(left, right),
@@ -215,6 +223,8 @@ fn read_primary_keyboard_input_with_options(
         place_pump: raylib.is_key_pressed(KeyboardKey::KEY_O),
         place_processor: raylib.is_key_pressed(KeyboardKey::KEY_P),
         exit_requested: false,
+        text_input,
+        text_backspace: raylib.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
     }
 }
 
@@ -330,12 +340,14 @@ mod tests {
         let keyboard = PlayerInput {
             horizontal: -0.5,
             thrust: true,
+            text_input: Some('a'),
             ..PlayerInput::default()
         };
         let gamepad = PlayerInput {
             horizontal: 0.9,
             bomb: true,
             scan: true,
+            text_backspace: true,
             ..PlayerInput::default()
         };
 
@@ -345,6 +357,8 @@ mod tests {
         assert!(combined.thrust);
         assert!(combined.bomb);
         assert!(combined.scan);
+        assert_eq!(combined.text_input, Some('a'));
+        assert!(combined.text_backspace);
     }
 
     fn roughly_eq(left: f32, right: f32) -> bool {

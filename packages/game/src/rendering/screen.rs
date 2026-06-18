@@ -790,7 +790,7 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         "Host descriptor session",
         "Join descriptor session",
         "Reconnect",
-        "Cycle descriptor path (Left/Right)",
+        "Descriptor path (Enter edit, Left/Right presets)",
         "Inspect descriptor file",
         "Cycle host address preset (Left/Right)",
         "Cycle gameplay tick count (Left/Right)",

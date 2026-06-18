@@ -458,9 +458,9 @@ pub fn run() {
         let exit_requested = raylib.window_should_close();
         let split_screen_active = session.client_count() > 1;
         let input = if split_screen_active {
-            read_input(&raylib, exit_requested)
+            read_input(&mut raylib, exit_requested)
         } else {
-            read_input_with_arrow_aliases(&raylib, exit_requested)
+            read_input_with_arrow_aliases(&mut raylib, exit_requested)
         };
         let mapped_input = map_local_input(input);
         if mapped_input
@@ -494,9 +494,9 @@ pub fn run() {
                 .map_or(keyboard, |gamepad| combine_player_input(keyboard, gamepad))
         });
         let primary_input = if session.client_count() > 1 {
-            read_primary_keyboard_input(&raylib)
+            read_primary_keyboard_input(&mut raylib)
         } else {
-            read_primary_keyboard_input_with_arrow_aliases(&raylib)
+            read_primary_keyboard_input_with_arrow_aliases(&mut raylib)
         };
         for local_input in crate::input_mapping::local_split_screen_inputs(
             crate::multiplayer::LOCAL_CLIENT_ID,

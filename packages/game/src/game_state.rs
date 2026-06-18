@@ -1581,6 +1581,11 @@ fn live_player_network_snapshot(
     }
 }
 
+const fn is_allowed_descriptor_path_character(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(character, '/' | '\\' | '.' | '-' | '_' | ':' | ' ' | '~')
+}
+
 const fn apply_network_player_snapshot_to_game(
     game: &mut GameState,
     snapshot: &crate::multiplayer::NetworkPlayerSnapshot,
@@ -2312,6 +2317,10 @@ pub struct GameState {
     pub online_remote_player_connected: bool,
     #[serde(default = "default_online_descriptor_path")]
     pub online_descriptor_path: PathBuf,
+    #[serde(default)]
+    pub online_descriptor_path_editing: bool,
+    #[serde(default)]
+    pub online_descriptor_path_draft: String,
     #[serde(default = "default_online_host_bind_addr")]
     pub online_host_bind_addr: SocketAddr,
     #[serde(default = "default_online_host_advertise_addr")]
@@ -2566,6 +2575,8 @@ impl GameState {
             online_remote_player_ready: false,
             online_remote_player_connected: false,
             online_descriptor_path: default_online_descriptor_path(),
+            online_descriptor_path_editing: false,
+            online_descriptor_path_draft: String::new(),
             online_host_bind_addr: default_online_host_bind_addr(),
             online_host_advertise_addr: default_online_host_advertise_addr(),
             online_client_bind_addr: default_online_client_bind_addr(),
@@ -3200,6 +3211,12 @@ impl GameState {
             },
             if self.request_exit { "yes" } else { "no" }
         ));
+        if self.online_descriptor_path_editing {
+            lines.push(format!(
+                "Descriptor path edit: {}_",
+                self.online_descriptor_path_draft
+            ));
+        }
         lines.push(self.online_start_readiness_line());
         lines.push(self.online_save_policy_line());
         lines.extend(self.online_lobby_participant_lines());
@@ -3328,7 +3345,7 @@ impl GameState {
                 self.online_client_bind_addr,
                 self.online_gameplay_ticks
             ),
-            "Host flow: share the generated descriptor with the joining player after hosting starts.".to_owned(),
+            "Host flow: press Enter on descriptor path to type/edit it, then share the generated descriptor with the joining player after hosting starts.".to_owned(),
             format!(
                 "Host CLI helper: drillgame --online-host-gameplay-descriptor-file-on-addr {descriptor} {} {} {}",
                 self.online_host_bind_addr,
@@ -3497,6 +3514,65 @@ impl GameState {
         );
     }
 
+    fn start_online_descriptor_path_edit(&mut self) {
+        self.online_descriptor_path_editing = true;
+        self.online_descriptor_path_draft = self.online_descriptor_path.display().to_string();
+        "Editing descriptor path: type path, Backspace deletes, Enter accepts, Esc cancels."
+            .clone_into(&mut self.online_session_status_message);
+    }
+
+    fn commit_online_descriptor_path_edit(&mut self) {
+        let trimmed = self.online_descriptor_path_draft.trim();
+        if trimmed.is_empty() {
+            "Descriptor path cannot be empty; edit canceled."
+                .clone_into(&mut self.online_session_status_message);
+        } else {
+            self.online_descriptor_path = PathBuf::from(trimmed);
+            self.online_session_status_message = format!(
+                "Descriptor path set from typed input: {}",
+                self.online_descriptor_path.display()
+            );
+        }
+        self.online_descriptor_path_editing = false;
+    }
+
+    fn cancel_online_descriptor_path_edit(&mut self) {
+        self.online_descriptor_path_editing = false;
+        self.online_descriptor_path_draft.clear();
+        "Descriptor path edit canceled.".clone_into(&mut self.online_session_status_message);
+    }
+
+    fn handle_online_descriptor_path_text_input(&mut self, input: PlayerInput) -> bool {
+        if !self.online_descriptor_path_editing {
+            return false;
+        }
+        if input.cancel {
+            self.cancel_online_descriptor_path_edit();
+        } else if input.confirm {
+            self.commit_online_descriptor_path_edit();
+        } else if input.text_backspace {
+            self.online_descriptor_path_draft.pop();
+            self.online_session_status_message = format!(
+                "Editing descriptor path: {}",
+                self.online_descriptor_path_draft
+            );
+        } else if let Some(character) = input.text_input
+            && is_allowed_descriptor_path_character(character)
+            && self.online_descriptor_path_draft.len() < 240
+        {
+            self.online_descriptor_path_draft.push(character);
+            self.online_session_status_message = format!(
+                "Editing descriptor path: {}",
+                self.online_descriptor_path_draft
+            );
+        } else {
+            return false;
+        }
+        self.message = self.online_session_status_message.clone();
+        self.sound_cues.push(SoundCue::Ui);
+        true
+    }
+
     fn adjust_online_multiplayer_selection(&mut self) {
         match self.selected_menu_item {
             3 => self.cycle_online_descriptor_path(),
@@ -3555,7 +3631,7 @@ impl GameState {
                     .clone_into(&mut self.online_session_status_message);
             }
             3 => {
-                self.cycle_online_descriptor_path();
+                self.start_online_descriptor_path_edit();
             }
             4 => {
                 self.inspect_online_descriptor_path();
@@ -4369,6 +4445,12 @@ impl GameState {
         let Some(modal) = self.modal else {
             return false;
         };
+
+        if modal == ModalScreen::OnlineMultiplayer
+            && self.handle_online_descriptor_path_text_input(input)
+        {
+            return true;
+        }
 
         if input.cancel {
             if modal == ModalScreen::OnlineMultiplayer {
@@ -8196,6 +8278,41 @@ mod tests {
     }
 
     #[test]
+    fn online_modal_edits_descriptor_path_from_text_input() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+        game.selected_menu_item = 3;
+
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+        assert!(game.online_descriptor_path_editing);
+        game.online_descriptor_path_draft.clear();
+
+        for character in "/tmp/typed-host.json".chars() {
+            assert!(game.handle_modal(PlayerInput {
+                text_input: Some(character),
+                ..PlayerInput::default()
+            }));
+        }
+        assert!(game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        }));
+
+        assert!(!game.online_descriptor_path_editing);
+        assert_eq!(
+            game.online_descriptor_path,
+            PathBuf::from("/tmp/typed-host.json")
+        );
+        assert!(
+            game.message
+                .contains("Descriptor path set from typed input")
+        );
+    }
+
+    #[test]
     fn online_start_readiness_line_reports_blockers_and_ready_state() {
         let mut game = GameState::new();
         assert!(
@@ -8637,7 +8754,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8650,7 +8767,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
@@ -8659,7 +8776,7 @@ mod tests {
 
         game.update(
             PlayerInput {
-                confirm: true,
+                menu_right: true,
                 ..PlayerInput::default()
             },
             0.0,
