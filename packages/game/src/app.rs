@@ -424,6 +424,32 @@ impl OnlineTaskDispatcher {
         session.process_authoritative_commands_for_tick(session.current_tick())
     }
 
+    fn sync_remote_presentations_to_session(session: &mut GameSession) -> usize {
+        let remote_players = session.game().online_remote_player_snapshots.clone();
+        let mut synced = 0;
+        for remote in remote_players {
+            let client_id = crate::multiplayer::ClientId::new(remote.player_id.get());
+            if !session.has_client(client_id) {
+                let _added = session.add_local_client_player(client_id, remote.player_id);
+            }
+            let Some(player) = session.world_mut().player_mut(remote.player_id) else {
+                continue;
+            };
+            player.x = remote.x;
+            player.y = remote.y;
+            player.velocity_x = remote.velocity_x;
+            player.velocity_y = remote.velocity_y;
+            player.fuel = remote.fuel;
+            player.hull = remote.hull;
+            player.credits = remote.credits;
+            player.cargo.clone_from(&remote.cargo);
+            player.artifacts.clone_from(&remote.artifacts);
+            player.materials.clone_from(&remote.materials);
+            synced += 1;
+        }
+        synced
+    }
+
     fn drive_scheduled_tick(
         &mut self,
         session: &mut GameSession,
@@ -481,13 +507,25 @@ impl OnlineTaskDispatcher {
                 } else {
                     0
                 };
-                let diagnostic = if applied_remote_commands == 0 {
-                    Self::tick_diagnostic(&summary)
+                let synced_replicated_players = if mode_label == "descriptor-client-connected" {
+                    Self::sync_remote_presentations_to_session(session)
                 } else {
-                    format!(
-                        "{}; applied_remote_commands={applied_remote_commands}",
+                    0
+                };
+                let diagnostic = match (applied_remote_commands, synced_replicated_players) {
+                    (0, 0) => Self::tick_diagnostic(&summary),
+                    (commands, 0) => format!(
+                        "{}; applied_remote_commands={commands}",
                         Self::tick_diagnostic(&summary)
-                    )
+                    ),
+                    (0, players) => format!(
+                        "{}; synced_replicated_players={players}",
+                        Self::tick_diagnostic(&summary)
+                    ),
+                    (commands, players) => format!(
+                        "{}; applied_remote_commands={commands}; synced_replicated_players={players}",
+                        Self::tick_diagnostic(&summary)
+                    ),
                 };
                 session
                     .game_mut()
@@ -1097,6 +1135,41 @@ mod tests {
             .find(|player| player.player_id == crate::multiplayer::PlayerId::new(2))
             .expect("remote player exists");
         assert!(remote_player.velocity_x > 0.0 || remote_player.x > session.game().player.x);
+    }
+
+    #[test]
+    fn replicated_remote_presentations_sync_into_session_world() {
+        let mut session = GameSession::new();
+        session.game_mut().online_remote_player_snapshots.push(
+            crate::game_state::OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 42.0,
+                y: 84.0,
+                velocity_x: 3.0,
+                velocity_y: -1.0,
+                fuel: 77.0,
+                hull: 66.0,
+                credits: 55,
+                cargo_used: 4,
+                cargo: std::collections::BTreeMap::new(),
+                artifacts: std::collections::BTreeMap::new(),
+                materials: std::collections::BTreeMap::new(),
+            },
+        );
+
+        let synced = OnlineTaskDispatcher::sync_remote_presentations_to_session(&mut session);
+
+        assert_eq!(synced, 1);
+        assert!(session.has_client(crate::multiplayer::ClientId::new(2)));
+        let snapshot = session.world_snapshot().network_snapshot();
+        let remote = snapshot
+            .players
+            .iter()
+            .find(|player| player.player_id == crate::multiplayer::PlayerId::new(2))
+            .expect("remote player syncs into world");
+        assert!((remote.x - 42.0).abs() < f32::EPSILON);
+        assert!((remote.y - 84.0).abs() < f32::EPSILON);
+        assert_eq!(remote.credits, 55);
     }
 
     #[test]

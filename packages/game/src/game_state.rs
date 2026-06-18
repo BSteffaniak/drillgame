@@ -2427,23 +2427,19 @@ impl RealOnlineSessionController {
                     crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
                         apply_network_snapshot_remote_players(game, &snapshot);
                         let tick = snapshot.tick.get();
-                        if let Some(player) = snapshot.players.first() {
-                            apply_network_player_snapshot_to_game(game, player);
+                        let applied_local_player =
+                            apply_network_snapshot_local_player(game, &snapshot);
+                        if applied_local_player {
                             game.apply_online_authority_correction_status(
                                 &OnlineAuthorityCorrectionPresentation::from_plan(
                                     crate::session::CorrectionPlan::None,
                                     false,
                                 ),
                             );
+                            let local_slot = game.online_player_slot.unwrap_or(1);
                             game.apply_online_replicated_player_status(format!(
-                                "tick {tick}: applied player {} pos=({:.1},{:.1}) fuel={:.0} hull={:.0} credits={} cargo={}",
-                                player.player_id.get(),
-                                player.x,
-                                player.y,
-                                player.fuel,
-                                player.hull,
-                                player.credits,
-                                player.cargo_used
+                                "tick {tick}: applied local slot {local_slot} snapshot; remote_presentations={}",
+                                game.online_remote_player_snapshots.len()
                             ));
                         }
                         client_runtime.handle_message(
@@ -3147,6 +3143,28 @@ fn apply_network_player_delta_to_remote_presentations(
         ));
     }
     visible_updates
+}
+
+fn apply_network_snapshot_local_player(
+    game: &mut GameState,
+    snapshot: &crate::multiplayer::NetworkWorldSnapshot,
+) -> bool {
+    let preferred_player_id = game
+        .online_player_slot
+        .map(|slot| crate::multiplayer::PlayerId::new(u64::from(slot)));
+    let selected = preferred_player_id
+        .and_then(|player_id| {
+            snapshot
+                .players
+                .iter()
+                .find(|player| player.player_id == player_id)
+        })
+        .or_else(|| snapshot.players.first());
+    let Some(player) = selected else {
+        return false;
+    };
+    apply_network_player_snapshot_to_game(game, player);
+    true
 }
 
 fn apply_network_player_snapshot_to_game(
@@ -12476,6 +12494,55 @@ mod tests {
                 .contains("snapshot applied")
         );
         assert!(game.online_last_sync_loop_status.contains("cargo=yes"));
+    }
+
+    #[test]
+    fn local_snapshot_application_uses_joined_player_slot_not_first_host_player() {
+        let mut game = GameState::new();
+        game.online_player_slot = Some(2);
+        let snapshot = crate::multiplayer::NetworkWorldSnapshot {
+            tick: crate::multiplayer::SimulationTick::new(45),
+            players: vec![
+                crate::multiplayer::NetworkPlayerSnapshot {
+                    player_id: crate::multiplayer::PlayerId::new(1),
+                    x: 10.0,
+                    y: 20.0,
+                    velocity_x: 1.0,
+                    velocity_y: 0.0,
+                    fuel: 90.0,
+                    hull: 80.0,
+                    credits: 70,
+                    cargo_used: 0,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
+                    scanner_cooldown_seconds: 0.0,
+                },
+                crate::multiplayer::NetworkPlayerSnapshot {
+                    player_id: crate::multiplayer::PlayerId::new(2),
+                    x: 111.0,
+                    y: 222.0,
+                    velocity_x: -1.0,
+                    velocity_y: 2.0,
+                    fuel: 55.0,
+                    hull: 66.0,
+                    credits: 77,
+                    cargo_used: 0,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
+                    scanner_cooldown_seconds: 0.5,
+                },
+            ],
+        };
+
+        assert!(apply_network_snapshot_local_player(&mut game, &snapshot));
+
+        assert!((game.player.x - 111.0).abs() < f32::EPSILON);
+        assert!((game.player.y - 222.0).abs() < f32::EPSILON);
+        assert!((game.player.fuel - 55.0).abs() < f32::EPSILON);
+        assert_eq!(game.player.credits, 77);
+        assert!((game.scanner_cooldown_seconds - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
