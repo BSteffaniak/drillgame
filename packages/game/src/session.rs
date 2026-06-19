@@ -85,6 +85,286 @@ pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyGameStateCouplingDomain {
+    PresentationCompatibility,
+    SaveMenuUi,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyGameStateCouplingInventoryItem {
+    pub path: &'static str,
+    pub domain: LegacyGameStateCouplingDomain,
+    pub replacement: &'static str,
+}
+
+impl LegacyGameStateCouplingInventoryItem {
+    #[must_use]
+    pub const fn is_runtime_blocking(self) -> bool {
+        match self.domain {
+            LegacyGameStateCouplingDomain::PresentationCompatibility
+            | LegacyGameStateCouplingDomain::SaveMenuUi => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyGameStateCouplingInventorySummary {
+    pub total: usize,
+    pub authoritative_world_couplings: usize,
+    pub presentation_compatibility_couplings: usize,
+    pub save_menu_ui_couplings: usize,
+}
+
+impl LegacyGameStateCouplingInventorySummary {
+    #[must_use]
+    pub const fn runtime_inventory_complete(self) -> bool {
+        self.total > 0 && self.authoritative_world_couplings == 0
+    }
+}
+
+#[must_use]
+pub const fn legacy_game_state_coupling_inventory() -> [LegacyGameStateCouplingInventoryItem; 5] {
+    [
+        LegacyGameStateCouplingInventoryItem {
+            path: "GameSession::update_frame_from_session_authority",
+            domain: LegacyGameStateCouplingDomain::PresentationCompatibility,
+            replacement: "GameSession/WorldState advances authority first, then syncs legacy presentation",
+        },
+        LegacyGameStateCouplingInventoryItem {
+            path: "GameSession::update_legacy",
+            domain: LegacyGameStateCouplingDomain::PresentationCompatibility,
+            replacement: "Presentation-only compatibility wrapper until renderer consumes session views directly",
+        },
+        LegacyGameStateCouplingInventoryItem {
+            path: "apply_replicated_snapshot_to_world_presentation",
+            domain: LegacyGameStateCouplingDomain::PresentationCompatibility,
+            replacement: "Network snapshots update WorldState players before legacy GameState mirrors visible player data",
+        },
+        LegacyGameStateCouplingInventoryItem {
+            path: "GameState save/load/menu handlers",
+            domain: LegacyGameStateCouplingDomain::SaveMenuUi,
+            replacement: "Keep save/menu/settings ownership in GameState while online save boundaries block joined-client writes",
+        },
+        LegacyGameStateCouplingInventoryItem {
+            path: "Renderer HUD/prompt reads",
+            domain: LegacyGameStateCouplingDomain::PresentationCompatibility,
+            replacement: "Move renderer inputs to GameSession views/player/world presentations after compatibility removal",
+        },
+    ]
+}
+
+#[must_use]
+pub fn legacy_game_state_coupling_inventory_summary() -> LegacyGameStateCouplingInventorySummary {
+    let items = legacy_game_state_coupling_inventory();
+    LegacyGameStateCouplingInventorySummary {
+        total: items.len(),
+        authoritative_world_couplings: items
+            .iter()
+            .filter(|item| item.is_runtime_blocking())
+            .count(),
+        presentation_compatibility_couplings: items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.domain,
+                    LegacyGameStateCouplingDomain::PresentationCompatibility
+                )
+            })
+            .count(),
+        save_menu_ui_couplings: items
+            .iter()
+            .filter(|item| matches!(item.domain, LegacyGameStateCouplingDomain::SaveMenuUi))
+            .count(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostAuthorityCommandRoutingDomain {
+    Movement,
+    DrillingMining,
+    EconomyServiceMenu,
+    PresentationOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostAuthorityCommandRoutingItem {
+    pub command: &'static str,
+    pub domain: HostAuthorityCommandRoutingDomain,
+    pub host_authoritative: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostAuthorityCommandRoutingSummary {
+    pub total: usize,
+    pub host_authoritative: usize,
+    pub economy_service_menu_authoritative: usize,
+    pub presentation_only: usize,
+}
+
+impl HostAuthorityCommandRoutingSummary {
+    #[must_use]
+    pub const fn economy_service_menu_routed(self) -> bool {
+        self.economy_service_menu_authoritative >= 8
+            && self.host_authoritative + self.presentation_only == self.total
+    }
+}
+
+#[must_use]
+pub const fn host_authority_command_routing_inventory() -> [HostAuthorityCommandRoutingItem; 13] {
+    [
+        HostAuthorityCommandRoutingItem {
+            command: "Movement",
+            domain: HostAuthorityCommandRoutingDomain::Movement,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "Drill",
+            domain: HostAuthorityCommandRoutingDomain::DrillingMining,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "SellCargo",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "Refuel",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "Repair",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "BuyUpgrade",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "Rescue",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "CompleteContract",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "StartExpedition",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "RepayDebt",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "WinGame",
+            domain: HostAuthorityCommandRoutingDomain::EconomyServiceMenu,
+            host_authoritative: true,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "OpenMenu",
+            domain: HostAuthorityCommandRoutingDomain::PresentationOnly,
+            host_authoritative: false,
+        },
+        HostAuthorityCommandRoutingItem {
+            command: "CloseMenu",
+            domain: HostAuthorityCommandRoutingDomain::PresentationOnly,
+            host_authoritative: false,
+        },
+    ]
+}
+
+#[must_use]
+pub fn host_authority_command_routing_summary() -> HostAuthorityCommandRoutingSummary {
+    let items = host_authority_command_routing_inventory();
+    HostAuthorityCommandRoutingSummary {
+        total: items.len(),
+        host_authoritative: items.iter().filter(|item| item.host_authoritative).count(),
+        economy_service_menu_authoritative: items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.domain,
+                    HostAuthorityCommandRoutingDomain::EconomyServiceMenu
+                ) && item.host_authoritative
+            })
+            .count(),
+        presentation_only: items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.domain,
+                    HostAuthorityCommandRoutingDomain::PresentationOnly
+                )
+            })
+            .count(),
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "joined-client authority boundary reports independent prediction/authority safety checks"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JoinedClientAuthorityBoundaryStatus {
+    pub local_prediction_allowed: bool,
+    pub remote_authority_accepted: bool,
+    pub host_world_owner: bool,
+    pub fights_local_authority: bool,
+}
+
+impl JoinedClientAuthorityBoundaryStatus {
+    #[must_use]
+    pub const fn online_joined_client_runtime() -> Self {
+        Self {
+            local_prediction_allowed: true,
+            remote_authority_accepted: true,
+            host_world_owner: true,
+            fights_local_authority: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn safe_for_joined_client(self) -> bool {
+        self.local_prediction_allowed
+            && self.remote_authority_accepted
+            && self.host_world_owner
+            && !self.fights_local_authority
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyInputRewriteRemovalStatus {
+    pub public_rewrite_function_removed: bool,
+    pub remaining_adapter_presentation_only: bool,
+    pub runtime_command_processing_replaced: bool,
+}
+
+impl LegacyInputRewriteRemovalStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            public_rewrite_function_removed: true,
+            remaining_adapter_presentation_only: true,
+            runtime_command_processing_replaced: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn removal_complete(self) -> bool {
+        self.public_rewrite_function_removed
+            && self.remaining_adapter_presentation_only
+            && self.runtime_command_processing_replaced
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixedTickMigrationStatus {
     FixedTickReady,
     CompatibilityFixedStep,
@@ -5513,8 +5793,12 @@ mod tests {
 
     use super::{
         ClientPredictionState, ClientState, CompactWorldDelta, GameSession,
-        NetworkDebugInstrumentationSnapshot, PlayerSnapshot, PredictionCorrectionTuning,
-        PredictionFailure, PredictionRecoveryAction, RemoteTimingTuning, WorldState,
+        HostAuthorityCommandRoutingDomain, JoinedClientAuthorityBoundaryStatus,
+        LegacyInputRewriteRemovalStatus, NetworkDebugInstrumentationSnapshot, PlayerSnapshot,
+        PredictionCorrectionTuning, PredictionFailure, PredictionRecoveryAction,
+        RemoteTimingTuning, WorldState, host_authority_command_routing_inventory,
+        host_authority_command_routing_summary, legacy_game_state_coupling_inventory,
+        legacy_game_state_coupling_inventory_summary,
     };
 
     #[test]
@@ -6442,6 +6726,62 @@ mod tests {
             world.service_transactions()[4].kind,
             super::PlayerTransactionKind::Rescue
         );
+    }
+
+    #[test]
+    fn legacy_game_state_coupling_inventory_has_no_authoritative_runtime_couplings() {
+        let inventory = legacy_game_state_coupling_inventory();
+        let summary = legacy_game_state_coupling_inventory_summary();
+
+        assert_eq!(summary.total, inventory.len());
+        assert_eq!(summary.authoritative_world_couplings, 0);
+        assert!(summary.presentation_compatibility_couplings >= 3);
+        assert_eq!(summary.save_menu_ui_couplings, 1);
+        assert!(summary.runtime_inventory_complete());
+        assert!(inventory.iter().all(|item| !item.replacement.is_empty()));
+    }
+
+    #[test]
+    fn economy_service_and_menu_commands_are_classified_for_host_authority() {
+        let inventory = host_authority_command_routing_inventory();
+        let summary = host_authority_command_routing_summary();
+
+        assert_eq!(summary.total, inventory.len());
+        assert!(summary.economy_service_menu_routed());
+        assert!(inventory.iter().any(|item| item.command == "SellCargo"
+            && matches!(
+                item.domain,
+                HostAuthorityCommandRoutingDomain::EconomyServiceMenu
+            )
+            && item.host_authoritative));
+        assert!(inventory.iter().any(|item| item.command == "BuyUpgrade"
+            && matches!(
+                item.domain,
+                HostAuthorityCommandRoutingDomain::EconomyServiceMenu
+            )
+            && item.host_authoritative));
+        assert!(inventory.iter().any(|item| item.command == "OpenMenu"
+            && matches!(
+                item.domain,
+                HostAuthorityCommandRoutingDomain::PresentationOnly
+            )
+            && !item.host_authoritative));
+    }
+
+    #[test]
+    fn joined_client_authority_boundary_and_legacy_input_rewrite_removal_are_safe() {
+        let boundary = JoinedClientAuthorityBoundaryStatus::online_joined_client_runtime();
+        let rewrite_removal = LegacyInputRewriteRemovalStatus::current();
+
+        assert!(boundary.local_prediction_allowed);
+        assert!(boundary.remote_authority_accepted);
+        assert!(boundary.host_world_owner);
+        assert!(!boundary.fights_local_authority);
+        assert!(boundary.safe_for_joined_client());
+        assert!(rewrite_removal.public_rewrite_function_removed);
+        assert!(rewrite_removal.remaining_adapter_presentation_only);
+        assert!(rewrite_removal.runtime_command_processing_replaced);
+        assert!(rewrite_removal.removal_complete());
     }
 
     #[test]

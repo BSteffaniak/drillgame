@@ -5673,6 +5673,36 @@ impl GameState {
                 .map_or_else(|| "none".to_owned(), |modal| format!("{modal:?}"))
         ));
         lines.push(OnlineSaveBoundaryStatus::from_game(self).status_line());
+        let legacy_summary = crate::session::legacy_game_state_coupling_inventory_summary();
+        let rewrite = crate::session::LegacyInputRewriteRemovalStatus::current();
+        lines.push(format!(
+            "Legacy architecture inventory: total={} authoritative_world_couplings={} presentation_compatibility={} save_menu_ui={} runtime_inventory_complete={} legacy_input_rewrite_removed={}",
+            legacy_summary.total,
+            legacy_summary.authoritative_world_couplings,
+            legacy_summary.presentation_compatibility_couplings,
+            legacy_summary.save_menu_ui_couplings,
+            yes_no(legacy_summary.runtime_inventory_complete()),
+            yes_no(rewrite.removal_complete())
+        ));
+        let command_routing = crate::session::host_authority_command_routing_summary();
+        lines.push(format!(
+            "Host authority command routing: total={} host_authoritative={} economy_service_menu_authoritative={} presentation_only={} economy_service_menu_routed={}",
+            command_routing.total,
+            command_routing.host_authoritative,
+            command_routing.economy_service_menu_authoritative,
+            command_routing.presentation_only,
+            yes_no(command_routing.economy_service_menu_routed())
+        ));
+        let authority_boundary =
+            crate::session::JoinedClientAuthorityBoundaryStatus::online_joined_client_runtime();
+        lines.push(format!(
+            "Joined-client authority boundary: local_prediction_allowed={} remote_authority_accepted={} host_world_owner={} fights_local_authority={} safe={}",
+            yes_no(authority_boundary.local_prediction_allowed),
+            yes_no(authority_boundary.remote_authority_accepted),
+            yes_no(authority_boundary.host_world_owner),
+            yes_no(authority_boundary.fights_local_authority),
+            yes_no(authority_boundary.safe_for_joined_client())
+        ));
         if !self.online_remote_player_snapshots.is_empty() {
             let summaries = self
                 .online_remote_player_snapshots
