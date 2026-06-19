@@ -2082,6 +2082,129 @@ impl OnlineSustainedMiningSessionStatus {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "same-machine gameplay validation reports each manual playability observation independently"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SameMachineGameplayValidationStatus {
+    pub host_started_from_ui: bool,
+    pub both_apps_entered_gameplay: bool,
+    pub host_movement_visible_to_client: bool,
+    pub client_movement_visible_to_host: bool,
+    pub host_drilling_visible_to_client: bool,
+    pub client_drilling_visible_to_host: bool,
+    pub hud_player_session_state_clear: bool,
+    pub joined_client_save_corruption_blocked: bool,
+    pub leave_or_end_safe: bool,
+    pub playable_loop_visible: bool,
+    pub status: String,
+}
+
+impl SameMachineGameplayValidationStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let playable = OnlinePlayableSessionStatus::from_game(game);
+        let sync = OnlineGameplaySyncEvidenceMatrix::from_game(game);
+        let same_machine_ui = SameMachineProductValidationStatus::from_game(game);
+        let host_started_from_ui = game.online_host_owns_save
+            && game.online_local_ready
+            && game.online_remote_player_ready
+            && (playable.both_entered_gameplay
+                || game.online_session_status_message.contains("start")
+                || game.online_diagnostic_last_tick.contains("start"));
+        let both_apps_entered_gameplay = playable.both_entered_gameplay
+            || same_machine_ui.gameplay_started
+            || game
+                .online_last_live_verification_status
+                .contains("both_entered_gameplay=yes");
+        let host_movement_visible_to_client = sync.movement
+            == OnlineSyncEvidenceQuality::LiveReplicated
+            && (game.online_host_owns_save
+                || game
+                    .online_last_live_verification_status
+                    .contains("host_movement=visible")
+                || game.online_last_replicated_player_status.contains("host"));
+        let client_movement_visible_to_host = sync.movement
+            == OnlineSyncEvidenceQuality::LiveReplicated
+            && (!game.online_host_owns_save
+                || game
+                    .online_last_live_verification_status
+                    .contains("client_movement=visible")
+                || game.online_last_replicated_player_status.contains("client"));
+        let host_drilling_visible_to_client = sync.drilling_terrain
+            == OnlineSyncEvidenceQuality::LiveReplicated
+            && (game.online_host_owns_save
+                || game
+                    .online_last_live_verification_status
+                    .contains("host_drilling=visible")
+                || game.online_last_terrain_status.contains("host"));
+        let client_drilling_visible_to_host = sync.drilling_terrain
+            == OnlineSyncEvidenceQuality::LiveReplicated
+            && (!game.online_host_owns_save
+                || game
+                    .online_last_live_verification_status
+                    .contains("client_drilling=visible")
+                || game.online_last_terrain_status.contains("client"));
+        let hud_player_session_state_clear = same_machine_ui.role_visible
+            && same_machine_ui.slot_visible
+            && same_machine_ui.connected_remote_state_visible
+            && game.player.fuel.is_finite()
+            && game.player.hull.is_finite()
+            && (game.online_last_replicated_player_status.contains("fuel")
+                || game.online_last_replicated_player_status.contains("hull")
+                || !game.message.is_empty());
+        let joined_client_save_corruption_blocked = game.online_host_owns_save
+            || !game.can_write_local_save()
+            || game
+                .online_last_save_boundary_status
+                .contains("local_write_allowed=no")
+            || game.message.contains("Save blocked");
+        let leave_or_end_safe = game
+            .online_last_session_boundary_status
+            .contains("Online session boundary")
+            || matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Connected
+                    | OnlineSessionUxState::Disconnected
+                    | OnlineSessionUxState::Shutdown
+                    | OnlineSessionUxState::Error
+            );
+        let playable_loop_visible = both_apps_entered_gameplay
+            && (host_movement_visible_to_client || client_movement_visible_to_host)
+            && (host_drilling_visible_to_client || client_drilling_visible_to_host)
+            && hud_player_session_state_clear
+            && joined_client_save_corruption_blocked
+            && leave_or_end_safe;
+        let status = format!(
+            "Same-machine gameplay validation: playable_loop={} host_started_ui={} both_entered_gameplay={} host_move_seen_by_client={} client_move_seen_by_host={} host_drill_seen_by_client={} client_drill_seen_by_host={} hud_session_clear={} joined_save_blocked={} leave_end_safe={}",
+            yes_no(playable_loop_visible),
+            yes_no(host_started_from_ui),
+            yes_no(both_apps_entered_gameplay),
+            yes_no(host_movement_visible_to_client),
+            yes_no(client_movement_visible_to_host),
+            yes_no(host_drilling_visible_to_client),
+            yes_no(client_drilling_visible_to_host),
+            yes_no(hud_player_session_state_clear),
+            yes_no(joined_client_save_corruption_blocked),
+            yes_no(leave_or_end_safe)
+        );
+        Self {
+            host_started_from_ui,
+            both_apps_entered_gameplay,
+            host_movement_visible_to_client,
+            client_movement_visible_to_host,
+            host_drilling_visible_to_client,
+            client_drilling_visible_to_host,
+            hud_player_session_state_clear,
+            joined_client_save_corruption_blocked,
+            leave_or_end_safe,
+            playable_loop_visible,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlinePlayableSessionPhase {
     NotStarted,
@@ -6017,6 +6140,7 @@ impl GameState {
         lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
         lines.push(OnlineSessionUxReducerStatus::from_game(self).status);
         lines.push(SameMachineProductValidationStatus::from_game(self).status);
+        lines.push(SameMachineGameplayValidationStatus::from_game(self).status);
         lines.push(OnlineNetworkTaskOrchestrationStatus::from_game(self).status);
         lines.push(MultiplayerPortabilityBoundaryStatus::from_game(self).status);
         lines.push(if self.online_last_ownership_status.is_empty() {
@@ -11342,6 +11466,46 @@ mod tests {
         assert!(client_status.ready_state_visible);
         assert!(client_status.status.contains("joined_write_blocking=yes"));
         assert!(client_status.status.contains("role_label=client"));
+    }
+
+    #[test]
+    fn same_machine_gameplay_validation_status_surfaces_playability_loop_evidence() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_host_advertise_addr = "127.0.0.1:3456".parse().expect("valid addr");
+        game.online_remote_player_connected = true;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.run_mode = RunMode::Playing;
+        game.message = "HUD visible".to_owned();
+        game.online_last_replicated_player_status =
+            "host player fuel=90 hull=100 cargo=1; client player fuel=80 hull=95 cargo=2"
+                .to_owned();
+        game.online_last_terrain_status =
+            "host terrain chunk applied; client terrain chunk applied".to_owned();
+        game.online_last_live_verification_status = "movement=visible terrain=visible host_movement=visible client_movement=visible host_drilling=visible client_drilling=visible both_entered_gameplay=yes".to_owned();
+        game.online_last_save_boundary_status =
+            "Online save boundary: local_write_allowed=yes".to_owned();
+        game.online_last_session_boundary_status =
+            "Online session boundary: leave/end safe".to_owned();
+
+        let status = SameMachineGameplayValidationStatus::from_game(&game);
+
+        assert!(status.host_started_from_ui);
+        assert!(status.both_apps_entered_gameplay);
+        assert!(status.host_movement_visible_to_client);
+        assert!(status.client_movement_visible_to_host);
+        assert!(status.host_drilling_visible_to_client);
+        assert!(status.client_drilling_visible_to_host);
+        assert!(status.hud_player_session_state_clear);
+        assert!(status.joined_client_save_corruption_blocked);
+        assert!(status.leave_or_end_safe);
+        assert!(status.playable_loop_visible);
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Same-machine gameplay validation") && line.contains("playable_loop=yes")
+        }));
     }
 
     #[test]
