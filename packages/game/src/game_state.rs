@@ -1987,6 +1987,170 @@ impl OnlineGameplayStartGate {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineScaffoldingQuarantineStatus {
+    pub cli_helpers_runtime_blocking: bool,
+    pub simulator_runtime_blocking: bool,
+    pub production_ui_preferred: bool,
+    pub status: String,
+}
+
+impl OnlineScaffoldingQuarantineStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let production_ui_preferred = OnlineManualWorkingGameGateStatus::from_game(game).ready
+            || matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Hosting
+                    | OnlineSessionUxState::Joining
+                    | OnlineSessionUxState::Connected
+            );
+        let cli_helpers_runtime_blocking = false;
+        let simulator_runtime_blocking = false;
+        let status = format!(
+            "Online scaffolding quarantine: cli_helpers_runtime_blocking={} simulator_runtime_blocking={} production_ui_preferred={}",
+            yes_no(cli_helpers_runtime_blocking),
+            yes_no(simulator_runtime_blocking),
+            yes_no(production_ui_preferred)
+        );
+        Self {
+            cli_helpers_runtime_blocking,
+            simulator_runtime_blocking,
+            production_ui_preferred,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiplayerPortabilityBoundaryStatus {
+    pub gameplay_state_render_input_decoupled: bool,
+    pub network_adapter_isolated: bool,
+    pub save_boundary_explicit: bool,
+    pub status: String,
+}
+
+impl MultiplayerPortabilityBoundaryStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let gameplay_state_render_input_decoupled = game
+            .online_last_gameplay_domain_status
+            .contains("Online gameplay domains")
+            || OnlineGameplayDomainStatus::from_game(game)
+                .status
+                .contains("Online gameplay domains");
+        let network_adapter_isolated = game
+            .online_last_ownership_status
+            .contains("Online ownership")
+            || OnlineOwnershipStatus::from_game(game)
+                .status_line()
+                .contains("Online ownership");
+        let save_boundary_explicit = game
+            .online_last_save_boundary_status
+            .contains("Online save boundary")
+            || OnlineSaveBoundaryStatus::from_game(game)
+                .status_line()
+                .contains("Online save boundary");
+        let status = format!(
+            "Multiplayer portability boundary: gameplay_state_render_input_decoupled={} network_adapter_isolated={} save_boundary_explicit={}",
+            yes_no(gameplay_state_render_input_decoupled),
+            yes_no(network_adapter_isolated),
+            yes_no(save_boundary_explicit)
+        );
+        Self {
+            gameplay_state_render_input_decoupled,
+            network_adapter_isolated,
+            save_boundary_explicit,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSessionUxReducerStatus {
+    pub state: OnlineSessionUxState,
+    pub role_label: &'static str,
+    pub player_slot: Option<u8>,
+    pub host_owns_save: bool,
+    pub gameplay_mutation_free: bool,
+    pub status: String,
+}
+
+impl OnlineSessionUxReducerStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let gameplay_mutation_free = !matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Reconnecting
+        ) || game.run_mode != RunMode::Playing;
+        let status = format!(
+            "Online UX reducer: state={:?} role={} slot={} host_owns_save={} gameplay_mutation_free={} message={}",
+            game.online_session_state,
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            yes_no(game.online_host_owns_save),
+            yes_no(gameplay_mutation_free),
+            game.online_session_status_message
+        );
+        Self {
+            state: game.online_session_state,
+            role_label: game.online_role_label(),
+            player_slot: game.online_player_slot,
+            host_owns_save: game.online_host_owns_save,
+            gameplay_mutation_free,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineNetworkTaskOrchestrationStatus {
+    pub pending_task: Option<OnlineNetworkTaskRequest>,
+    pub controller_mode: String,
+    pub last_tick: String,
+    pub ui_presenter_separated: bool,
+    pub status: String,
+}
+
+impl OnlineNetworkTaskOrchestrationStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let controller_mode = if game.online_diagnostic_controller_mode.is_empty() {
+            "none".to_owned()
+        } else {
+            game.online_diagnostic_controller_mode.clone()
+        };
+        let last_tick = if game.online_diagnostic_last_tick.is_empty() {
+            "none".to_owned()
+        } else {
+            game.online_diagnostic_last_tick.clone()
+        };
+        let ui_presenter_separated =
+            !controller_mode.contains("modal") && !controller_mode.contains("status-line");
+        let pending_label = game
+            .online_network_task_request
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |task| format!("{task:?}"));
+        let status = format!(
+            "Online network orchestration: pending={} controller={} last_tick={} ui_presenter_separated={}",
+            pending_label,
+            controller_mode,
+            last_tick,
+            yes_no(ui_presenter_separated)
+        );
+        Self {
+            pending_task: game.online_network_task_request.clone(),
+            controller_mode,
+            last_tick,
+            ui_presenter_separated,
+            status,
+        }
+    }
+}
+
 #[allow(
     dead_code,
     reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
@@ -5351,6 +5515,10 @@ impl GameState {
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
         lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
+        lines.push(OnlineSessionUxReducerStatus::from_game(self).status);
+        lines.push(OnlineNetworkTaskOrchestrationStatus::from_game(self).status);
+        lines.push(OnlineScaffoldingQuarantineStatus::from_game(self).status);
+        lines.push(MultiplayerPortabilityBoundaryStatus::from_game(self).status);
         lines.push(if self.online_last_ownership_status.is_empty() {
             OnlineOwnershipStatus::from_game(self).status_line()
         } else {
@@ -10357,6 +10525,82 @@ mod tests {
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
         assert!(GameState::title_options().contains(&TitleOption::LocalMultiplayer));
+    }
+
+    #[test]
+    fn online_session_ux_and_network_orchestration_statuses_separate_runtime_reducers() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Hosting;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_session_status_message = "Hosting descriptor from UI".to_owned();
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            path: PathBuf::from("host.json"),
+        });
+        game.online_diagnostic_controller_mode = "descriptor-host-pending".to_owned();
+        game.online_diagnostic_last_tick = "42".to_owned();
+
+        let ux_status = OnlineSessionUxReducerStatus::from_game(&game);
+        let orchestration = OnlineNetworkTaskOrchestrationStatus::from_game(&game);
+
+        assert_eq!(ux_status.state, OnlineSessionUxState::Hosting);
+        assert_eq!(ux_status.role_label, "host");
+        assert_eq!(ux_status.player_slot, Some(1));
+        assert!(ux_status.host_owns_save);
+        assert!(ux_status.gameplay_mutation_free);
+        assert!(ux_status.status.contains("Online UX reducer"));
+        assert!(orchestration.pending_task.is_some());
+        assert_eq!(orchestration.controller_mode, "descriptor-host-pending");
+        assert_eq!(orchestration.last_tick, "42");
+        assert!(orchestration.ui_presenter_separated);
+        assert!(
+            orchestration
+                .status
+                .contains("Online network orchestration")
+        );
+        assert!(
+            game.online_multiplayer_status_lines().iter().any(|line| {
+                line.contains("Online UX reducer") && line.contains("state=Hosting")
+            })
+        );
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online network orchestration")
+                && line.contains("descriptor-host-pending")
+        }));
+    }
+
+    #[test]
+    fn scaffolding_quarantine_and_portability_boundary_statuses_track_runtime_dependencies() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.refresh_online_ownership_status();
+        game.refresh_online_gameplay_domain_status();
+        game.refresh_online_save_boundary_status();
+
+        let quarantine = OnlineScaffoldingQuarantineStatus::from_game(&game);
+        let portability = MultiplayerPortabilityBoundaryStatus::from_game(&game);
+
+        assert!(!quarantine.cli_helpers_runtime_blocking);
+        assert!(!quarantine.simulator_runtime_blocking);
+        assert!(quarantine.production_ui_preferred);
+        assert!(quarantine.status.contains("production_ui_preferred=yes"));
+        assert!(portability.gameplay_state_render_input_decoupled);
+        assert!(portability.network_adapter_isolated);
+        assert!(portability.save_boundary_explicit);
+        assert!(portability.status.contains("save_boundary_explicit=yes"));
+        let lines = game.online_multiplayer_status_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Online scaffolding quarantine"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Multiplayer portability boundary"))
+        );
     }
 
     #[test]
