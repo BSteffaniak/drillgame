@@ -331,6 +331,7 @@ impl OnlineTaskDispatcher {
             .as_ref()
             .is_some_and(|controller| controller.mode_label() == "descriptor-client-connected");
         if descriptor_client_connected || online_player_slot.is_some() {
+            let _seeded = session.ensure_local_online_player_presentation_from_roster();
             let update_existing_from_legacy = online_player_slot.is_none();
             let _seeded = session.ensure_local_online_player_presentation_from_legacy_view(
                 player_id,
@@ -368,34 +369,9 @@ impl OnlineTaskDispatcher {
     }
 
     fn sync_remote_presentations_to_session(session: &mut GameSession) -> usize {
-        let remote_players = session.game().online_remote_player_snapshots.clone();
-        if remote_players.is_empty() {
-            return 0;
-        }
-        let remote_players = remote_players
-            .into_iter()
-            .map(|remote| crate::multiplayer::NetworkPlayerSnapshot {
-                player_id: remote.player_id,
-                x: remote.x,
-                y: remote.y,
-                velocity_x: remote.velocity_x,
-                velocity_y: remote.velocity_y,
-                fuel: remote.fuel,
-                hull: remote.hull,
-                credits: remote.credits,
-                cargo_used: remote.cargo_used,
-                cargo: remote.cargo,
-                artifacts: remote.artifacts,
-                materials: remote.materials,
-                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
-                scanner_cooldown_seconds: 0.0,
-            })
-            .collect::<Vec<_>>();
-        let summary = session.apply_replicated_player_delta_to_world_presentation(
-            session.current_tick(),
-            &remote_players,
-        );
-        summary.remote_players_updated
+        session
+            .sync_legacy_remote_presentations_to_world()
+            .remote_players_updated
     }
 
     fn apply_client_terrain_chunk_response(

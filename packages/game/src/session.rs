@@ -46,6 +46,26 @@ pub enum CompatibilityMode {
     MultiplayerReady,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LegacyRemotePresentationSyncSummary {
+    pub source_snapshots: usize,
+    pub remote_players_updated: usize,
+    pub local_players_updated: usize,
+    pub clients_created: usize,
+}
+
+impl LegacyRemotePresentationSyncSummary {
+    #[must_use]
+    pub const fn total_players_updated(self) -> usize {
+        self.remote_players_updated + self.local_players_updated
+    }
+
+    #[must_use]
+    pub const fn changed_session_presentation(self) -> bool {
+        self.total_players_updated() > 0 || self.clients_created > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineParticipantRole {
     LocalHost,
@@ -5882,6 +5902,45 @@ impl GameSession {
             tick,
             players: players.to_vec(),
         })
+    }
+
+    pub fn sync_legacy_remote_presentations_to_world(
+        &mut self,
+    ) -> LegacyRemotePresentationSyncSummary {
+        let remote_players = self.game.online_remote_player_snapshots.clone();
+        if remote_players.is_empty() {
+            return LegacyRemotePresentationSyncSummary::default();
+        }
+        let remote_players = remote_players
+            .into_iter()
+            .map(|remote| NetworkPlayerSnapshot {
+                player_id: remote.player_id,
+                x: remote.x,
+                y: remote.y,
+                velocity_x: remote.velocity_x,
+                velocity_y: remote.velocity_y,
+                fuel: remote.fuel,
+                hull: remote.hull,
+                credits: remote.credits,
+                cargo_used: remote.cargo_used,
+                cargo: remote.cargo,
+                artifacts: remote.artifacts,
+                materials: remote.materials,
+                loadout: NetworkPlayerLoadoutSnapshot::default(),
+                scanner_cooldown_seconds: 0.0,
+            })
+            .collect::<Vec<_>>();
+        let source_snapshots = remote_players.len();
+        let summary = self.apply_replicated_player_delta_to_world_presentation(
+            self.current_tick(),
+            &remote_players,
+        );
+        LegacyRemotePresentationSyncSummary {
+            source_snapshots,
+            remote_players_updated: summary.remote_players_updated,
+            local_players_updated: summary.local_players_updated,
+            clients_created: summary.clients_created,
+        }
     }
 
     pub fn apply_accepted_online_remote_commands(
