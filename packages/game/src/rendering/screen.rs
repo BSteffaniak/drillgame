@@ -8,8 +8,8 @@ use crate::{
         upgrade_tier_name,
     },
     game_state::{
-        GameState, ModalScreen, PauseOption, RecipeKind, RunMode, SideContractKind, TILE_SIZE,
-        TitleOption,
+        GameState, ModalScreen, OnlineSaveAuthority, PauseOption, RecipeKind, RunMode,
+        SideContractKind, TILE_SIZE, TitleOption,
     },
     save::{latest_save_summary, save_slot_count, save_slot_exists, save_slot_metadata},
     session::{ClientView, PerPlayerHudSnapshot},
@@ -791,7 +791,15 @@ pub(super) fn draw_modal(
 }
 
 fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_text("Online Multiplayer", 330, 150, 30, Color::SKYBLUE);
+    draw.draw_text("Online Multiplayer", 330, 112, 30, Color::SKYBLUE);
+    draw.draw_text(
+        "Direct-connect setup for two running game windows. Host writes a descriptor; client joins with that file.",
+        330,
+        148,
+        18,
+        Color::LIGHTGRAY,
+    );
+
     let options = [
         "Host descriptor session",
         "Join descriptor session",
@@ -813,29 +821,165 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw,
         game.selected_menu_item,
         330,
-        225,
+        210,
         &options.map(str::to_owned),
     );
-    for (index, line) in game
-        .online_multiplayer_status_lines()
-        .iter()
-        .take(12)
-        .enumerate()
-    {
-        let color = if index == 3 {
-            Color::YELLOW
-        } else if index >= 4 {
-            Color::GRAY
+
+    draw_online_connection_card(draw, game, 700, 190);
+    draw_online_lobby_card(draw, game, 700, 360);
+    draw_online_action_card(draw, game, 700, 560);
+}
+
+fn draw_online_connection_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 142, Color::DARKBLUE);
+    draw.draw_text("Connection", x, y, 22, Color::SKYBLUE);
+    draw.draw_text(
+        &format!("Descriptor: {}", game.online_descriptor_path.display()),
+        x,
+        y + 32,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &format!("Host bind: {}", game.online_host_bind_addr),
+        x,
+        y + 58,
+        16,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &format!("Host advertise: {}", game.online_host_advertise_addr),
+        x,
+        y + 84,
+        16,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &format!("Client bind: {}", game.online_client_bind_addr),
+        x,
+        y + 110,
+        16,
+        Color::LIGHTGRAY,
+    );
+}
+
+fn draw_online_lobby_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
+    let lobby = game.online_lobby_presentation();
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 172, Color::DARKGREEN);
+    draw.draw_text("Lobby", x, y, 22, Color::LIME);
+    draw.draw_text(
+        &online_peer_summary("Local", &lobby.local),
+        x,
+        y + 34,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &online_peer_summary("Remote", &lobby.remote),
+        x,
+        y + 64,
+        16,
+        if lobby.remote.connected {
+            Color::RAYWHITE
         } else {
-            Color::LIGHTGRAY
-        };
-        draw.draw_text(
-            line,
-            330,
-            430 + i32::try_from(index).unwrap_or(i32::MAX) * 30,
-            if index >= 4 { 16 } else { 18 },
-            color,
-        );
+            Color::GRAY
+        },
+    );
+    draw.draw_text(
+        &format!(
+            "Start: {}{}",
+            if lobby.start_gate.ready {
+                "ready"
+            } else {
+                "blocked"
+            },
+            lobby
+                .start_gate
+                .blocker
+                .map_or_else(String::new, |blocker| format!(" ({blocker:?})"))
+        ),
+        x,
+        y + 96,
+        16,
+        if lobby.start_gate.ready {
+            Color::LIME
+        } else {
+            Color::YELLOW
+        },
+    );
+    draw.draw_text(&lobby.guidance, x, y + 126, 15, Color::LIGHTGRAY);
+}
+
+fn draw_online_action_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 132, Color::DARKPURPLE);
+    draw.draw_text("What to do next", x, y, 22, Color::VIOLET);
+    draw.draw_text(
+        online_selected_action_help(game.selected_menu_item),
+        x,
+        y + 34,
+        16,
+        Color::RAYWHITE,
+    );
+    draw.draw_text(
+        &game.online_start_readiness_line(),
+        x,
+        y + 64,
+        15,
+        Color::LIGHTGRAY,
+    );
+    draw.draw_text(
+        &game.online_save_policy_line(),
+        x,
+        y + 92,
+        15,
+        if game.online_host_owns_save {
+            Color::LIME
+        } else {
+            Color::YELLOW
+        },
+    );
+}
+
+fn online_peer_summary(
+    label: &str,
+    peer: &crate::game_state::OnlinePeerLobbyPresentation,
+) -> String {
+    let slot = peer
+        .slot
+        .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
+    format!(
+        "{label}: {} | role={} | slot={} | ready={} | connected={} | save={}",
+        peer.name,
+        peer.role_label,
+        slot,
+        if peer.ready { "yes" } else { "no" },
+        if peer.connected { "yes" } else { "no" },
+        online_save_authority_label(peer.save_authority)
+    )
+}
+
+const fn online_save_authority_label(authority: OnlineSaveAuthority) -> &'static str {
+    match authority {
+        OnlineSaveAuthority::LocalPlayer => "local",
+        OnlineSaveAuthority::RemoteHost => "remote host",
+    }
+}
+
+const fn online_selected_action_help(selected: usize) -> &'static str {
+    match selected {
+        0 => "Host: write descriptor, keep this window open, then wait for the other player.",
+        1 => "Join: point at the host's descriptor file, then connect as the joined client.",
+        2 => "Reconnect: retry with the previous session token after a disconnect.",
+        3 => "Descriptor path: choose the JSON file App A shares with App B.",
+        4 => "Inspect descriptor: verify host address and session metadata before joining.",
+        5 => "Host bind: local socket address the host listens on.",
+        6 => "Host advertise: address written into the descriptor for the client.",
+        7 => "Client bind: local socket address the joined client uses.",
+        8 => "Gameplay ticks: length for command-line smoke gameplay tasks.",
+        12 => "Ready: toggle this player ready once the remote player is connected.",
+        13 => "Start: enter gameplay only when both players are connected and ready.",
+        14 => "Back: return to the previous menu without changing the current session.",
+        _ => "This action is for diagnostics or session lifecycle control.",
     }
 }
 
