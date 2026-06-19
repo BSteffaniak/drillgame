@@ -5,7 +5,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    mem,
+    fmt, mem,
     ops::Deref,
     time::Duration,
 };
@@ -230,6 +230,45 @@ pub struct OnlineRosterParticipant {
     pub connected: bool,
     pub role: OnlineParticipantRole,
     pub save_authority: SaveAuthority,
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+impl fmt::Display for OnlineParticipantRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalHost => formatter.write_str("local-host"),
+            Self::JoinedClient => formatter.write_str("joined-client"),
+            Self::RemotePeer => formatter.write_str("remote-peer"),
+        }
+    }
+}
+
+impl fmt::Display for OnlineSessionRoster {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut participants = Vec::new();
+        participants.push(format_roster_participant(&self.local));
+        if let Some(remote) = &self.remote {
+            participants.push(format_roster_participant(remote));
+        }
+        formatter.write_str(&participants.join(" | "))
+    }
+}
+
+fn format_roster_participant(participant: &OnlineRosterParticipant) -> String {
+    format!(
+        "{} slot={} client={} player={} name={} ready={} connected={} save={:?}",
+        participant.role,
+        participant.slot,
+        participant.client_id.get(),
+        participant.player_id.get(),
+        participant.name,
+        yes_no(participant.ready),
+        yes_no(participant.connected),
+        participant.save_authority
+    )
 }
 
 impl OnlineRosterParticipant {
@@ -5605,6 +5644,10 @@ impl GameSession {
             .collect()
     }
 
+    pub fn refresh_online_roster_status_on_shell(&mut self) {
+        self.game.online_session_roster_status = self.online_session_roster().to_string();
+    }
+
     pub fn prepare_online_tick_identity(
         &mut self,
         descriptor_client_connected: bool,
@@ -5622,6 +5665,7 @@ impl GameSession {
         let (roster_seeded, legacy_bridge_seeded) =
             if descriptor_client_connected || online_player_slot.is_some() {
                 let roster_seeded = self.ensure_local_online_player_presentation_from_roster();
+                self.refresh_online_roster_status_on_shell();
                 let update_existing_from_legacy = online_player_slot.is_none();
                 let legacy_bridge_seeded = self
                     .ensure_local_online_player_presentation_from_legacy_view(
@@ -6109,6 +6153,7 @@ impl GameSession {
         summary: &QuinnSessionTickSummary,
     ) -> OnlineTickApplicationSummary {
         let applied_remote_commands = if mode_label == "descriptor-host-accepted" {
+            self.refresh_online_roster_status_on_shell();
             summary
                 .command_summary
                 .as_ref()
@@ -6124,6 +6169,7 @@ impl GameSession {
         let mut joined_local_synced = false;
         if mode_label == "descriptor-client-connected" {
             roster_seeded = self.ensure_local_online_player_presentation_from_roster();
+            self.refresh_online_roster_status_on_shell();
             joined_local_synced = self.sync_joined_local_player_from_replicated_game();
             applied_terrain_tiles =
                 self.apply_client_terrain_chunk_response(summary.terrain_chunk_response.as_ref());

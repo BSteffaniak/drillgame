@@ -4719,6 +4719,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_lobby_status: String,
     #[serde(default)]
+    pub online_session_roster_status: String,
+    #[serde(default)]
     pub online_last_playable_session_status: String,
     #[serde(default)]
     pub online_local_ready: bool,
@@ -4986,6 +4988,7 @@ impl GameState {
             online_last_save_boundary_status: String::new(),
             online_last_descriptor_input_status: String::new(),
             online_last_lobby_status: String::new(),
+            online_session_roster_status: String::new(),
             online_last_playable_session_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
@@ -5864,6 +5867,12 @@ impl GameState {
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
+        if !self.online_session_roster_status.is_empty() {
+            lines.push(format!(
+                "Session roster: {}",
+                self.online_session_roster_status
+            ));
+        }
         lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
         lines.push(OnlineSessionUxReducerStatus::from_game(self).status);
         lines.push(OnlineNetworkTaskOrchestrationStatus::from_game(self).status);
