@@ -17,9 +17,9 @@ use crate::{
         CommandNetworkSession, CommandPacket, CommandPacketExchangeSummary, CommandRejection,
         CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
         NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
-        NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind,
-        ProtocolMessage, QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand,
-        SessionToken, SimulationTick,
+        NetworkTerrainChunkSnapshot, NetworkWorldSnapshot, PlayerCommand, PlayerId,
+        ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, QuinnSessionTickInput,
+        SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -912,6 +912,11 @@ impl TerrainRevisionTracker {
     }
 
     #[must_use]
+    pub fn revised_chunk_positions(&self) -> Vec<TerrainChunkPosition> {
+        self.chunk_revisions.keys().copied().collect()
+    }
+
+    #[must_use]
     pub fn recovery_delta(
         &self,
         tick: SimulationTick,
@@ -1476,6 +1481,10 @@ impl WorldState {
         &self.terrain
     }
 
+    pub const fn terrain_mut(&mut self) -> &mut Terrain {
+        &mut self.terrain
+    }
+
     #[must_use]
     pub fn bombs(&self) -> &[PlacedBomb] {
         &self.bombs
@@ -1857,7 +1866,7 @@ impl WorldState {
 
     pub fn chip_active_drill_target(&mut self, player_id: PlayerId) -> Option<MineResult> {
         let target = self.active_drills.get(&player_id)?.target;
-        let result = self.terrain.chip(target);
+        let result = self.terrain_mut().chip(target);
         if matches!(
             result,
             MineResult::Blocked
@@ -4638,6 +4647,13 @@ impl GameSession {
         }
     }
 
+    pub fn mark_world_terrain_tiles_changed<I>(&mut self, positions: I) -> Vec<TerrainChunkRevision>
+    where
+        I: IntoIterator<Item = TilePosition>,
+    {
+        self.terrain_revisions.mark_tiles_changed(positions)
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         reason = "pixel coordinates are intentionally mapped onto bounded terrain tile/chunk indices for network chunk requests"
@@ -4655,6 +4671,59 @@ impl GameSession {
             tile_x.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
             tile_y.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
         )
+    }
+
+    fn network_terrain_chunk_from_world(
+        &self,
+        chunk_x: i32,
+        chunk_y: i32,
+    ) -> NetworkTerrainChunkSnapshot {
+        const NETWORK_TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+        let start_x = chunk_x * NETWORK_TERRAIN_CHUNK_SIZE_TILES;
+        let start_y = chunk_y * NETWORK_TERRAIN_CHUNK_SIZE_TILES;
+        let end_x = (start_x + NETWORK_TERRAIN_CHUNK_SIZE_TILES).min(self.world.terrain.width());
+        let end_y = (start_y + NETWORK_TERRAIN_CHUNK_SIZE_TILES).min(self.world.terrain.height());
+        let mut tiles = Vec::new();
+        for y in start_y.max(0)..end_y.max(0) {
+            for x in start_x.max(0)..end_x.max(0) {
+                let position = TilePosition { x, y };
+                if let Some(tile) = self.world.terrain.tile(position) {
+                    tiles.push(crate::multiplayer::NetworkTerrainTile {
+                        x,
+                        y,
+                        kind: tile.kind,
+                        durability: tile.durability,
+                    });
+                }
+            }
+        }
+        NetworkTerrainChunkSnapshot {
+            chunk_x,
+            chunk_y,
+            revision: self.terrain_revisions.revision(TerrainChunkPosition {
+                x: chunk_x,
+                y: chunk_y,
+            }),
+            tiles,
+        }
+    }
+
+    fn authoritative_terrain_chunks_for_players(&self) -> Vec<NetworkTerrainChunkSnapshot> {
+        let mut chunk_positions: BTreeSet<(i32, i32)> = self
+            .world
+            .player_ids()
+            .map(|player_id| self.replicated_player_network_chunk(player_id))
+            .collect();
+        chunk_positions.extend(
+            self.terrain_revisions
+                .revised_chunk_positions()
+                .into_iter()
+                .map(|position| (position.x, position.y)),
+        );
+        chunk_positions
+            .into_iter()
+            .map(|(chunk_x, chunk_y)| self.network_terrain_chunk_from_world(chunk_x, chunk_y))
+            .collect()
     }
 
     pub fn live_session_tick_input_from_world(
@@ -4711,6 +4780,7 @@ impl GameSession {
             snapshot: Some(snapshot),
             delta: Some((SimulationTick::new(tick.saturating_add(1)), delta_payload)),
             terrain_chunk_request: Some((chunk_coord.0, chunk_coord.1, 0, 0)),
+            authoritative_terrain_chunks: self.authoritative_terrain_chunks_for_players(),
             correction_probe,
         }
     }
@@ -5127,7 +5197,7 @@ impl GameSession {
                 continue;
             };
             let positions = vec![target];
-            let revisions = self.terrain_revisions.mark_tiles_changed(positions.clone());
+            let revisions = self.mark_world_terrain_tiles_changed(positions.clone());
             self.push_event(WorldEvent::TerrainTilesChanged { positions });
             if !revisions.is_empty() {
                 self.push_event(WorldEvent::TerrainChunksChanged { revisions });
@@ -5372,7 +5442,7 @@ impl GameSession {
         }
         if !self.game.visual_changes.changed_tiles.is_empty() {
             let positions = self.game.visual_changes.changed_tiles.clone();
-            let revisions = self.terrain_revisions.mark_tiles_changed(positions.clone());
+            let revisions = self.mark_world_terrain_tiles_changed(positions.clone());
             self.push_event(WorldEvent::TerrainTilesChanged { positions });
             if !revisions.is_empty() {
                 self.push_event(WorldEvent::TerrainChunksChanged { revisions });
@@ -7288,6 +7358,55 @@ mod tests {
         let packet = input.command_packet.expect("command packet included");
         assert_eq!(packet.client_id, LOCAL_CLIENT_ID);
         assert_eq!(packet.commands[0].sequence, InputSequence::new(9));
+        let authoritative_chunk = input
+            .authoritative_terrain_chunks
+            .iter()
+            .find(|chunk| chunk.chunk_x == 3 && chunk.chunk_y == 2)
+            .expect("authoritative terrain chunk included");
+        assert!(!authoritative_chunk.tiles.is_empty());
+        assert!(
+            authoritative_chunk
+                .tiles
+                .iter()
+                .any(|tile| tile.x == 48 && tile.y == 32)
+        );
+    }
+
+    #[test]
+    fn live_session_tick_input_terrain_chunks_use_world_terrain_not_legacy_game() {
+        let mut session = GameSession::new();
+        let target = TilePosition { x: 18, y: 19 };
+        session.game.terrain.set_kind(target, TileKind::Lava);
+        session.world.terrain_mut().set_kind(target, TileKind::Air);
+        session
+            .world_mut()
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local world player exists")
+            .x = TILE_SIZE * 18.0;
+        session
+            .world_mut()
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local world player exists")
+            .y = TILE_SIZE * 19.0;
+
+        let input = session.live_session_tick_input_from_world(
+            LOCAL_CLIENT_ID,
+            LOCAL_PLAYER_ID,
+            3,
+            Vec::new(),
+        );
+
+        let chunk = input
+            .authoritative_terrain_chunks
+            .iter()
+            .find(|chunk| chunk.chunk_x == 1 && chunk.chunk_y == 1)
+            .expect("player terrain chunk included");
+        let tile = chunk
+            .tiles
+            .iter()
+            .find(|tile| tile.x == target.x && tile.y == target.y)
+            .expect("target tile included");
+        assert_eq!(tile.kind, TileKind::Air);
     }
 
     #[test]

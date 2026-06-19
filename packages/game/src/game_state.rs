@@ -1953,8 +1953,12 @@ impl RealOnlineSessionController {
             .await?;
         self.descriptor_host_send_ready_state(game.online_local_ready)
             .await?;
-        self.descriptor_host_try_receive_ready_state(game, Duration::from_millis(1))
-            .await?;
+        self.descriptor_host_try_receive_ready_state(
+            game,
+            Duration::from_millis(1),
+            &input.authoritative_terrain_chunks,
+        )
+        .await?;
         if game.run_mode == RunMode::Playing
             && game.online_local_ready
             && game.online_remote_player_ready
@@ -2103,6 +2107,7 @@ impl RealOnlineSessionController {
         &mut self,
         game: &mut GameState,
         timeout: Duration,
+        authoritative_terrain_chunks: &[crate::multiplayer::NetworkTerrainChunkSnapshot],
     ) -> Result<bool, crate::multiplayer::QuinnOnlineSessionError> {
         let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
             return Err(
@@ -2138,8 +2143,23 @@ impl RealOnlineSessionController {
                     chunk_y,
                     known_revision,
                 } => {
-                    let revision = known_revision.saturating_add(1);
-                    let tiles = network_terrain_chunk_tiles(&game.terrain, chunk_x, chunk_y);
+                    let chunk = authoritative_terrain_chunks
+                        .iter()
+                        .find(|chunk| chunk.chunk_x == chunk_x && chunk.chunk_y == chunk_y);
+                    let (revision, tiles) = chunk.map_or_else(
+                        || {
+                            let revision = known_revision.saturating_add(1);
+                            let tiles =
+                                network_terrain_chunk_tiles(&game.terrain, chunk_x, chunk_y);
+                            (revision, tiles)
+                        },
+                        |chunk| {
+                            (
+                                chunk.revision.max(known_revision.saturating_add(1)),
+                                chunk.tiles.clone(),
+                            )
+                        },
+                    );
                     host_io
                         .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
                             crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
@@ -2894,6 +2914,7 @@ impl RealOnlineSessionController {
                     },
                 )),
                 terrain_chunk_request: Some(terrain_request),
+                authoritative_terrain_chunks: Vec::new(),
                 correction_probe: Some((
                     live_player.x + 24.0,
                     live_player.y,

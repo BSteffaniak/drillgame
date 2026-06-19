@@ -1046,12 +1046,21 @@ impl From<QuinnPacketIoError> for QuinnOnlineSessionError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkTerrainChunkSnapshot {
+    pub chunk_x: i32,
+    pub chunk_y: i32,
+    pub revision: u64,
+    pub tiles: Vec<NetworkTerrainTile>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuinnSessionTickInput {
     pub command_packet: Option<CommandPacket>,
     pub snapshot: Option<NetworkWorldSnapshot>,
     pub delta: Option<(SimulationTick, NetworkDeltaPayload)>,
     pub terrain_chunk_request: Option<(i32, i32, u64, u64)>,
+    pub authoritative_terrain_chunks: Vec<NetworkTerrainChunkSnapshot>,
     pub correction_probe: Option<(f32, f32, NetworkPlayerSnapshot, SimulationTick)>,
 }
 
@@ -1063,6 +1072,7 @@ impl QuinnSessionTickInput {
             snapshot: None,
             delta: None,
             terrain_chunk_request: None,
+            authoritative_terrain_chunks: Vec::new(),
             correction_probe: None,
         }
     }
@@ -1666,6 +1676,7 @@ pub async fn local_online_smoke_summary() -> Result<LocalOnlineSmokeSummary, Qui
             }),
             delta: Some((SimulationTick::new(203), NetworkDeltaPayload::Noop)),
             terrain_chunk_request: Some((20, 21, 1, 2)),
+            authoritative_terrain_chunks: Vec::new(),
             correction_probe: Some((
                 50.0,
                 50.0,
@@ -1792,6 +1803,7 @@ pub async fn local_online_soak_summary(
                     u64::from(offset),
                     u64::from(offset + 1),
                 )),
+                authoritative_terrain_chunks: Vec::new(),
                 correction_probe: Some((
                     offset as f32 + 0.25,
                     offset as f32 + 0.5,
@@ -4679,6 +4691,7 @@ mod tests {
                 }),
                 delta: Some((SimulationTick::new(103), NetworkDeltaPayload::Noop)),
                 terrain_chunk_request: Some((8, 9, 1, 2)),
+                authoritative_terrain_chunks: Vec::new(),
                 correction_probe: Some((
                     20.0,
                     20.0,
@@ -4748,6 +4761,7 @@ mod tests {
                 }),
                 delta: Some((SimulationTick::new(123), NetworkDeltaPayload::Noop)),
                 terrain_chunk_request: Some((10, 11, 1, 2)),
+                authoritative_terrain_chunks: Vec::new(),
                 correction_probe: Some((
                     30.0,
                     30.0,

@@ -1330,9 +1330,15 @@ mod tests {
         host_session
             .world_mut()
             .set_scanner_cooldown_seconds(crate::multiplayer::LOCAL_PLAYER_ID, 3.5);
+        let terrain_position = crate::terrain::TilePosition { x: 18, y: 19 };
+        host_session
+            .world_mut()
+            .terrain_mut()
+            .set_kind(terrain_position, crate::terrain::TileKind::Lava);
+        let _revisions = host_session.mark_world_terrain_tiles_changed([terrain_position]);
         host_session.game_mut().terrain.set_kind(
             crate::terrain::TilePosition { x: 18, y: 19 },
-            crate::terrain::TileKind::Lava,
+            crate::terrain::TileKind::Air,
         );
         join_session.game_mut().terrain.set_kind(
             crate::terrain::TilePosition { x: 18, y: 19 },
