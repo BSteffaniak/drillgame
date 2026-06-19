@@ -1589,6 +1589,135 @@ impl OnlineReconnectPolicyStatus {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "production online UI gate mirrors independent host/join modal requirements"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionOnlineUiRuntimeStatus {
+    pub host_descriptor_from_real_state: bool,
+    pub host_controller_persistent: bool,
+    pub host_ui_details_visible: bool,
+    pub host_descriptor_path_shareable: bool,
+    pub host_errors_clear_pending_task: bool,
+    pub join_reads_modal_path: bool,
+    pub join_real_controller_connected: bool,
+    pub join_identity_assigned: bool,
+    pub join_controller_persistent: bool,
+    pub join_ui_save_policy_visible: bool,
+    pub join_errors_clear_pending_task: bool,
+    pub ready: bool,
+    pub status: String,
+}
+
+impl ProductionOnlineUiRuntimeStatus {
+    #[allow(clippy::too_many_lines)]
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let descriptor_path_present = !game.online_descriptor_path.as_os_str().is_empty();
+        let descriptor_status = if game.online_last_descriptor_input_status.is_empty() {
+            OnlineDescriptorInputStatus::validate(
+                OnlineDescriptorInputMode::HostWrite,
+                &game.online_descriptor_path,
+            )
+            .status_line()
+        } else {
+            game.online_last_descriptor_input_status.clone()
+        };
+        let host_descriptor_from_real_state = descriptor_path_present
+            && descriptor_status
+                .to_ascii_lowercase()
+                .contains("descriptor")
+            && (matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Hosting | OnlineSessionUxState::Connected
+            ) || game.online_host_owns_save);
+        let host_controller_persistent = game.online_diagnostic_controller_mode.contains("host")
+            || matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Hosting | OnlineSessionUxState::Connected
+            ) && game.online_host_owns_save;
+        let host_ui_details_visible = descriptor_path_present
+            && game
+                .online_address_guidance_line()
+                .to_ascii_lowercase()
+                .contains("address")
+            && game.online_player_slot.is_some()
+            && game.online_host_owns_save;
+        let host_descriptor_path_shareable =
+            descriptor_path_present && !game.online_descriptor_path_editing;
+        let host_errors_clear_pending_task = game.online_network_task_request.is_none()
+            || !game.online_last_failure_status.is_empty();
+        let join_reads_modal_path = descriptor_path_present
+            && game
+                .online_multiplayer_status_lines_without_production_ui_gate()
+                .iter()
+                .any(|line| {
+                    line.contains("Descriptor path edit") || line.contains("Descriptor file:")
+                });
+        let join_real_controller_connected =
+            game.online_diagnostic_controller_mode.contains("client")
+                || matches!(game.online_session_state, OnlineSessionUxState::Connected)
+                    && !game.online_host_owns_save;
+        let join_identity_assigned =
+            !game.online_host_owns_save && game.online_player_slot.is_some();
+        let join_controller_persistent = join_real_controller_connected
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected);
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(game);
+        let join_ui_save_policy_visible = !game.online_host_owns_save
+            && save_boundary.save_authority == OnlineSaveAuthority::RemoteHost
+            && game
+                .online_multiplayer_status_lines_without_production_ui_gate()
+                .iter()
+                .any(|line| {
+                    line.contains("Save/exit policy") || line.contains("Online save boundary")
+                });
+        let join_errors_clear_pending_task = game.online_network_task_request.is_none()
+            || !game.online_last_failure_status.is_empty();
+        let ready = (host_descriptor_from_real_state
+            && host_controller_persistent
+            && host_ui_details_visible
+            && host_descriptor_path_shareable
+            && host_errors_clear_pending_task)
+            || (join_reads_modal_path
+                && join_real_controller_connected
+                && join_identity_assigned
+                && join_controller_persistent
+                && join_ui_save_policy_visible
+                && join_errors_clear_pending_task);
+        let status = format!(
+            "Production online UI runtime: ready={} host_descriptor_from_real_state={} host_controller_persistent={} host_ui_details_visible={} host_descriptor_path_shareable={} host_errors_clear_pending_task={} join_reads_modal_path={} join_real_controller_connected={} join_identity_assigned={} join_controller_persistent={} join_ui_save_policy_visible={} join_errors_clear_pending_task={}",
+            yes_no(ready),
+            yes_no(host_descriptor_from_real_state),
+            yes_no(host_controller_persistent),
+            yes_no(host_ui_details_visible),
+            yes_no(host_descriptor_path_shareable),
+            yes_no(host_errors_clear_pending_task),
+            yes_no(join_reads_modal_path),
+            yes_no(join_real_controller_connected),
+            yes_no(join_identity_assigned),
+            yes_no(join_controller_persistent),
+            yes_no(join_ui_save_policy_visible),
+            yes_no(join_errors_clear_pending_task)
+        );
+        Self {
+            host_descriptor_from_real_state,
+            host_controller_persistent,
+            host_ui_details_visible,
+            host_descriptor_path_shareable,
+            host_errors_clear_pending_task,
+            join_reads_modal_path,
+            join_real_controller_connected,
+            join_identity_assigned,
+            join_controller_persistent,
+            join_ui_save_policy_visible,
+            join_errors_clear_pending_task,
+            ready,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineRuntimeStatusDeck {
     pub lines: Vec<String>,
@@ -5494,7 +5623,7 @@ impl GameState {
 
     #[allow(clippy::too_many_lines)]
     #[must_use]
-    pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
+    fn online_multiplayer_status_lines_without_production_ui_gate(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(10);
         lines.push(
             "Transport: Quinn/QUIC real socket IO enabled for direct-connect host/join/reconnect."
@@ -5795,6 +5924,13 @@ impl GameState {
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
+        OnlineRuntimeStatusDeck::from_lines(lines).lines
+    }
+
+    #[must_use]
+    pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
+        let mut lines = self.online_multiplayer_status_lines_without_production_ui_gate();
+        lines.push(ProductionOnlineUiRuntimeStatus::from_game(self).status);
         OnlineRuntimeStatusDeck::from_lines(lines).lines
     }
 
@@ -10599,6 +10735,88 @@ mod tests {
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
         assert!(GameState::title_options().contains(&TitleOption::LocalMultiplayer));
+    }
+
+    #[test]
+    fn production_online_ui_runtime_status_accepts_host_descriptor_modal_flow() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Hosting;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_descriptor_path = PathBuf::from("/tmp/drillgame-host.json");
+        game.online_diagnostic_controller_mode = "descriptor-host-pending".to_owned();
+        game.online_network_task_request = None;
+        game.online_last_descriptor_input_status = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::HostWrite,
+            &game.online_descriptor_path,
+        )
+        .status_line();
+
+        let status = ProductionOnlineUiRuntimeStatus::from_game(&game);
+
+        assert!(status.ready);
+        assert!(status.host_descriptor_from_real_state);
+        assert!(status.host_controller_persistent);
+        assert!(status.host_ui_details_visible);
+        assert!(status.host_descriptor_path_shareable);
+        assert!(status.host_errors_clear_pending_task);
+        assert!(status.status.contains("ready=yes"));
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Production online UI runtime")
+                && line.contains("host_descriptor_from_real_state=yes")
+        }));
+    }
+
+    #[test]
+    fn production_online_ui_runtime_status_accepts_joined_client_modal_flow() {
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_descriptor_path = PathBuf::from("/tmp/drillgame-host.json");
+        client.online_diagnostic_controller_mode = "descriptor-client-connected".to_owned();
+        client.online_network_task_request = None;
+        client.refresh_online_save_boundary_status();
+
+        let status = ProductionOnlineUiRuntimeStatus::from_game(&client);
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(&client);
+
+        assert!(status.ready);
+        assert!(status.join_reads_modal_path);
+        assert!(status.join_real_controller_connected);
+        assert!(status.join_identity_assigned);
+        assert!(status.join_controller_persistent);
+        assert!(status.join_ui_save_policy_visible);
+        assert!(status.join_errors_clear_pending_task);
+        assert_eq!(
+            save_boundary.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
+        assert!(status.status.contains("join_identity_assigned=yes"));
+    }
+
+    #[test]
+    fn production_online_ui_runtime_status_blocks_stale_pending_failure_state() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Hosting;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_descriptor_path = PathBuf::from("/tmp/drillgame-host.json");
+        game.online_diagnostic_controller_mode = "descriptor-host-pending".to_owned();
+        game.online_network_task_request = Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            path: game.online_descriptor_path.clone(),
+        });
+        game.online_last_failure_status.clear();
+
+        let stale = ProductionOnlineUiRuntimeStatus::from_game(&game);
+        assert!(!stale.ready);
+        assert!(!stale.host_errors_clear_pending_task);
+        assert!(stale.status.contains("host_errors_clear_pending_task=no"));
+
+        game.online_last_failure_status =
+            OnlineFailureStatus::classify("descriptor read failed").status_line();
+        let surfaced = ProductionOnlineUiRuntimeStatus::from_game(&game);
+        assert!(surfaced.host_errors_clear_pending_task);
     }
 
     #[test]
