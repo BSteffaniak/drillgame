@@ -414,28 +414,32 @@ impl OnlineTaskDispatcher {
 
     fn sync_remote_presentations_to_session(session: &mut GameSession) -> usize {
         let remote_players = session.game().online_remote_player_snapshots.clone();
-        let mut synced = 0;
-        for remote in remote_players {
-            let client_id = crate::multiplayer::ClientId::new(remote.player_id.get());
-            if !session.has_client(client_id) {
-                let _added = session.add_local_client_player(client_id, remote.player_id);
-            }
-            let Some(player) = session.world_mut().player_mut(remote.player_id) else {
-                continue;
-            };
-            player.x = remote.x;
-            player.y = remote.y;
-            player.velocity_x = remote.velocity_x;
-            player.velocity_y = remote.velocity_y;
-            player.fuel = remote.fuel;
-            player.hull = remote.hull;
-            player.credits = remote.credits;
-            player.cargo.clone_from(&remote.cargo);
-            player.artifacts.clone_from(&remote.artifacts);
-            player.materials.clone_from(&remote.materials);
-            synced += 1;
+        if remote_players.is_empty() {
+            return 0;
         }
-        synced
+        let remote_players = remote_players
+            .into_iter()
+            .map(|remote| crate::multiplayer::NetworkPlayerSnapshot {
+                player_id: remote.player_id,
+                x: remote.x,
+                y: remote.y,
+                velocity_x: remote.velocity_x,
+                velocity_y: remote.velocity_y,
+                fuel: remote.fuel,
+                hull: remote.hull,
+                credits: remote.credits,
+                cargo_used: remote.cargo_used,
+                cargo: remote.cargo,
+                artifacts: remote.artifacts,
+                materials: remote.materials,
+                scanner_cooldown_seconds: 0.0,
+            })
+            .collect::<Vec<_>>();
+        let summary = session.apply_replicated_player_delta_to_world_presentation(
+            session.current_tick(),
+            &remote_players,
+        );
+        summary.remote_players_updated
     }
 
     fn drive_scheduled_tick(
