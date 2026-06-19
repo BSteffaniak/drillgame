@@ -361,6 +361,7 @@ impl OnlineTaskDispatcher {
             return;
         }
         self.tick_accumulator_seconds = 0.0;
+        let start_session_requested = session.game_mut().take_online_start_session_request();
         let local_player_commands =
             Self::gameplay_commands_for_network_tick(session.game(), local_player_commands);
         let input = self.live_session_tick_input(session, local_player_commands);
@@ -380,6 +381,17 @@ impl OnlineTaskDispatcher {
             }
         };
         let mode_label = controller.mode_label();
+        if start_session_requested && mode_label == "descriptor-host-accepted" {
+            let start_result = runtime.block_on(controller.descriptor_host_send_start_session(
+                crate::multiplayer::SimulationTick::new(u64::from(self.live_tick_sequence)),
+            ));
+            if let Err(error) = start_result {
+                session.game_mut().apply_online_network_task_result(
+                    OnlineNetworkTaskResult::Failed(format!("{error:?}")),
+                );
+                return;
+            }
+        }
         let result = match mode_label {
             "descriptor-host-accepted" => runtime.block_on(
                 controller.drive_descriptor_host_outbound_tick(session.game_mut(), input),
@@ -715,6 +727,71 @@ mod tests {
             delta,
             crate::session::CompactWorldDelta::TerrainChunks { .. }
         ));
+    }
+
+    #[test]
+    fn descriptor_host_start_from_ui_sends_start_session_to_joined_client() {
+        let path = std::env::temp_dir().join(format!(
+            "drillgame-start-session-{}.json",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_file(&path);
+        let mut host_dispatcher = OnlineTaskDispatcher::new();
+        let mut join_dispatcher = OnlineTaskDispatcher::new();
+        let mut host_game = GameState::new();
+        host_game.online_descriptor_path = path.clone();
+        let mut join_game = GameState::new();
+        join_game.online_descriptor_path = path;
+
+        host_game.online_network_task_request =
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                path: host_game.online_descriptor_path.clone(),
+            });
+        host_dispatcher.drain_and_execute(&mut host_game);
+        wait_for_online_completion(&mut host_dispatcher, &mut host_game);
+        assert_eq!(
+            host_game.online_session_state,
+            OnlineSessionUxState::Hosting
+        );
+
+        join_game.online_network_task_request =
+            Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+                path: join_game.online_descriptor_path.clone(),
+            });
+        join_dispatcher.drain_and_execute(&mut join_game);
+        wait_for_online_completion(&mut join_dispatcher, &mut join_game);
+        wait_for_online_completion(&mut host_dispatcher, &mut host_game);
+        assert_eq!(
+            host_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+        assert_eq!(
+            join_game.online_session_state,
+            OnlineSessionUxState::Connected
+        );
+
+        let mut host_session = GameSession::new();
+        host_session.game_mut().online_session_state = OnlineSessionUxState::Connected;
+        host_session.game_mut().online_host_owns_save = true;
+        host_session.game_mut().online_player_slot = Some(1);
+        host_session.game_mut().online_remote_player_connected = true;
+        host_session.game_mut().online_local_ready = true;
+        host_session.game_mut().online_remote_player_ready = true;
+        host_session.game_mut().request_online_gameplay_start();
+        assert_eq!(host_session.game().run_mode, RunMode::Playing);
+
+        host_dispatcher.drive_scheduled_tick(&mut host_session, FIXED_DELTA_SECONDS, Vec::new());
+
+        let mut join_session = GameSession::new();
+        join_session.game_mut().online_session_state = OnlineSessionUxState::Connected;
+        join_session.game_mut().online_host_owns_save = false;
+        join_session.game_mut().online_player_slot = Some(2);
+        join_session.game_mut().online_remote_player_connected = true;
+        join_session.game_mut().online_local_ready = true;
+        join_session.game_mut().online_remote_player_ready = true;
+        join_dispatcher.drive_scheduled_tick(&mut join_session, FIXED_DELTA_SECONDS, Vec::new());
+
+        assert_eq!(join_session.game().run_mode, RunMode::Playing);
     }
 
     #[test]

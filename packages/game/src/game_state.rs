@@ -2692,7 +2692,14 @@ impl RealOnlineSessionController {
             && game.online_local_ready
             && game.online_remote_player_ready
         {
-            self.descriptor_host_send_start_session().await?;
+            let authoritative_tick = input
+                .snapshot
+                .as_ref()
+                .map_or(crate::multiplayer::SimulationTick::new(0), |snapshot| {
+                    snapshot.tick
+                });
+            self.descriptor_host_send_start_session(authoritative_tick)
+                .await?;
         }
         let snapshot_replicated = if let Some(snapshot) = input.snapshot {
             self.descriptor_host_send_snapshot(snapshot).await?;
@@ -2832,6 +2839,25 @@ impl RealOnlineSessionController {
         Ok(())
     }
 
+    pub async fn descriptor_host_send_start_session(
+        &mut self,
+        authoritative_tick: crate::multiplayer::SimulationTick,
+    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
+            return Err(
+                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
+                    "accepted descriptor host packet io",
+                ),
+            );
+        };
+        host_io
+            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
+                crate::multiplayer::ProtocolMessage::StartSession { authoritative_tick },
+            ))
+            .await?;
+        Ok(())
+    }
+
     pub async fn descriptor_host_try_receive_ready_state(
         &mut self,
         game: &mut GameState,
@@ -2926,26 +2952,6 @@ impl RealOnlineSessionController {
             }
         }
         Ok(received_any)
-    }
-
-    pub async fn descriptor_host_send_start_session(
-        &mut self,
-    ) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
-        let RealOnlineSessionMode::DescriptorHostAccepted { host_io, .. } = &mut self.mode else {
-            return Err(
-                crate::multiplayer::QuinnOnlineSessionError::MissingEndpoint(
-                    "accepted descriptor host packet io",
-                ),
-            );
-        };
-        host_io
-            .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
-                crate::multiplayer::ProtocolMessage::StartSession {
-                    authoritative_tick: crate::multiplayer::SimulationTick::new(0),
-                },
-            ))
-            .await?;
-        Ok(())
     }
 
     pub async fn descriptor_host_send_session_ended(
@@ -3117,15 +3123,15 @@ impl RealOnlineSessionController {
                         crate::multiplayer::ProtocolMessage::ReadyState { player_id, ready } => {
                             game.apply_online_remote_ready_state(player_id, ready);
                         }
-                        crate::multiplayer::ProtocolMessage::StartSession { .. } => {
-                            game.online_remote_player_connected = true;
-                            game.online_remote_player_ready = true;
-                            game.online_session_state = OnlineSessionUxState::Connected;
-                            "Host started online gameplay session."
-                                .clone_into(&mut game.online_session_status_message);
-                            game.run_mode = RunMode::Playing;
-                            game.modal = None;
-                            game.message.clone_from(&game.online_session_status_message);
+                        crate::multiplayer::ProtocolMessage::StartSession {
+                            authoritative_tick,
+                        } => {
+                            game.apply_online_start_session_from_host(authoritative_tick);
+                            client_runtime.handle_message(
+                                crate::multiplayer::ProtocolMessage::StartSession {
+                                    authoritative_tick,
+                                },
+                            );
                         }
                         crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
                             chunk_x,
@@ -4756,6 +4762,8 @@ pub struct GameState {
     pub online_local_ready: bool,
     #[serde(default, skip)]
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
+    #[serde(default, skip)]
+    pub online_start_session_requested: bool,
     #[serde(default)]
     pub local_multiplayer_requested: bool,
     #[serde(default)]
@@ -5024,6 +5032,7 @@ impl GameState {
             online_last_playable_session_status: String::new(),
             online_local_ready: false,
             online_network_task_request: None,
+            online_start_session_requested: false,
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
             local_multiplayer_player_slots: 1,
@@ -5531,6 +5540,10 @@ impl GameState {
 
     pub fn take_online_network_task_request(&mut self) -> Option<OnlineNetworkTaskRequest> {
         mem::take(&mut self.online_network_task_request)
+    }
+
+    pub fn take_online_start_session_request(&mut self) -> bool {
+        mem::take(&mut self.online_start_session_requested)
     }
 
     #[allow(
@@ -6373,13 +6386,28 @@ impl GameState {
         }
     }
 
-    fn request_online_gameplay_start(&mut self) {
+    pub(crate) fn request_online_gameplay_start(&mut self) {
         let gate = self.online_gameplay_start_gate();
         gate.message
             .clone_into(&mut self.online_session_status_message);
         if gate.ready {
+            self.online_start_session_requested = self.online_host_owns_save;
             self.enter_online_playing_session();
         }
+        self.refresh_online_playable_session_status();
+    }
+
+    pub fn apply_online_start_session_from_host(
+        &mut self,
+        authoritative_tick: crate::multiplayer::SimulationTick,
+    ) {
+        self.online_session_state = OnlineSessionUxState::Connected;
+        self.online_remote_player_connected = true;
+        self.online_session_status_message = format!(
+            "Host started online gameplay at authoritative tick {}.",
+            authoritative_tick.get()
+        );
+        self.enter_online_playing_session();
         self.refresh_online_playable_session_status();
     }
 
