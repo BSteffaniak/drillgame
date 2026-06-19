@@ -2853,16 +2853,19 @@ impl RealOnlineSessionController {
                 } => {
                     let chunk = authoritative_terrain_chunks
                         .iter()
-                        .find(|chunk| chunk.chunk_x == chunk_x && chunk.chunk_y == chunk_y);
-                    let (revision, tiles) = chunk.map_or_else(
+                        .find(|chunk| chunk.chunk_x == chunk_x && chunk.chunk_y == chunk_y)
+                        .or_else(|| authoritative_terrain_chunks.first());
+                    let (response_chunk_x, response_chunk_y, revision, tiles) = chunk.map_or_else(
                         || {
                             let revision = known_revision.saturating_add(1);
                             let tiles =
                                 network_terrain_chunk_tiles(&game.terrain, chunk_x, chunk_y);
-                            (revision, tiles)
+                            (chunk_x, chunk_y, revision, tiles)
                         },
                         |chunk| {
                             (
+                                chunk.chunk_x,
+                                chunk.chunk_y,
                                 chunk.revision.max(known_revision.saturating_add(1)),
                                 chunk.tiles.clone(),
                             )
@@ -2871,15 +2874,15 @@ impl RealOnlineSessionController {
                     host_io
                         .send_packet(crate::multiplayer::VersionedProtocolPacket::new(
                             crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
-                                chunk_x,
-                                chunk_y,
+                                chunk_x: response_chunk_x,
+                                chunk_y: response_chunk_y,
                                 revision,
                                 tiles,
                             },
                         ))
                         .await?;
                     game.apply_online_terrain_status(format!(
-                        "answered chunk ({chunk_x},{chunk_y}) rev {revision}"
+                        "answered chunk ({response_chunk_x},{response_chunk_y}) rev {revision}"
                     ));
                     received_any = true;
                 }
@@ -3796,9 +3799,11 @@ fn apply_network_terrain_chunk_to_game(
         }
     }
     if changed_tiles.is_empty() {
-        game.apply_online_terrain_status(format!(
-            "received chunk ({chunk_x},{chunk_y}) rev {revision} with no visible tile changes"
-        ));
+        if !game.online_last_terrain_status.contains("applied chunk") {
+            game.apply_online_terrain_status(format!(
+                "received chunk ({chunk_x},{chunk_y}) rev {revision} with no visible tile changes"
+            ));
+        }
         game.apply_online_sync_loop_status(OnlineSyncLoopStatus::terrain(tiles.len(), 0));
         0
     } else {

@@ -398,6 +398,24 @@ impl OnlineTaskDispatcher {
         summary.remote_players_updated
     }
 
+    fn apply_client_terrain_chunk_response(
+        session: &mut GameSession,
+        response: Option<&crate::multiplayer::ProtocolMessage>,
+    ) -> usize {
+        let Some(crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
+            chunk_x,
+            chunk_y,
+            revision,
+            tiles,
+        }) = response
+        else {
+            return 0;
+        };
+        session.apply_replicated_terrain_chunk_to_world_presentation(
+            *chunk_x, *chunk_y, *revision, tiles,
+        )
+    }
+
     fn drive_scheduled_tick(
         &mut self,
         session: &mut GameSession,
@@ -458,14 +476,12 @@ impl OnlineTaskDispatcher {
                     0
                 };
                 let synced_replicated_players = if mode_label == "descriptor-client-connected" {
-                    let online_player_slot = session.game().online_player_slot;
-                    if let Some(slot) = online_player_slot {
-                        let player_id = crate::multiplayer::PlayerId::new(u64::from(slot));
-                        let _synced_local = session
-                            .ensure_local_online_player_presentation_from_legacy_view(
-                                player_id, true,
-                            );
-                    }
+                    let _seeded = session.ensure_local_online_player_presentation_from_roster();
+                    let _local_synced = session.sync_joined_local_player_from_replicated_game();
+                    let _terrain_tiles = Self::apply_client_terrain_chunk_response(
+                        session,
+                        summary.terrain_chunk_response.as_ref(),
+                    );
                     Self::sync_remote_presentations_to_session(session)
                 } else {
                     0

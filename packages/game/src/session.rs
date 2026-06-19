@@ -22,14 +22,15 @@ use crate::{
         CommandNetworkSession, CommandPacket, CommandPacketExchangeSummary, CommandRejection,
         CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
         NetworkDeltaPayload, NetworkPlayerLoadoutSnapshot, NetworkPlayerSnapshot,
-        NetworkTerrainChunkRevision, NetworkTerrainChunkSnapshot, NetworkWorldSnapshot,
-        PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage,
-        QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
+        NetworkTerrainChunkRevision, NetworkTerrainChunkSnapshot, NetworkTerrainTile,
+        NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind,
+        ProtocolMessage, QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand,
+        SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
     save::{
-        SettingsFile, load_latest_persistent_world, load_persistent_world,
+        SaveAuthority, SettingsFile, load_latest_persistent_world, load_persistent_world,
         load_persistent_world_slot, persistent_world_from_session, save_world_session,
         save_world_session_slot,
     },
@@ -43,6 +44,71 @@ use crate::{
 pub enum CompatibilityMode {
     SinglePlayerLegacy,
     MultiplayerReady,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineParticipantRole {
+    LocalHost,
+    JoinedClient,
+    RemotePeer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineRosterParticipant {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub slot: u8,
+    pub name: String,
+    pub ready: bool,
+    pub connected: bool,
+    pub role: OnlineParticipantRole,
+    pub save_authority: SaveAuthority,
+}
+
+impl OnlineRosterParticipant {
+    #[must_use]
+    pub fn is_local_authority(&self) -> bool {
+        matches!(self.role, OnlineParticipantRole::LocalHost)
+            && self.save_authority == SaveAuthority::HostOwnedSession
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSessionRoster {
+    pub local: OnlineRosterParticipant,
+    pub remote: Option<OnlineRosterParticipant>,
+}
+
+impl OnlineSessionRoster {
+    #[must_use]
+    pub fn participants(&self) -> Vec<&OnlineRosterParticipant> {
+        let mut participants = vec![&self.local];
+        if let Some(remote) = &self.remote {
+            participants.push(remote);
+        }
+        participants
+    }
+
+    #[must_use]
+    pub fn joined_client_local_identity(&self) -> Option<(ClientId, PlayerId)> {
+        (self.local.role == OnlineParticipantRole::JoinedClient)
+            .then_some((self.local.client_id, self.local.player_id))
+    }
+
+    #[must_use]
+    pub const fn player_id_for_local_network_tick(&self) -> PlayerId {
+        self.local.player_id
+    }
+
+    #[must_use]
+    pub const fn client_id_for_local_network_tick(&self) -> ClientId {
+        self.local.client_id
+    }
+
+    #[must_use]
+    pub fn remote_connected(&self) -> bool {
+        self.remote.as_ref().is_some_and(|remote| remote.connected)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2699,6 +2765,14 @@ impl WorldState {
             .insert(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds);
         self.authoritative_summary =
             AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
+    }
+}
+
+fn client_id_for_online_slot(slot: u8) -> ClientId {
+    if slot == 2 {
+        ClientId::new(1)
+    } else {
+        ClientId::new(u64::from(slot))
     }
 }
 
@@ -5364,6 +5438,123 @@ impl GameSession {
             .collect()
     }
 
+    #[must_use]
+    pub fn local_network_identity(&self) -> (ClientId, PlayerId) {
+        let roster = self.online_session_roster();
+        let player_id = roster.player_id_for_local_network_tick();
+        let client_id = if self.game.online_player_slot == Some(2) {
+            ClientId::new(1)
+        } else {
+            roster.client_id_for_local_network_tick()
+        };
+        (client_id, player_id)
+    }
+
+    #[must_use]
+    pub fn online_session_roster(&self) -> OnlineSessionRoster {
+        let local_slot = self.game.online_player_slot.unwrap_or(1);
+        let local_role = if self.game.online_player_slot.is_some() {
+            OnlineParticipantRole::JoinedClient
+        } else {
+            OnlineParticipantRole::LocalHost
+        };
+        let local_save_authority = if self.game.online_host_owns_save {
+            SaveAuthority::HostOwnedSession
+        } else {
+            SaveAuthority::LocalSinglePlayer
+        };
+        let remote = self.online_remote_roster_participant(local_slot, local_save_authority);
+        let local = OnlineRosterParticipant {
+            client_id: if local_slot == 1 {
+                self.local_client_id
+            } else {
+                client_id_for_online_slot(local_slot)
+            },
+            player_id: PlayerId::new(u64::from(local_slot)),
+            slot: local_slot,
+            name: self.game.online_player_name.clone(),
+            ready: self.game.online_local_ready,
+            connected: true,
+            role: local_role,
+            save_authority: local_save_authority,
+        };
+        OnlineSessionRoster { local, remote }
+    }
+
+    fn online_remote_roster_participant(
+        &self,
+        local_slot: u8,
+        local_save_authority: SaveAuthority,
+    ) -> Option<OnlineRosterParticipant> {
+        if !self.game.online_remote_player_connected
+            && self.game.online_remote_player_name.is_none()
+            && self.game.online_remote_player_snapshots.is_empty()
+        {
+            return None;
+        }
+        let remote_slot = if local_slot == 1 { 2 } else { 1 };
+        let remote_role = if local_slot == 1 {
+            OnlineParticipantRole::RemotePeer
+        } else {
+            OnlineParticipantRole::LocalHost
+        };
+        let remote_save_authority = if matches!(remote_role, OnlineParticipantRole::LocalHost) {
+            SaveAuthority::HostOwnedSession
+        } else {
+            local_save_authority
+        };
+        Some(OnlineRosterParticipant {
+            client_id: client_id_for_online_slot(remote_slot),
+            player_id: PlayerId::new(u64::from(remote_slot)),
+            slot: remote_slot,
+            name: self
+                .game
+                .online_remote_player_name
+                .clone()
+                .unwrap_or_else(|| "Remote miner".to_owned()),
+            ready: self.game.online_remote_player_ready,
+            connected: self.game.online_remote_player_connected
+                || !self.game.online_remote_player_snapshots.is_empty(),
+            role: remote_role,
+            save_authority: remote_save_authority,
+        })
+    }
+
+    pub fn ensure_local_online_player_presentation_from_roster(&mut self) -> bool {
+        let roster = self.online_session_roster();
+        let mut created = false;
+        for participant in roster.participants() {
+            if !self.has_client(participant.client_id) {
+                created |=
+                    self.add_local_client_player(participant.client_id, participant.player_id);
+            }
+            if self.world.player(participant.player_id).is_none() {
+                let mut player = self.game.player.clone();
+                player.x += f32::from(participant.slot.saturating_sub(1)) * TILE_SIZE;
+                self.world.insert_player(participant.player_id, player);
+                created = true;
+            }
+        }
+        created
+    }
+
+    pub fn sync_joined_local_player_from_replicated_game(&mut self) -> bool {
+        let Some(slot) = self.game.online_player_slot else {
+            return false;
+        };
+        let player_id = PlayerId::new(u64::from(slot));
+        if let Some(player) = self.world.player_mut(player_id) {
+            *player = self.game.player.clone();
+            self.sync_legacy_player_from_world(player_id);
+        } else {
+            self.world
+                .insert_player(player_id, self.game.player.clone());
+        }
+        self.world
+            .set_scanner_cooldown_seconds(player_id, self.game.scanner_cooldown_seconds);
+        true
+    }
+
     pub fn ensure_local_online_player_presentation_from_legacy_view(
         &mut self,
         player_id: PlayerId,
@@ -5570,6 +5761,75 @@ impl GameSession {
             terrain_events,
             cargo_events,
         }
+    }
+
+    pub fn apply_replicated_terrain_chunk_to_world_presentation(
+        &mut self,
+        chunk_x: i32,
+        chunk_y: i32,
+        revision: u64,
+        tiles: &[NetworkTerrainTile],
+    ) -> usize {
+        let mut changed_tiles = Vec::new();
+        for tile in tiles {
+            let position = TilePosition {
+                x: tile.x,
+                y: tile.y,
+            };
+            let world_matches = self.world.terrain.tile(position).is_some_and(|current| {
+                current.kind == tile.kind && current.durability == tile.durability
+            });
+            let game_matches = self.game.terrain.tile(position).is_some_and(|current| {
+                current.kind == tile.kind && current.durability == tile.durability
+            });
+            if world_matches && game_matches {
+                continue;
+            }
+            if self
+                .world
+                .terrain_mut()
+                .set_tile_from_network(position, tile.kind, tile.durability)
+            {
+                changed_tiles.push(position);
+            }
+        }
+        if changed_tiles.is_empty() {
+            if !self
+                .game
+                .online_last_terrain_status
+                .contains("applied chunk")
+            {
+                self.game.apply_online_terrain_status(format!(
+                    "received chunk ({chunk_x},{chunk_y}) rev {revision} with no visible tile changes"
+                ));
+            }
+            self.game.apply_online_sync_loop_status(
+                crate::game_state::OnlineSyncLoopStatus::terrain(tiles.len(), 0),
+            );
+            return 0;
+        }
+        let visible_tiles = changed_tiles.len();
+        self.game.terrain.clone_from(self.world.terrain());
+        self.game
+            .visual_changes
+            .changed_tiles
+            .extend(changed_tiles.clone());
+        let revisions = self.mark_world_terrain_tiles_changed(changed_tiles.clone());
+        self.push_event(WorldEvent::TerrainTilesChanged {
+            positions: changed_tiles,
+        });
+        if !revisions.is_empty() {
+            self.push_event(WorldEvent::TerrainChunksChanged { revisions });
+        }
+        self.game.apply_online_terrain_status(format!(
+            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {visible_tiles} visible tiles"
+        ));
+        self.game
+            .apply_online_sync_loop_status(crate::game_state::OnlineSyncLoopStatus::terrain(
+                tiles.len(),
+                visible_tiles,
+            ));
+        visible_tiles
     }
 
     pub fn apply_replicated_snapshot_to_world_presentation(
