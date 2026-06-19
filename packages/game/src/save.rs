@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "persistent world save migration APIs are kept while production online save boundaries are wired"
+)]
+
 use std::{
     collections::BTreeMap,
     env,

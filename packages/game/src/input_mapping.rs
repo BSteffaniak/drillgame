@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "some command-source helpers are kept for multiplayer cleanup without frame-time scaffolding observer"
+)]
+
 use crate::{
     input::PlayerInput,
     multiplayer::{ClientAction, ClientId, CommandSource, PlayerCommand},
@@ -32,6 +37,10 @@ impl LocalInputProducer {
 }
 
 impl CommandProducer {
+    #[allow(
+        dead_code,
+        reason = "kept for command-source cleanup without frame-time scaffolding observer"
+    )]
     #[must_use]
     pub const fn new(source: CommandSource, commands: Vec<PlayerCommand>) -> Self {
         Self { source, commands }

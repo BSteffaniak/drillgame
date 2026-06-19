@@ -4895,6 +4895,10 @@ pub struct GameState {
     pub visual_changes: VisualChanges,
 }
 
+#[allow(
+    dead_code,
+    reason = "app shell still being cut over while legacy runtime scaffolding observer is removed"
+)]
 impl GameState {
     #[must_use]
     pub fn clone_for_save(&self) -> Self {

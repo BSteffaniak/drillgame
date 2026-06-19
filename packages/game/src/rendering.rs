@@ -67,7 +67,7 @@ fn draw_local_player_override(
     } else {
         draw_player(draw, game);
     }
-    for player in &game.online_remote_player_snapshots {
+    for player in world_players.iter().filter(|player| !player.local_to_view) {
         draw_remote_player_at(draw, player.x, player.y);
     }
 }
@@ -239,11 +239,6 @@ impl GameRenderer {
             }
 
             draw_local_player_override(&mut world_draw, game, world_players);
-            for player in world_players {
-                if !player.local_to_view {
-                    world::draw_remote_player(&mut world_draw, player.x, player.y);
-                }
-            }
         }
         if game.screen_flash_seconds > 0.0 {
             let alpha = (game.screen_flash_seconds * 500.0).clamp(0.0, 180.0) as u8;

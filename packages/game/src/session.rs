@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "session/world cleanup is now driven by production playability; old frame-time scaffolding observer no longer anchors transitional APIs"
+)]
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem,
