@@ -427,94 +427,6 @@ impl LegacyGameStateWriteBoundaryStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompatibilityMethodNamingStatus {
-    pub update_legacy_name_explicit: bool,
-    pub legacy_presentation_adapter_name_explicit: bool,
-    pub compatibility_wrapper_named: bool,
-}
-
-impl CompatibilityMethodNamingStatus {
-    #[must_use]
-    pub const fn current() -> Self {
-        Self {
-            update_legacy_name_explicit: true,
-            legacy_presentation_adapter_name_explicit: true,
-            compatibility_wrapper_named: true,
-        }
-    }
-
-    #[must_use]
-    pub const fn temporary_bridge_status_obvious(self) -> bool {
-        self.update_legacy_name_explicit
-            && self.legacy_presentation_adapter_name_explicit
-            && self.compatibility_wrapper_named
-    }
-}
-
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "snapshot truth boundary reports independent temporary bridge removal gates"
-)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SnapshotApplicationTruthBoundaryStatus {
-    pub snapshots_apply_to_world_first: bool,
-    pub legacy_mirror_presentation_only: bool,
-    pub remote_state_consumable_by_session: bool,
-    pub local_player_not_online_authority: bool,
-    pub legacy_save_load_scoped_by_policy: bool,
-}
-
-impl SnapshotApplicationTruthBoundaryStatus {
-    #[must_use]
-    pub const fn current() -> Self {
-        Self {
-            snapshots_apply_to_world_first: true,
-            legacy_mirror_presentation_only: true,
-            remote_state_consumable_by_session: true,
-            local_player_not_online_authority: true,
-            legacy_save_load_scoped_by_policy: true,
-        }
-    }
-
-    #[must_use]
-    pub const fn legacy_truth_removed(self) -> bool {
-        self.snapshots_apply_to_world_first
-            && self.legacy_mirror_presentation_only
-            && self.remote_state_consumable_by_session
-            && self.local_player_not_online_authority
-            && self.legacy_save_load_scoped_by_policy
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompatibilityDeletionReadiness {
-    BlockedByPresentationRenderer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompatibilityDeletionStatus {
-    pub readiness: CompatibilityDeletionReadiness,
-    pub runtime_depends_on_legacy_input_rewrite: bool,
-    pub renderer_depends_on_presentation_bridge: bool,
-}
-
-impl CompatibilityDeletionStatus {
-    #[must_use]
-    pub const fn current() -> Self {
-        Self {
-            readiness: CompatibilityDeletionReadiness::BlockedByPresentationRenderer,
-            runtime_depends_on_legacy_input_rewrite: false,
-            renderer_depends_on_presentation_bridge: true,
-        }
-    }
-
-    #[must_use]
-    pub const fn runtime_path_clear(self) -> bool {
-        !self.runtime_depends_on_legacy_input_rewrite
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyGameStateCouplingDomain {
     PresentationCompatibility,
     SaveMenuUi,
@@ -6935,15 +6847,14 @@ mod tests {
     };
 
     use super::{
-        ClientPredictionState, ClientState, CompactWorldDelta, CompatibilityDeletionReadiness,
-        CompatibilityDeletionStatus, CompatibilityMethodNamingStatus, GameSession,
+        ClientPredictionState, ClientState, CompactWorldDelta, GameSession,
         HostAuthorityCommandRoutingDomain, JoinedClientAuthorityBoundaryStatus,
         LegacyGameStateWriteBoundaryStatus, LegacyInputRewriteRemovalStatus,
         NetworkDebugInstrumentationSnapshot, PlayerSnapshot, PredictionCorrectionTuning,
         PredictionFailure, PredictionRecoveryAction, RemoteTimingTuning,
-        RenderingInputMigrationStatus, SnapshotApplicationTruthBoundaryStatus, WorldState,
-        host_authority_command_routing_inventory, host_authority_command_routing_summary,
-        legacy_game_state_coupling_inventory, legacy_game_state_coupling_inventory_summary,
+        RenderingInputMigrationStatus, WorldState, host_authority_command_routing_inventory,
+        host_authority_command_routing_summary, legacy_game_state_coupling_inventory,
+        legacy_game_state_coupling_inventory_summary,
     };
 
     #[test]
@@ -7878,9 +7789,6 @@ mod tests {
     fn rendering_inputs_and_legacy_write_boundaries_are_migrated_to_session_presentations() {
         let rendering = RenderingInputMigrationStatus::current();
         let write_boundary = LegacyGameStateWriteBoundaryStatus::current();
-        let naming = CompatibilityMethodNamingStatus::current();
-        let snapshot_truth = SnapshotApplicationTruthBoundaryStatus::current();
-        let deletion = CompatibilityDeletionStatus::current();
 
         assert!(rendering.camera_from_session_view);
         assert!(rendering.players_from_world_presentation);
@@ -7892,23 +7800,6 @@ mod tests {
         assert!(write_boundary.authoritative_world_writes_blocked);
         assert!(write_boundary.online_save_boundary_enforced);
         assert!(write_boundary.limited_to_compatibility());
-        assert!(naming.update_legacy_name_explicit);
-        assert!(naming.legacy_presentation_adapter_name_explicit);
-        assert!(naming.compatibility_wrapper_named);
-        assert!(naming.temporary_bridge_status_obvious());
-        assert!(snapshot_truth.snapshots_apply_to_world_first);
-        assert!(snapshot_truth.legacy_mirror_presentation_only);
-        assert!(snapshot_truth.remote_state_consumable_by_session);
-        assert!(snapshot_truth.local_player_not_online_authority);
-        assert!(snapshot_truth.legacy_save_load_scoped_by_policy);
-        assert!(snapshot_truth.legacy_truth_removed());
-        assert_eq!(
-            deletion.readiness,
-            CompatibilityDeletionReadiness::BlockedByPresentationRenderer
-        );
-        assert!(!deletion.runtime_depends_on_legacy_input_rewrite);
-        assert!(deletion.renderer_depends_on_presentation_bridge);
-        assert!(deletion.runtime_path_clear());
     }
 
     #[test]
@@ -7944,21 +7835,6 @@ mod tests {
         assert!(remote_after.velocity_y < 0.0);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
         assert!(LegacyInputRewriteRemovalStatus::current().removal_complete());
-    }
-
-    #[test]
-    fn world_snapshot_application_boundary_keeps_legacy_state_presentation_only() {
-        let status = SnapshotApplicationTruthBoundaryStatus::current();
-        let inventory = legacy_game_state_coupling_inventory_summary();
-
-        assert!(status.snapshots_apply_to_world_first);
-        assert!(status.legacy_mirror_presentation_only);
-        assert!(status.remote_state_consumable_by_session);
-        assert!(status.local_player_not_online_authority);
-        assert!(status.legacy_save_load_scoped_by_policy);
-        assert!(status.legacy_truth_removed());
-        assert_eq!(inventory.authoritative_world_couplings, 0);
-        assert!(inventory.runtime_inventory_complete());
     }
 
     #[test]
