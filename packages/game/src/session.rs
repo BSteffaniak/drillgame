@@ -2401,12 +2401,19 @@ pub struct RenderPlayerPresentation {
     pub correction_plan: CorrectionPlan,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderPlayerPresentationSource {
+    AuthoritativeWorld,
+    PredictedLocal,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderWorldPlayerPresentation {
     pub player_id: PlayerId,
     pub x: f32,
     pub y: f32,
     pub local_to_view: bool,
+    pub source: RenderPlayerPresentationSource,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2455,6 +2462,20 @@ impl LiveRenderFrameOutput {
     }
 
     #[must_use]
+    pub fn all_visible_players_are_session_sourced(&self) -> bool {
+        self.world_players_by_view
+            .iter()
+            .flat_map(|(_, players)| players)
+            .all(|player| {
+                matches!(
+                    player.source,
+                    RenderPlayerPresentationSource::AuthoritativeWorld
+                        | RenderPlayerPresentationSource::PredictedLocal
+                )
+            })
+    }
+
+    #[must_use]
     pub fn ready_for_live_render_path(&self) -> bool {
         let client_count = self.viewport_plans.len();
         let mut viewports = BTreeSet::new();
@@ -2476,6 +2497,7 @@ impl LiveRenderFrameOutput {
             && players.len() == client_count
             && self.hud_snapshots.len() == client_count
             && self.split_screen_ui_ready()
+            && self.all_visible_players_are_session_sourced()
             && (self
                 .viewport_plans
                 .iter()
@@ -2591,6 +2613,10 @@ impl RenderFramePlan {
                     x: predicted.map_or(player.x, |movement| movement.x),
                     y: predicted.map_or(player.y, |movement| movement.y),
                     local_to_view,
+                    source: predicted
+                        .map_or(RenderPlayerPresentationSource::AuthoritativeWorld, |_| {
+                            RenderPlayerPresentationSource::PredictedLocal
+                        }),
                 }
             })
             .collect()
@@ -5699,6 +5725,7 @@ mod tests {
                     .iter()
                     .any(|player| player.player_id == second_player)
         }));
+        assert!(output.all_visible_players_are_session_sourced());
         assert!(output.viewport_plans.iter().all(|plan| plan.clip_enabled));
     }
 
@@ -5727,6 +5754,16 @@ mod tests {
                 .all(|plan| plan.local_player.is_some())
         );
         assert_eq!(output.hud_count(), 2);
+        assert!(output.all_visible_players_are_session_sourced());
+        assert!(
+            output
+                .world_players_by_view
+                .iter()
+                .flat_map(|(_, players)| players)
+                .any(
+                    |player| player.source == super::RenderPlayerPresentationSource::PredictedLocal
+                )
+        );
         assert!(output.split_screen_ui_ready());
         assert!(output.ready_for_live_render_path());
     }
