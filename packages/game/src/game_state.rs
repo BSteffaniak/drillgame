@@ -1914,6 +1914,99 @@ impl OnlineManualWorkingGameGateStatus {
 
 #[allow(
     clippy::struct_excessive_bools,
+    reason = "same-machine product validation exposes independent UI evidence players must verify"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SameMachineProductValidationStatus {
+    pub descriptor_path_visible: bool,
+    pub address_visible: bool,
+    pub role_visible: bool,
+    pub slot_visible: bool,
+    pub save_authority_visible: bool,
+    pub joined_client_write_blocking_visible: bool,
+    pub connected_remote_state_visible: bool,
+    pub ready_state_visible: bool,
+    pub gameplay_started: bool,
+    pub status: String,
+}
+
+impl SameMachineProductValidationStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let role = game.online_role_label();
+        let slot = game
+            .online_player_slot
+            .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
+        let descriptor_path = game.online_descriptor_path.display().to_string();
+        let descriptor_path_visible = !descriptor_path.is_empty();
+        let address_visible = game.online_host_advertise_addr.port() != 0
+            || game.online_session_status_message.contains("descriptor")
+            || matches!(game.online_session_state, OnlineSessionUxState::Hosting);
+        let role_visible = !role.is_empty();
+        let slot_visible = game.online_player_slot.is_some();
+        let save_authority_visible = game.online_host_owns_save
+            || matches!(game.online_session_state, OnlineSessionUxState::Connected)
+            || game
+                .online_last_save_boundary_status
+                .contains("Online save boundary");
+        let joined_client_write_blocking_visible = if game.online_host_owns_save {
+            true
+        } else {
+            !game.can_write_local_save()
+                || game
+                    .online_last_save_boundary_status
+                    .contains("joined clients cannot write")
+                || game.message.contains("joined clients cannot write")
+        };
+        let connected_remote_state_visible = game.online_remote_player_connected
+            || !game.online_remote_player_snapshots.is_empty()
+            || game.online_session_roster_status.contains("connected");
+        let ready_state_visible = game.online_local_ready
+            || game.online_remote_player_ready
+            || game.online_session_roster_status.contains("ready");
+        let gameplay_started = game.run_mode == RunMode::Playing
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected);
+        let status = format!(
+            "Same-machine validation UI: descriptor_path={} address={} role={} slot={} save_authority={} joined_write_blocking={} remote_state={} ready_state={} gameplay_started={} identity_save_ui={} session_state_ui={} role_label={} slot_label={} descriptor={}",
+            yes_no(descriptor_path_visible),
+            yes_no(address_visible),
+            yes_no(role_visible),
+            yes_no(slot_visible),
+            yes_no(save_authority_visible),
+            yes_no(joined_client_write_blocking_visible),
+            yes_no(connected_remote_state_visible),
+            yes_no(ready_state_visible),
+            yes_no(gameplay_started),
+            yes_no(
+                descriptor_path_visible
+                    && address_visible
+                    && role_visible
+                    && slot_visible
+                    && save_authority_visible
+                    && joined_client_write_blocking_visible
+            ),
+            yes_no(connected_remote_state_visible && ready_state_visible),
+            role,
+            slot,
+            descriptor_path
+        );
+        Self {
+            descriptor_path_visible,
+            address_visible,
+            role_visible,
+            slot_visible,
+            save_authority_visible,
+            joined_client_write_blocking_visible,
+            connected_remote_state_visible,
+            ready_state_visible,
+            gameplay_started,
+            status,
+        }
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
     reason = "sustained-play status checks independent runtime sync signals for manual mining sessions"
 )]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5923,6 +6016,7 @@ impl GameState {
         }
         lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
         lines.push(OnlineSessionUxReducerStatus::from_game(self).status);
+        lines.push(SameMachineProductValidationStatus::from_game(self).status);
         lines.push(OnlineNetworkTaskOrchestrationStatus::from_game(self).status);
         lines.push(MultiplayerPortabilityBoundaryStatus::from_game(self).status);
         lines.push(if self.online_last_ownership_status.is_empty() {
@@ -11195,6 +11289,59 @@ mod tests {
             line.contains("Online network orchestration")
                 && line.contains("descriptor-host-pending")
         }));
+    }
+
+    #[test]
+    fn same_machine_product_validation_status_surfaces_identity_save_and_session_ui() {
+        let mut host = GameState::new();
+        host.online_session_state = OnlineSessionUxState::Connected;
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        host.online_host_advertise_addr = "127.0.0.1:3456".parse().expect("valid addr");
+        host.online_remote_player_connected = true;
+        host.online_local_ready = true;
+        host.online_remote_player_ready = true;
+        host.run_mode = RunMode::Playing;
+
+        let host_status = SameMachineProductValidationStatus::from_game(&host);
+
+        assert!(host_status.descriptor_path_visible);
+        assert!(host_status.address_visible);
+        assert!(host_status.role_visible);
+        assert!(host_status.slot_visible);
+        assert!(host_status.save_authority_visible);
+        assert!(host_status.joined_client_write_blocking_visible);
+        assert!(host_status.connected_remote_state_visible);
+        assert!(host_status.ready_state_visible);
+        assert!(host_status.gameplay_started);
+        assert!(host_status.status.contains("role_label=host"));
+        assert!(host_status.status.contains("slot_label=1"));
+        assert!(host.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Same-machine validation UI") && line.contains("gameplay_started=yes")
+        }));
+
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_host_advertise_addr = "127.0.0.1:3456".parse().expect("valid addr");
+        client.online_remote_player_connected = true;
+        client.online_local_ready = true;
+        client.online_remote_player_ready = true;
+        client.message = "Save blocked: host owns the online session save; joined clients cannot write local saves.".to_owned();
+
+        let client_status = SameMachineProductValidationStatus::from_game(&client);
+
+        assert!(client_status.descriptor_path_visible);
+        assert!(client_status.address_visible);
+        assert!(client_status.role_visible);
+        assert!(client_status.slot_visible);
+        assert!(client_status.save_authority_visible);
+        assert!(client_status.joined_client_write_blocking_visible);
+        assert!(client_status.connected_remote_state_visible);
+        assert!(client_status.ready_state_visible);
+        assert!(client_status.status.contains("joined_write_blocking=yes"));
+        assert!(client_status.status.contains("role_label=client"));
     }
 
     #[test]
