@@ -279,6 +279,7 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         draw.draw_text(&scanner, 22, 156, 16, Color::SKYBLUE);
     }
     draw_infrastructure_kit_prompts(draw, game);
+    draw_online_gameplay_hud(draw, game);
 
     if game.escape_sequence_seconds > 0.0 {
         draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
@@ -297,6 +298,49 @@ pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     }
     if game.show_details {
         draw_debug_stats(draw, game);
+    }
+}
+
+fn draw_online_gameplay_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let presentation = game.online_gameplay_hud_presentation();
+    let lines = presentation.lines();
+    if lines.is_empty() {
+        return;
+    }
+    let panel_x = SCREEN_WIDTH - 430;
+    let panel_y = 64;
+    let panel_height = 34 + i32::try_from(lines.len()).unwrap_or(i32::MAX) * 22;
+    draw.draw_rectangle(
+        panel_x - 12,
+        panel_y - 12,
+        408,
+        panel_height,
+        Color::new(0, 0, 35, 190),
+    );
+    draw.draw_rectangle_lines(
+        panel_x - 12,
+        panel_y - 12,
+        408,
+        panel_height,
+        Color::SKYBLUE,
+    );
+    draw.draw_text("Online session", panel_x, panel_y, 20, Color::SKYBLUE);
+    for (index, line) in lines.iter().enumerate() {
+        let color = match index {
+            0 => Color::RAYWHITE,
+            1 if line.contains("blocked") => Color::YELLOW,
+            1 => Color::LIME,
+            2 if line.contains("waiting") => Color::YELLOW,
+            3 | 4 if line.contains("waiting") => Color::GRAY,
+            _ => Color::LIGHTGRAY,
+        };
+        draw.draw_text(
+            line,
+            panel_x,
+            panel_y + 30 + i32::try_from(index).unwrap_or(i32::MAX) * 22,
+            14,
+            color,
+        );
     }
 }
 

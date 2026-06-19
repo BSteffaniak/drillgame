@@ -1023,6 +1023,45 @@ impl OnlineLobbyPresentation {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplayHudPresentation {
+    pub visible: bool,
+    pub role_label: &'static str,
+    pub slot_label: String,
+    pub local_ready_label: &'static str,
+    pub remote_label: String,
+    pub remote_ready_label: &'static str,
+    pub save_policy_label: String,
+    pub session_label: String,
+    pub replication_label: String,
+    pub terrain_label: String,
+    pub authority_label: String,
+}
+
+impl OnlineGameplayHudPresentation {
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        if !self.visible {
+            return Vec::new();
+        }
+        vec![
+            format!(
+                "Online {} slot {} | local {} | remote {} {}",
+                self.role_label,
+                self.slot_label,
+                self.local_ready_label,
+                self.remote_label,
+                self.remote_ready_label
+            ),
+            self.save_policy_label.clone(),
+            self.session_label.clone(),
+            self.replication_label.clone(),
+            self.terrain_label.clone(),
+            self.authority_label.clone(),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RunMode {
     Title,
@@ -6307,6 +6346,79 @@ impl GameState {
     #[must_use]
     pub fn online_lobby_participant_lines(&self) -> Vec<String> {
         self.online_lobby_presentation().lines()
+    }
+
+    #[must_use]
+    pub fn online_gameplay_hud_presentation(&self) -> OnlineGameplayHudPresentation {
+        let visible = matches!(
+            self.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+                | OnlineSessionUxState::Timeout
+                | OnlineSessionUxState::Error
+                | OnlineSessionUxState::Shutdown
+        );
+        let remote_label = self
+            .online_remote_player_name
+            .clone()
+            .unwrap_or_else(|| "remote player".to_owned());
+        let slot_label = self
+            .online_player_slot
+            .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
+        let save_policy = self.online_save_exit_policy();
+        let save_policy_label = if save_policy.local_save_allowed {
+            "Save authority: local writes allowed for this host-owned session.".to_owned()
+        } else {
+            "Save authority: remote host owns save; local save/load blocked while joined."
+                .to_owned()
+        };
+        let session_label = format!(
+            "Session: {:?} | {}",
+            self.online_session_state,
+            if self.online_remote_player_connected {
+                "remote connected"
+            } else {
+                "waiting for remote"
+            }
+        );
+        let replication_label = if self.online_last_replicated_player_status.is_empty() {
+            "Player sync: waiting for replicated player state.".to_owned()
+        } else {
+            format!("Player sync: {}", self.online_last_replicated_player_status)
+        };
+        let terrain_label = if self.online_last_terrain_status.is_empty() {
+            "Terrain sync: waiting for terrain chunk updates.".to_owned()
+        } else {
+            format!("Terrain sync: {}", self.online_last_terrain_status)
+        };
+        let authority_label = if self.online_last_correction_status.is_empty() {
+            "Authority: host simulation owns corrections.".to_owned()
+        } else {
+            self.online_last_correction_status.clone()
+        };
+        OnlineGameplayHudPresentation {
+            visible,
+            role_label: self.online_role_label(),
+            slot_label,
+            local_ready_label: if self.online_local_ready {
+                "ready"
+            } else {
+                "not-ready"
+            },
+            remote_label,
+            remote_ready_label: if self.online_remote_player_ready {
+                "ready"
+            } else {
+                "not-ready"
+            },
+            save_policy_label,
+            session_label,
+            replication_label,
+            terrain_label,
+            authority_label,
+        }
     }
 
     #[must_use]
