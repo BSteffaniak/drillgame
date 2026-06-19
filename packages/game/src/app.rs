@@ -1104,6 +1104,188 @@ mod tests {
     }
 
     #[test]
+    fn accepted_remote_drill_commands_mine_authoritative_terrain_through_app_session_path() {
+        let mut session = GameSession::new();
+        let remote_client = crate::multiplayer::ClientId::new(2);
+        let remote_player = crate::multiplayer::PlayerId::new(2);
+        assert!(session.add_local_client_player(remote_client, remote_player));
+        let mut player = session.game().player.clone();
+        player.x = crate::game_state::TILE_SIZE * 10.0;
+        player.y = crate::game_state::TILE_SIZE * 10.0;
+        player.drill_strength = 4;
+        *session
+            .world_mut()
+            .player_mut(remote_player)
+            .expect("remote player exists") = player;
+        let target = crate::terrain::TilePosition { x: 10, y: 11 };
+        assert!(
+            session
+                .world_mut()
+                .terrain_mut()
+                .set_kind(target, crate::terrain::TileKind::Dirt)
+        );
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: remote_client,
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: session.current_tick(),
+            accepted_commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: crate::multiplayer::InputSequence::new(8),
+                target_tick: session.current_tick(),
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            }],
+        };
+
+        let applied =
+            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let advance = session.advance_authoritative_world_ticks(30);
+        let delta = session.drain_world_delta().compact_network_delta();
+
+        assert_eq!(applied, 1);
+        assert!(advance.terrain_events > 0);
+        assert_eq!(
+            session
+                .world()
+                .terrain()
+                .tile(target)
+                .expect("target tile exists")
+                .kind,
+            crate::terrain::TileKind::Air
+        );
+        assert!(matches!(
+            delta,
+            crate::session::CompactWorldDelta::TerrainChunks { .. }
+        ));
+    }
+
+    #[test]
+    fn accepted_remote_service_commands_are_host_authoritative_through_app_session_path() {
+        let mut session = GameSession::new();
+        let remote_client = crate::multiplayer::ClientId::new(2);
+        let remote_player = crate::multiplayer::PlayerId::new(2);
+        assert!(session.add_local_client_player(remote_client, remote_player));
+        {
+            let player = session
+                .world_mut()
+                .player_mut(remote_player)
+                .expect("remote player exists");
+            player.credits = 10_000;
+            player.fuel = 1.0;
+            player.hull = 1.0;
+        }
+        let target_tick = session.current_tick();
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: remote_client,
+            acknowledged: 3,
+            rejected: 0,
+            authoritative_tick: target_tick,
+            accepted_commands: vec![
+                crate::multiplayer::SequencedPlayerCommand {
+                    player_id: remote_player,
+                    sequence: crate::multiplayer::InputSequence::new(9),
+                    target_tick,
+                    command: PlayerCommand::Refuel,
+                },
+                crate::multiplayer::SequencedPlayerCommand {
+                    player_id: remote_player,
+                    sequence: crate::multiplayer::InputSequence::new(10),
+                    target_tick,
+                    command: PlayerCommand::Repair,
+                },
+                crate::multiplayer::SequencedPlayerCommand {
+                    player_id: remote_player,
+                    sequence: crate::multiplayer::InputSequence::new(11),
+                    target_tick,
+                    command: PlayerCommand::BuyUpgrade { index: 0 },
+                },
+            ],
+        };
+
+        let applied =
+            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let player = session
+            .world()
+            .player(remote_player)
+            .expect("remote player exists");
+        let transaction_kinds = session
+            .world()
+            .service_transactions()
+            .iter()
+            .map(|transaction| transaction.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(applied, 3);
+        assert!(player.fuel > 1.0);
+        assert!(player.hull > 1.0);
+        assert!(transaction_kinds.contains(&crate::session::PlayerTransactionKind::Refuel));
+        assert!(transaction_kinds.contains(&crate::session::PlayerTransactionKind::Repair));
+        assert!(transaction_kinds.contains(&crate::session::PlayerTransactionKind::BuyUpgrade));
+        assert!(session.game().player.credits < 10_000);
+    }
+
+    #[test]
+    fn accepted_remote_rescue_updates_authoritative_survival_snapshot_for_replication() {
+        let mut session = GameSession::new();
+        let remote_client = crate::multiplayer::ClientId::new(2);
+        let remote_player = crate::multiplayer::PlayerId::new(2);
+        assert!(session.add_local_client_player(remote_client, remote_player));
+        {
+            let player = session
+                .world_mut()
+                .player_mut(remote_player)
+                .expect("remote player exists");
+            player.fuel = 0.0;
+            player.hull = 0.0;
+            player.x = 500.0;
+            player.y = 900.0;
+        }
+        let before = session
+            .world()
+            .player_survival_snapshot(remote_player)
+            .expect("survival snapshot before rescue");
+        let target_tick = session.current_tick();
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: remote_client,
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: target_tick,
+            accepted_commands: vec![crate::multiplayer::SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: crate::multiplayer::InputSequence::new(12),
+                target_tick,
+                command: PlayerCommand::Rescue,
+            }],
+        };
+
+        let applied =
+            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let after = session
+            .world()
+            .player_survival_snapshot(remote_player)
+            .expect("survival snapshot after rescue");
+        let replicated = session
+            .world_snapshot()
+            .network_snapshot()
+            .players
+            .into_iter()
+            .find(|player| player.player_id == remote_player)
+            .expect("remote player replicated");
+
+        assert_eq!(applied, 1);
+        assert!(before.disabled);
+        assert!(!after.disabled);
+        assert!(after.fuel > before.fuel);
+        assert!(after.hull > before.hull);
+        assert!((replicated.fuel - after.fuel).abs() < f32::EPSILON);
+        assert!((replicated.hull - after.hull).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn live_session_tick_input_requests_chunk_containing_visible_player() {
         let mut session = GameSession::new();
         session
