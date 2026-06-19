@@ -601,6 +601,9 @@ pub fn run() {
         }
 
         let authority_update = session.update_frame_from_session_authority(input, delta_seconds);
+        if session.should_exit() {
+            online_tasks.drain_and_execute(session.game_mut());
+        }
         let _legacy_bridge_active = authority_update.legacy_bridge_active();
         let world_delta = session.drain_world_delta();
         let _world_delta_is_empty = world_delta.is_empty();
@@ -621,7 +624,7 @@ pub fn run() {
             audio.play(&session.game().sound_cues);
         }
 
-        renderer.sync_delta(&mut raylib, &thread, session.game(), &world_delta);
+        renderer.sync_delta(&mut raylib, &thread, session.game_mut(), &world_delta);
 
         let mut draw = raylib.begin_drawing(&thread);
         session.update_remote_timing_from_network_sample(0.0, 0.0);

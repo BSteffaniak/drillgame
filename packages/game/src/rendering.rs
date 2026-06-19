@@ -92,7 +92,7 @@ impl GameRenderer {
         &mut self,
         raylib: &mut RaylibHandle,
         thread: &RaylibThread,
-        game: &GameState,
+        game: &mut GameState,
         delta: &WorldDelta,
     ) {
         for event in &delta.events {
@@ -103,9 +103,14 @@ impl GameRenderer {
                         self.terrain.mark_tile_dirty(*tile);
                     }
                 }
+                WorldEvent::TerrainChunksChanged { revisions } => {
+                    for revision in revisions {
+                        self.terrain
+                            .mark_chunk_dirty(revision.position.x, revision.position.y);
+                    }
+                }
                 WorldEvent::TickAdvanced { .. }
                 | WorldEvent::CommandsProcessed { .. }
-                | WorldEvent::TerrainChunksChanged { .. }
                 | WorldEvent::SnapshotKeyframeReady { .. }
                 | WorldEvent::MessageChanged { .. }
                 | WorldEvent::PlayerChanged { .. }
@@ -121,6 +126,13 @@ impl GameRenderer {
                 | WorldEvent::ClientExitRequested { .. }
                 | WorldEvent::ClientSettingsChanged { .. } => {}
             }
+        }
+        let visual_changes = game.drain_visual_changes();
+        if visual_changes.full_terrain_refresh {
+            self.terrain.mark_all_dirty();
+        }
+        for tile in visual_changes.changed_tiles {
+            self.terrain.mark_tile_dirty(tile);
         }
         self.terrain.sync(raylib, thread, game);
     }
@@ -270,7 +282,7 @@ impl GameRenderer {
         }
 
         if let Some(modal) = game.modal {
-            draw_modal(draw, game, modal);
+            draw_modal(draw, game, modal, hud);
         }
 
         if game.game_over {

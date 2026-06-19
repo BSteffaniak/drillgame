@@ -5101,6 +5101,10 @@ impl GameState {
         &self.visual_changes
     }
 
+    pub fn drain_visual_changes(&mut self) -> VisualChanges {
+        mem::take(&mut self.visual_changes)
+    }
+
     pub const fn mark_full_terrain_refresh(&mut self) {
         self.visual_changes.full_terrain_refresh = true;
     }
@@ -6802,13 +6806,18 @@ impl GameState {
         }
     }
 
+    fn request_exit_and_online_shutdown(&mut self) {
+        let _shutdown_requested = self.request_online_shutdown_from_gameplay_exit();
+        self.request_exit = true;
+    }
+
     fn handle_exit_modal(&mut self, input: PlayerInput) -> bool {
         match self.modal {
             Some(ModalScreen::ExitConfirm) => {
                 if input.cancel {
                     self.modal = None;
                 } else if input.confirm {
-                    self.request_exit = true;
+                    self.request_exit_and_online_shutdown();
                 }
                 true
             }
@@ -6832,14 +6841,14 @@ impl GameState {
                             match save_game(self) {
                                 Ok(()) => {
                                     self.save_dirty = false;
-                                    self.request_exit = true;
+                                    self.request_exit_and_online_shutdown();
                                 }
                                 Err(error) => {
                                     self.message = format!("Save before exit failed: {error}");
                                 }
                             }
                         }
-                        1 => self.request_exit = true,
+                        1 => self.request_exit_and_online_shutdown(),
                         _ => self.modal = None,
                     }
                 }

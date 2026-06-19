@@ -68,6 +68,21 @@ impl TerrainRenderer {
         self.dirty_chunks.insert(chunk_position_for_tile(position));
     }
 
+    pub(super) fn mark_chunk_dirty(&mut self, x: i32, y: i32) {
+        let tile_position = TilePosition {
+            x: x * TERRAIN_CHUNK_SIZE_TILES,
+            y: y * TERRAIN_CHUNK_SIZE_TILES,
+        };
+        if tile_position.x < 0
+            || tile_position.y < 0
+            || tile_position.x >= self.terrain_width
+            || tile_position.y >= self.terrain_height
+        {
+            return;
+        }
+        self.dirty_chunks.insert(ChunkPosition { x, y });
+    }
+
     pub(super) fn sync(
         &mut self,
         raylib: &mut RaylibHandle,

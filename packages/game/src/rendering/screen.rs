@@ -692,7 +692,12 @@ fn draw_service_options(draw: &mut RaylibDrawHandle<'_>, selected: usize, x: i32
     }
 }
 
-pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, modal: ModalScreen) {
+pub(super) fn draw_modal(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    modal: ModalScreen,
+    hud: Option<PerPlayerHudSnapshot>,
+) {
     draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
     draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
 
@@ -707,14 +712,14 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
                 Color::WHITE,
             );
             draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
-            let missing = (game.player.fuel_capacity - game.player.fuel)
-                .ceil()
-                .max(0.0) as u32;
-            let affordable = missing.min(game.player.credits);
+            let fuel = hud.map_or(game.player.fuel, |hud| hud.fuel);
+            let fuel_capacity = hud.map_or(game.player.fuel_capacity, |hud| hud.fuel_capacity);
+            let credits = hud.map_or(game.player.credits, |hud| hud.credits);
+            let missing = (fuel_capacity - fuel).ceil().max(0.0) as u32;
+            let affordable = missing.min(credits);
             draw.draw_text(
                 &format!(
-                    "Tank: {:.0}/{:.0} | Fill cost: {missing} cr | Buying now: {affordable} units",
-                    game.player.fuel, game.player.fuel_capacity
+                    "Tank: {fuel:.0}/{fuel_capacity:.0} | Fill cost: {missing} cr | Buying now: {affordable} units"
                 ),
                 330,
                 290,
@@ -734,13 +739,14 @@ pub(super) fn draw_modal(draw: &mut RaylibDrawHandle<'_>, game: &GameState, moda
                 Color::WHITE,
             );
             draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
-            let missing = (game.player.max_hull() - game.player.hull).ceil().max(0.0) as u32;
-            let affordable_units = missing.min(game.player.credits / 2);
+            let hull = hud.map_or(game.player.hull, |hud| hud.hull);
+            let max_hull = hud.map_or_else(|| game.player.max_hull(), |hud| hud.max_hull);
+            let credits = hud.map_or(game.player.credits, |hud| hud.credits);
+            let missing = (max_hull - hull).ceil().max(0.0) as u32;
+            let affordable_units = missing.min(credits / 2);
             draw.draw_text(
                 &format!(
-                    "Hull: {:.0}/{:.0} | Full repair: {} cr | Repairing now: {} hull",
-                    game.player.hull,
-                    game.player.max_hull(),
+                    "Hull: {hull:.0}/{max_hull:.0} | Full repair: {} cr | Repairing now: {} hull",
                     missing * 2,
                     affordable_units
                 ),
