@@ -195,6 +195,16 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthoritativeWorldAdvanceSummary {
+    pub start_tick: SimulationTick,
+    pub end_tick: SimulationTick,
+    pub fixed_steps: u32,
+    pub processed_commands: usize,
+    pub terrain_events: usize,
+    pub cargo_events: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionAuthorityUpdateSummary {
     pub used_legacy_presentation_adapter: bool,
     pub local_movement_authority: bool,
@@ -4588,6 +4598,55 @@ impl GameSession {
             .collect()
     }
 
+    pub fn advance_authoritative_world_ticks(
+        &mut self,
+        fixed_steps: u32,
+    ) -> AuthoritativeWorldAdvanceSummary {
+        let start_tick = self.current_tick;
+        let mut processed_commands = 0;
+        let mut terrain_events = 0;
+        let mut cargo_events = 0;
+        for _ in 0..fixed_steps {
+            let tick = self.current_tick;
+            self.command_network_session.set_current_tick(tick);
+            processed_commands += self.process_authoritative_commands_for_tick(tick);
+            self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
+            let before_events = self.pending_events.len();
+            self.process_authoritative_drill_progress();
+            let emitted_events: Vec<WorldEvent> = self.pending_events[before_events..].to_vec();
+            terrain_events += emitted_events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        WorldEvent::TerrainTilesChanged { .. }
+                            | WorldEvent::TerrainChunksChanged { .. }
+                    )
+                })
+                .count();
+            cargo_events += emitted_events
+                .iter()
+                .filter(|event| matches!(event, WorldEvent::CargoChanged { .. }))
+                .count();
+            self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+            self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+            self.sync_legacy_terrain_from_world();
+            self.advance_tick();
+            self.push_event(WorldEvent::TickAdvanced {
+                tick: self.current_tick,
+            });
+            self.maybe_emit_keyframe_event();
+        }
+        AuthoritativeWorldAdvanceSummary {
+            start_tick,
+            end_tick: self.current_tick,
+            fixed_steps,
+            processed_commands,
+            terrain_events,
+            cargo_events,
+        }
+    }
+
     pub fn apply_accepted_online_remote_commands(
         &mut self,
         summary: &CommandPacketExchangeSummary,
@@ -4979,21 +5038,7 @@ impl GameSession {
 
     pub fn update_legacy(&mut self, input: PlayerInput, delta_seconds: f32) {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
-        for _ in 0..fixed_steps {
-            let tick = self.current_tick;
-            self.command_network_session.set_current_tick(tick);
-            self.process_authoritative_commands_for_tick(tick);
-            self.step_authoritative_movement_from_latest_intents(FIXED_DELTA_SECONDS);
-            self.process_authoritative_drill_progress();
-            self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
-            self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
-            self.sync_legacy_terrain_from_world();
-            self.advance_tick();
-            self.push_event(WorldEvent::TickAdvanced {
-                tick: self.current_tick,
-            });
-            self.maybe_emit_keyframe_event();
-        }
+        let _summary = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_client_settings_to_legacy_game();
         let legacy_adapter_input = self.legacy_adapter_input(input);
         let previous_message = self.game.message.clone();
@@ -5193,9 +5238,9 @@ mod tests {
     };
 
     use super::{
-        ClientPredictionState, ClientState, GameSession, NetworkDebugInstrumentationSnapshot,
-        PlayerSnapshot, PredictionCorrectionTuning, PredictionFailure, PredictionRecoveryAction,
-        RemoteTimingTuning, WorldState,
+        ClientPredictionState, ClientState, CompactWorldDelta, GameSession,
+        NetworkDebugInstrumentationSnapshot, PlayerSnapshot, PredictionCorrectionTuning,
+        PredictionFailure, PredictionRecoveryAction, RemoteTimingTuning, WorldState,
     };
 
     #[test]
@@ -7025,6 +7070,61 @@ mod tests {
             .expect("remote player exists in authoritative world");
         assert!(player.velocity_x > 0.0);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn accepted_online_remote_drill_command_changes_authoritative_terrain() {
+        let mut session = GameSession::new();
+        let remote_client = ClientId::new(2);
+        let remote_player = PlayerId::new(2);
+        let mut player = session.game().player.clone();
+        player.x = 10.0 * TILE_SIZE;
+        player.y = 10.0 * TILE_SIZE;
+        player.drill_strength = 4;
+        assert!(session.add_local_client_player(remote_client, remote_player));
+        *session
+            .world_mut()
+            .player_mut(remote_player)
+            .expect("remote player exists") = player;
+        let target = TilePosition { x: 10, y: 11 };
+        assert!(session.world_mut().terrain.set_kind(target, TileKind::Dirt));
+        let target_tick = session.current_tick();
+        let summary = crate::multiplayer::CommandPacketExchangeSummary {
+            client_id: remote_client,
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: target_tick,
+            accepted_commands: vec![SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: InputSequence::new(1),
+                target_tick,
+                command: PlayerCommand::Movement {
+                    horizontal: 0.0,
+                    thrust: false,
+                    drill_down: true,
+                },
+            }],
+        };
+
+        assert_eq!(session.apply_accepted_online_remote_commands(&summary), 1);
+        assert!(session.world().active_drill(remote_player).is_some());
+        let advance = session.advance_authoritative_world_ticks(30);
+
+        assert!(advance.end_tick.get() > advance.start_tick.get());
+        assert!(advance.terrain_events > 0);
+        assert_eq!(
+            session
+                .world()
+                .terrain
+                .tile(target)
+                .expect("target tile remains in terrain")
+                .kind,
+            TileKind::Air
+        );
+        assert!(matches!(
+            session.drain_world_delta().compact_network_delta(),
+            CompactWorldDelta::TerrainChunks { .. }
+        ));
     }
 
     #[test]
