@@ -4632,6 +4632,7 @@ impl GameSession {
     pub fn ensure_local_online_player_presentation_from_legacy_view(
         &mut self,
         player_id: PlayerId,
+        update_existing: bool,
     ) -> bool {
         let client_id = ClientId::new(player_id.get());
         if !self.has_client(client_id) {
@@ -4639,7 +4640,9 @@ impl GameSession {
         }
         let player = self.game.player.clone();
         if let Some(existing) = self.world.player_mut(player_id) {
-            *existing = player;
+            if update_existing {
+                *existing = player;
+            }
             false
         } else {
             self.world.insert_player(player_id, player);
@@ -7407,6 +7410,50 @@ mod tests {
             .find(|tile| tile.x == target.x && tile.y == target.y)
             .expect("target tile included");
         assert_eq!(tile.kind, TileKind::Air);
+    }
+
+    #[test]
+    fn local_joined_client_seed_does_not_overwrite_existing_authoritative_world_player() {
+        let mut session = GameSession::new();
+        let joined_player = PlayerId::new(2);
+        session.game.player.x = TILE_SIZE * 9.0;
+        session.game.player.credits = 5;
+        let _seeded =
+            session.ensure_local_online_player_presentation_from_legacy_view(joined_player, true);
+        {
+            let player = session
+                .world_mut()
+                .player_mut(joined_player)
+                .expect("joined player exists");
+            player.x = TILE_SIZE * 44.0;
+            player.credits = 777;
+        }
+        session.game.player.x = TILE_SIZE * 3.0;
+        session.game.player.credits = 1;
+
+        assert!(
+            !session
+                .ensure_local_online_player_presentation_from_legacy_view(joined_player, false,)
+        );
+
+        let player = session
+            .world()
+            .player(joined_player)
+            .expect("joined player remains authoritative");
+        let authoritative_x = TILE_SIZE * 44.0;
+        assert!((player.x - authoritative_x).abs() < f32::EPSILON);
+        assert_eq!(player.credits, 777);
+
+        assert!(
+            !session.ensure_local_online_player_presentation_from_legacy_view(joined_player, true,)
+        );
+        let synced = session
+            .world()
+            .player(joined_player)
+            .expect("joined player synced from presentation");
+        let synced_x = TILE_SIZE * 3.0;
+        assert!((synced.x - synced_x).abs() < f32::EPSILON);
+        assert_eq!(synced.credits, 1);
     }
 
     #[test]

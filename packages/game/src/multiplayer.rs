@@ -540,6 +540,7 @@ pub struct ClientRuntimeStatus {
     pub has_session_token: bool,
     pub latest_authoritative_tick: SimulationTick,
     pub pending_message_count: usize,
+    pub keyframe_recovery_needed: bool,
 }
 
 impl ClientRuntimeStatus {
@@ -810,6 +811,7 @@ pub struct ClientSessionRuntime {
     pub session_token: Option<SessionToken>,
     pub assigned_player_id: Option<PlayerId>,
     pub latest_authoritative_tick: SimulationTick,
+    pub keyframe_recovery_needed: bool,
     pub pending_messages: Vec<ProtocolMessage>,
 }
 
@@ -821,6 +823,7 @@ impl ClientSessionRuntime {
             config,
             session_token: None,
             latest_authoritative_tick: SimulationTick::new(0),
+            keyframe_recovery_needed: false,
             pending_messages: Vec::new(),
         }
     }
@@ -852,11 +855,15 @@ impl ClientSessionRuntime {
             {
                 self.latest_authoritative_tick = acknowledgement.authoritative_tick;
             }
-            ProtocolMessage::WorldDelta { tick, .. } => {
+            ProtocolMessage::WorldDelta { tick, payload } => {
                 self.latest_authoritative_tick = tick;
+                if matches!(payload, NetworkDeltaPayload::KeyframeRequired) {
+                    self.keyframe_recovery_needed = true;
+                }
             }
             ProtocolMessage::SnapshotKeyframe { snapshot } => {
                 self.latest_authoritative_tick = snapshot.tick;
+                self.keyframe_recovery_needed = false;
             }
             ProtocolMessage::PlayerIdentity { .. }
             | ProtocolMessage::ReadyState { .. }
@@ -875,6 +882,7 @@ impl ClientSessionRuntime {
             has_session_token: self.session_token.is_some(),
             latest_authoritative_tick: self.latest_authoritative_tick,
             pending_message_count: self.pending_messages.len(),
+            keyframe_recovery_needed: self.keyframe_recovery_needed,
         }
     }
 }
@@ -5170,6 +5178,39 @@ mod tests {
             payload: NetworkDeltaPayload::Noop,
         });
         assert_eq!(client.latest_authoritative_tick, SimulationTick::new(21));
+        assert!(!client.runtime_status().keyframe_recovery_needed);
+    }
+
+    #[test]
+    fn client_runtime_tracks_keyframe_recovery_after_missed_delta() {
+        let mut client = ClientSessionRuntime::new(super::ClientRuntimeConfig {
+            mode: super::ClientRuntimeMode::RemoteNetwork,
+            client_id: ClientId::new(9),
+            player_id: Some(PlayerId::new(9)),
+        });
+
+        client.handle_message(ProtocolMessage::WorldDelta {
+            tick: SimulationTick::new(40),
+            payload: NetworkDeltaPayload::KeyframeRequired,
+        });
+
+        let recovering = client.runtime_status();
+        assert_eq!(
+            recovering.latest_authoritative_tick,
+            SimulationTick::new(40)
+        );
+        assert!(recovering.keyframe_recovery_needed);
+
+        client.handle_message(ProtocolMessage::SnapshotKeyframe {
+            snapshot: NetworkWorldSnapshot {
+                tick: SimulationTick::new(41),
+                players: Vec::new(),
+            },
+        });
+
+        let recovered = client.runtime_status();
+        assert_eq!(recovered.latest_authoritative_tick, SimulationTick::new(41));
+        assert!(!recovered.keyframe_recovery_needed);
     }
 
     #[test]

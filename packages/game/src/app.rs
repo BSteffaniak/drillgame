@@ -328,8 +328,11 @@ impl OnlineTaskDispatcher {
             .as_ref()
             .is_some_and(|controller| controller.mode_label() == "descriptor-client-connected");
         if descriptor_client_connected || online_player_slot.is_some() {
-            let _seeded =
-                session.ensure_local_online_player_presentation_from_legacy_view(player_id);
+            let update_existing_from_legacy = online_player_slot.is_none();
+            let _seeded = session.ensure_local_online_player_presentation_from_legacy_view(
+                player_id,
+                update_existing_from_legacy,
+            );
         }
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
@@ -449,6 +452,14 @@ impl OnlineTaskDispatcher {
                     0
                 };
                 let synced_replicated_players = if mode_label == "descriptor-client-connected" {
+                    let online_player_slot = session.game().online_player_slot;
+                    if let Some(slot) = online_player_slot {
+                        let player_id = crate::multiplayer::PlayerId::new(u64::from(slot));
+                        let _synced_local = session
+                            .ensure_local_online_player_presentation_from_legacy_view(
+                                player_id, true,
+                            );
+                    }
                     Self::sync_remote_presentations_to_session(session)
                 } else {
                     0
@@ -1400,6 +1411,12 @@ mod tests {
         assert!((join_session.game().player.fuel - 321.0).abs() < f32::EPSILON);
         assert!((join_session.game().player.hull - 654.0).abs() < f32::EPSILON);
         assert_eq!(join_session.game().player.credits, 999);
+        let joined_world_player = join_session
+            .world()
+            .player(crate::multiplayer::PlayerId::new(2))
+            .expect("joined client local player synced into session world");
+        assert!((joined_world_player.x - 123.0).abs() < f32::EPSILON);
+        assert_eq!(joined_world_player.credits, 999);
         assert_eq!(
             join_session
                 .game()
