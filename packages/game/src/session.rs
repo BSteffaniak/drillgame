@@ -1495,6 +1495,24 @@ pub enum WorldEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerShellEffectSync {
+    pub player_id: PlayerId,
+    pub fuel_before: f32,
+    pub fuel_after: f32,
+    pub hull_before: f32,
+    pub hull_after: f32,
+    pub scanner_cooldown_seconds: f32,
+}
+
+impl PlayerShellEffectSync {
+    #[must_use]
+    pub fn changed_survival(self) -> bool {
+        (self.fuel_before - self.fuel_after).abs() > f32::EPSILON
+            || (self.hull_before - self.hull_after).abs() > f32::EPSILON
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthoritativeWorldSummary {
     pub tick: SimulationTick,
@@ -1632,6 +1650,27 @@ impl AuthoritativeWorldSummary {
             expedition_count: game.active_expeditions.len(),
             market_salt: game.market_salt,
             won_game: game.won_game,
+        }
+    }
+    #[must_use]
+    pub fn from_world_and_shell(
+        tick: SimulationTick,
+        world: &WorldState,
+        shell: &GameState,
+    ) -> Self {
+        Self {
+            tick,
+            player_count: world.players.len(),
+            terrain_width: world.terrain.width(),
+            terrain_height: world.terrain.height(),
+            hazard_count: world.hazards.len(),
+            bomb_count: world.bombs.len(),
+            infrastructure_count: world.infrastructure.len(),
+            active_contract_count: usize::from(shell.side_contract_active)
+                + shell.active_side_contracts.len(),
+            expedition_count: shell.active_expeditions.len(),
+            market_salt: shell.market_salt,
+            won_game: shell.won_game,
         }
     }
 }
@@ -2535,6 +2574,26 @@ impl WorldState {
             .iter()
             .map(|(player_id, player)| PlayerSnapshot::from_world_player(*player_id, player, self))
             .collect()
+    }
+
+    pub fn sync_local_player_shell_effects_from_legacy_game(
+        &mut self,
+        game: &GameState,
+    ) -> Option<PlayerShellEffectSync> {
+        let player = self.players.get_mut(&LOCAL_PLAYER_ID)?;
+        let sync = PlayerShellEffectSync {
+            player_id: LOCAL_PLAYER_ID,
+            fuel_before: player.fuel,
+            fuel_after: game.player.fuel,
+            hull_before: player.hull,
+            hull_after: game.player.hull,
+            scanner_cooldown_seconds: game.scanner_cooldown_seconds,
+        };
+        player.fuel = game.player.fuel;
+        player.hull = game.player.hull;
+        self.scanner_cooldowns
+            .insert(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds);
+        Some(sync)
     }
 
     fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
@@ -5452,8 +5511,22 @@ impl GameSession {
                 client_id: self.local_client_id,
             });
         }
-        self.world
-            .sync_from_legacy_game(self.current_tick, &self.game);
+        if let Some(sync) = self
+            .world
+            .sync_local_player_shell_effects_from_legacy_game(&self.game)
+        {
+            if sync.changed_survival() {
+                self.push_event(WorldEvent::PlayerSurvivalChanged {
+                    player_id: sync.player_id,
+                });
+            }
+            self.sync_legacy_player_from_world(sync.player_id);
+        }
+        self.world.authoritative_summary = AuthoritativeWorldSummary::from_world_and_shell(
+            self.current_tick,
+            &self.world,
+            &self.game,
+        );
         SessionAuthorityUpdateSummary {
             used_legacy_presentation_adapter: false,
             local_movement_authority: self.latest_local_movement_intent.is_some(),
