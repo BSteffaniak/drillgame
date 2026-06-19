@@ -1536,6 +1536,137 @@ impl OnlineTaskResultTransition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineReconnectPolicy {
+    UnsupportedForFirstPlayableMvp,
+    SessionContextAvailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineReconnectPolicyStatus {
+    pub policy: OnlineReconnectPolicy,
+    pub can_attempt_rejoin: bool,
+    pub preserves_dirty_save_state: bool,
+    pub player_message: String,
+}
+
+impl OnlineReconnectPolicyStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let can_attempt_rejoin = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Reconnecting | OnlineSessionUxState::Shutdown
+        ) && game.online_player_slot.is_some();
+        let policy = if can_attempt_rejoin {
+            OnlineReconnectPolicy::SessionContextAvailable
+        } else {
+            OnlineReconnectPolicy::UnsupportedForFirstPlayableMvp
+        };
+        let player_message = match policy {
+            OnlineReconnectPolicy::SessionContextAvailable => {
+                "Reconnect context is preserved for this session; retry uses the previous online identity and save boundary.".to_owned()
+            }
+            OnlineReconnectPolicy::UnsupportedForFirstPlayableMvp => {
+                "Reconnect is not automatic for the first playable MVP; return to Online Multiplayer and rejoin from the current host descriptor.".to_owned()
+            }
+        };
+        Self {
+            policy,
+            can_attempt_rejoin,
+            preserves_dirty_save_state: game.save_dirty,
+            player_message,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Online reconnect policy: policy={:?} can_attempt_rejoin={} dirty_save_preserved={} | {}",
+            self.policy,
+            yes_no(self.can_attempt_rejoin),
+            yes_no(self.preserves_dirty_save_state),
+            self.player_message
+        )
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "sustained-play status checks independent runtime sync signals for manual mining sessions"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSustainedMiningSessionStatus {
+    pub playable: bool,
+    pub gameplay_active: bool,
+    pub movement_visible: bool,
+    pub terrain_visible: bool,
+    pub cargo_or_economy_visible: bool,
+    pub survival_visible: bool,
+    pub session_boundary_safe: bool,
+    pub save_boundary_safe: bool,
+    pub status: String,
+}
+
+impl OnlineSustainedMiningSessionStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let gameplay_active = game.run_mode == RunMode::Playing
+            && game.online_session_state == OnlineSessionUxState::Connected;
+        let movement_visible = game.online_remote_player_connected
+            && (!game.online_remote_player_snapshots.is_empty()
+                || game
+                    .online_last_replicated_player_status
+                    .contains("updated"));
+        let terrain_visible = game.online_last_terrain_status.contains("chunk")
+            || game.online_last_sync_loop_status.contains("terrain");
+        let cargo_or_economy_visible = game.online_last_replication_status.contains("cargo")
+            || game.online_last_sync_loop_status.contains("cargo=yes")
+            || game.player.credits > 0
+            || game.player.cargo_used() > 0;
+        let survival_visible = game.player.fuel >= 0.0
+            && game.player.hull >= 0.0
+            && (game.online_last_sync_loop_status.contains("snapshot")
+                || game.online_last_replication_status.contains("replication"));
+        let session_boundary_safe = game
+            .online_last_session_boundary_status
+            .contains("Online session boundary")
+            || game.online_remote_player_connected;
+        let save_boundary_safe = game
+            .online_last_save_boundary_status
+            .contains("Online save boundary");
+        let playable = gameplay_active
+            && movement_visible
+            && terrain_visible
+            && cargo_or_economy_visible
+            && survival_visible
+            && session_boundary_safe
+            && save_boundary_safe;
+        let status = format!(
+            "Online sustained mining session: playable={} gameplay_active={} movement={} terrain={} cargo_or_economy={} survival={} session_boundary_safe={} save_boundary_safe={} ticks={}",
+            yes_no(playable),
+            yes_no(gameplay_active),
+            yes_no(movement_visible),
+            yes_no(terrain_visible),
+            yes_no(cargo_or_economy_visible),
+            yes_no(survival_visible),
+            yes_no(session_boundary_safe),
+            yes_no(save_boundary_safe),
+            game.update_ticks
+        );
+        Self {
+            playable,
+            gameplay_active,
+            movement_visible,
+            terrain_visible,
+            cargo_or_economy_visible,
+            survival_visible,
+            session_boundary_safe,
+            save_boundary_safe,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlinePlayableSessionPhase {
     NotStarted,
     HostWaiting,
@@ -4814,6 +4945,25 @@ impl GameState {
         self.refresh_online_playable_session_status();
     }
 
+    pub fn surface_online_session_boundary_during_gameplay(
+        &mut self,
+        status: &OnlineSessionBoundaryStatus,
+    ) {
+        let was_playing = self.run_mode == RunMode::Playing;
+        if matches!(
+            status.cause,
+            OnlineSessionBoundaryCause::HostEndedSession
+                | OnlineSessionBoundaryCause::TransportClosed
+        ) {
+            self.online_session_state = OnlineSessionUxState::Disconnected;
+        }
+        if was_playing && !status.local_session_active {
+            self.run_mode = RunMode::Paused;
+            self.modal = Some(ModalScreen::OnlineMultiplayer);
+        }
+        self.refresh_online_save_boundary_status();
+    }
+
     pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
         self.online_last_session_boundary_status = status.status_line();
         self.online_remote_player_connected = status.remote_connected;
@@ -4824,6 +4974,7 @@ impl GameState {
         self.online_session_status_message
             .clone_from(&status.player_message);
         self.message.clone_from(&self.online_session_status_message);
+        self.surface_online_session_boundary_during_gameplay(status);
         self.refresh_online_runtime_statuses();
     }
 
@@ -5149,6 +5300,8 @@ impl GameState {
         } else {
             self.online_last_playable_session_status.clone()
         });
+        lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
+        lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
             self.rig_part_inventory.len(),
@@ -11964,6 +12117,145 @@ mod tests {
                 .online_last_save_boundary_status
                 .contains("local_load_allowed=no")
         );
+    }
+
+    #[test]
+    fn active_gameplay_session_ended_surfaces_modal_and_preserves_dirty_save_state() {
+        let mut client = GameState::new();
+        client.run_mode = RunMode::Playing;
+        client.modal = None;
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_remote_player_connected = true;
+        client.online_remote_player_ready = true;
+        client.save_dirty = true;
+
+        client.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::host_ended(
+            "host closed app",
+        ));
+
+        assert_eq!(client.run_mode, RunMode::Paused);
+        assert_eq!(client.modal, Some(ModalScreen::OnlineMultiplayer));
+        assert_eq!(
+            client.online_session_state,
+            OnlineSessionUxState::Disconnected
+        );
+        assert!(client.save_dirty);
+        assert!(!client.online_remote_player_connected);
+        assert!(!client.online_remote_player_ready);
+        assert!(client.online_remote_player_snapshots.is_empty());
+        assert!(client.message.contains("ended by host"));
+        assert!(
+            client
+                .online_last_session_boundary_status
+                .contains("HostEndedSession")
+        );
+        assert!(
+            client
+                .online_last_save_boundary_status
+                .contains("Online save boundary")
+        );
+    }
+
+    #[test]
+    fn active_host_client_left_keeps_local_gameplay_and_save_authority_available() {
+        let mut host = GameState::new();
+        host.run_mode = RunMode::Playing;
+        host.modal = None;
+        host.online_session_state = OnlineSessionUxState::Connected;
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        host.online_remote_player_connected = true;
+        host.online_remote_player_ready = true;
+        host.save_dirty = true;
+
+        host.apply_online_session_boundary_status(&OnlineSessionBoundaryStatus::client_left(
+            "client quit",
+        ));
+
+        assert_eq!(host.run_mode, RunMode::Playing);
+        assert_eq!(host.modal, None);
+        assert_eq!(host.online_session_state, OnlineSessionUxState::Connected);
+        assert!(host.save_dirty);
+        assert!(host.can_write_local_save());
+        assert!(
+            host.online_last_save_boundary_status
+                .contains("Save+Exit, local save, and local load are allowed")
+        );
+        assert!(
+            host.message
+                .contains("Host save/session remains local and safe")
+        );
+    }
+
+    #[test]
+    fn reconnect_policy_is_explicitly_unsupported_without_rejoin_context_and_preserves_dirty_flag()
+    {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Disconnected;
+        game.online_player_slot = None;
+        game.save_dirty = true;
+
+        let status = OnlineReconnectPolicyStatus::from_game(&game);
+
+        assert_eq!(
+            status.policy,
+            OnlineReconnectPolicy::UnsupportedForFirstPlayableMvp
+        );
+        assert!(!status.can_attempt_rejoin);
+        assert!(status.preserves_dirty_save_state);
+        assert!(status.player_message.contains("not automatic"));
+        assert!(status.status_line().contains("dirty_save_preserved=yes"));
+    }
+
+    #[test]
+    fn sustained_mining_session_status_requires_runtime_sync_and_save_boundaries() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_remote_player_connected = true;
+        game.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 3.0,
+                y: 4.0,
+                velocity_x: 1.0,
+                velocity_y: 0.0,
+                fuel: 99.0,
+                hull: 88.0,
+                credits: 77,
+                cargo_used: 1,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+        game.online_last_replicated_player_status = "updated remote player".to_owned();
+        game.online_last_terrain_status = "answered chunk (0,0) rev 1".to_owned();
+        game.online_last_replication_status = "host sent snapshot with cargo".to_owned();
+        game.online_last_sync_loop_status =
+            "snapshot applied: players=2 cargo=yes terrain=yes".to_owned();
+        game.online_last_session_boundary_status =
+            OnlineSessionBoundaryStatus::client_left("previous peer left").status_line();
+        game.refresh_online_save_boundary_status();
+        game.update_ticks = u64::from(crate::multiplayer::SIMULATION_HZ) * 60 * 5;
+
+        let status = OnlineSustainedMiningSessionStatus::from_game(&game);
+
+        assert!(status.playable);
+        assert!(status.gameplay_active);
+        assert!(status.movement_visible);
+        assert!(status.terrain_visible);
+        assert!(status.cargo_or_economy_visible);
+        assert!(status.survival_visible);
+        assert!(status.session_boundary_safe);
+        assert!(status.save_boundary_safe);
+        assert!(status.status.contains("playable=yes"));
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online sustained mining session") && line.contains("playable=yes")
+        }));
     }
 
     #[test]
