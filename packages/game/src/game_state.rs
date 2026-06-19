@@ -26,8 +26,8 @@ use crate::{
     multiplayer::{QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
     player::Player,
     save::{
-        load_game, load_game_slot, load_latest_game, save_exists, save_game, save_game_slot,
-        save_slot_count, saves_exist,
+        load_game, load_game_slot, load_latest_game, save_exists, save_game_slot,
+        save_legacy_shell_game, save_slot_count, saves_exist,
     },
     surface::surface_building_at_tile,
     terrain::{
@@ -7053,7 +7053,7 @@ impl GameState {
                             if self.block_joined_client_save() {
                                 return true;
                             }
-                            match save_game(self) {
+                            match save_legacy_shell_game(self) {
                                 Ok(()) => {
                                     self.save_dirty = false;
                                     self.request_exit_and_online_shutdown();
@@ -7472,7 +7472,7 @@ impl GameState {
             if self.block_joined_client_save() {
                 return;
             }
-            match save_game(self) {
+            match save_legacy_shell_game(self) {
                 Ok(()) => {
                     self.save_dirty = false;
                     "Game saved to drillgame-save.json.".clone_into(&mut self.message);

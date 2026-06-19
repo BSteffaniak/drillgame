@@ -633,12 +633,12 @@ struct LegacySaveFile {
     game: GameState,
 }
 
-pub fn save_game(game: &GameState) -> Result<(), SaveError> {
-    save_game_to_path(game, save_path())
+pub fn save_legacy_shell_game(game: &GameState) -> Result<(), SaveError> {
+    save_legacy_shell_game_to_path(game, save_path())
 }
 
 pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
-    save_game_to_path(game, slot_path(slot))
+    save_legacy_shell_game_to_path(game, slot_path(slot))
 }
 
 pub fn save_world_session(world: &WorldState, shell: &GameState) -> Result<(), SaveError> {
@@ -708,7 +708,10 @@ pub fn load_persistent_world_from_path(
     })
 }
 
-fn save_game_to_path(game: &GameState, path: impl AsRef<Path>) -> Result<(), SaveError> {
+fn save_legacy_shell_game_to_path(
+    game: &GameState,
+    path: impl AsRef<Path>,
+) -> Result<(), SaveError> {
     let save = SaveFile {
         version: SAVE_VERSION,
         world: PersistentWorldSave::from_legacy_game(game),
@@ -734,9 +737,7 @@ pub fn load_latest_game() -> Result<GameState, SaveError> {
 
 fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
     let save = load_persistent_world_from_path(path)?;
-    let mut game = save.into_legacy_game();
-    game.migrate_after_load();
-    Ok(game)
+    Ok(save.restore_shell_game())
 }
 
 const fn validate_save_version(version: u32) -> Result<(), SaveError> {

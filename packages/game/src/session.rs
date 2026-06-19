@@ -42,12 +42,6 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompatibilityMode {
-    SinglePlayerLegacy,
-    MultiplayerReady,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkPayloadSource {
     AuthoritativeWorld,
     LocalPresentationShell,
@@ -4685,13 +4679,8 @@ pub struct GameSession {
 
 impl GameSession {
     #[must_use]
-    pub const fn compatibility_mode() -> CompatibilityMode {
-        CompatibilityMode::SinglePlayerLegacy
-    }
-
-    #[must_use]
-    pub const fn target_compatibility_mode() -> CompatibilityMode {
-        CompatibilityMode::MultiplayerReady
+    pub const fn runtime_is_multiplayer_ready() -> bool {
+        true
     }
 
     #[must_use]
@@ -6987,14 +6976,7 @@ mod tests {
             boundary.name == "camera"
                 && boundary.domain == super::StateDomain::LocalClientPresentation
         }));
-        assert_eq!(
-            GameSession::compatibility_mode(),
-            super::CompatibilityMode::SinglePlayerLegacy
-        );
-        assert_eq!(
-            GameSession::target_compatibility_mode(),
-            super::CompatibilityMode::MultiplayerReady
-        );
+        assert!(GameSession::runtime_is_multiplayer_ready());
     }
 
     #[test]
