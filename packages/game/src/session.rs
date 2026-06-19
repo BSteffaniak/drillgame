@@ -3200,13 +3200,48 @@ pub enum RenderPlayerPresentationSource {
     PredictedLocal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderWorldPlayerPresentation {
     pub player_id: PlayerId,
     pub x: f32,
     pub y: f32,
     pub local_to_view: bool,
     pub source: RenderPlayerPresentationSource,
+    pub fuel: f32,
+    pub hull: f32,
+    pub credits: u32,
+    pub cargo_used: u32,
+}
+
+impl RenderWorldPlayerPresentation {
+    #[must_use]
+    pub fn short_status_label(&self) -> String {
+        format!(
+            "P{} F{:.0} H{:.0} C{}",
+            self.player_id.get(),
+            self.fuel.max(0.0),
+            self.hull.max(0.0),
+            self.cargo_used
+        )
+    }
+
+    #[must_use]
+    pub fn danger_level(&self) -> RemotePlayerDangerLevel {
+        if self.hull <= 0.0 || self.fuel <= 0.0 {
+            RemotePlayerDangerLevel::Critical
+        } else if self.hull < 30.0 || self.fuel < 30.0 {
+            RemotePlayerDangerLevel::Warning
+        } else {
+            RemotePlayerDangerLevel::Nominal
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemotePlayerDangerLevel {
+    Nominal,
+    Warning,
+    Critical,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3410,6 +3445,10 @@ impl RenderFramePlan {
                         .map_or(RenderPlayerPresentationSource::AuthoritativeWorld, |_| {
                             RenderPlayerPresentationSource::PredictedLocal
                         }),
+                    fuel: player.fuel,
+                    hull: player.hull,
+                    credits: player.credits,
+                    cargo_used: player.cargo_used,
                 }
             })
             .collect()

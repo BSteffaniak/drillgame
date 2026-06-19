@@ -22,8 +22,7 @@ use screen::{
 use terrain::TerrainRenderer;
 pub use world::render_camera;
 use world::{
-    draw_particles, draw_placed_bombs, draw_player, draw_remote_player_at, draw_scanner_marks,
-    draw_world, world_camera,
+    draw_particles, draw_placed_bombs, draw_player, draw_scanner_marks, draw_world, world_camera,
 };
 
 use crate::{
@@ -68,7 +67,7 @@ fn draw_local_player_override(
         draw_player(draw, game);
     }
     for player in world_players.iter().filter(|player| !player.local_to_view) {
-        draw_remote_player_at(draw, player.x, player.y);
+        world::draw_remote_player(draw, player);
     }
 }
 

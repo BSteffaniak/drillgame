@@ -1,5 +1,7 @@
 use raylib::prelude::*;
 
+use crate::session::{RemotePlayerDangerLevel, RenderWorldPlayerPresentation};
+
 use super::terrain::TerrainRenderer;
 use crate::{
     economy::SurfaceZone,
@@ -342,28 +344,47 @@ pub(super) fn draw_scanner_marks(
     }
 }
 
+pub(super) fn draw_remote_player(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    player: &RenderWorldPlayerPresentation,
+) {
+    draw_remote_player_at(draw, player.x, player.y, player.danger_level());
+    draw_remote_player_status(draw, player);
+}
+
 #[allow(
     clippy::too_many_lines,
-    reason = "player rendering includes upgrade visual variants"
+    reason = "remote player rendering includes label, readiness, and survival bars"
 )]
 pub(super) fn draw_remote_player_at(
     draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
     player_x: f32,
     player_y: f32,
+    danger_level: RemotePlayerDangerLevel,
 ) {
+    let body_color = match danger_level {
+        RemotePlayerDangerLevel::Nominal => Color::new(80, 170, 245, 180),
+        RemotePlayerDangerLevel::Warning => Color::new(230, 185, 40, 210),
+        RemotePlayerDangerLevel::Critical => Color::new(230, 70, 55, 220),
+    };
+    let outline_color = match danger_level {
+        RemotePlayerDangerLevel::Nominal => Color::BLUE,
+        RemotePlayerDangerLevel::Warning => Color::ORANGE,
+        RemotePlayerDangerLevel::Critical => Color::RED,
+    };
     draw.draw_rectangle(
         (player_x - 12.0) as i32,
         (player_y - 9.0) as i32,
         24,
         20,
-        Color::new(80, 170, 245, 180),
+        body_color,
     );
     draw.draw_rectangle_lines(
         (player_x - 12.0) as i32,
         (player_y - 9.0) as i32,
         24,
         20,
-        Color::BLUE,
+        outline_color,
     );
     draw.draw_rectangle(
         (player_x - 6.0) as i32,
@@ -384,6 +405,64 @@ pub(super) fn draw_remote_player_at(
         3.0,
         Color::DARKBLUE,
     );
+}
+
+fn draw_remote_player_status(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    player: &RenderWorldPlayerPresentation,
+) {
+    let label = player.short_status_label();
+    let label_x = (player.x - 42.0) as i32;
+    let label_y = (player.y - 48.0) as i32;
+    draw.draw_rectangle(label_x - 4, label_y - 4, 90, 38, Color::new(0, 0, 25, 170));
+    draw.draw_rectangle_lines(label_x - 4, label_y - 4, 90, 38, Color::SKYBLUE);
+    draw.draw_text(&label, label_x, label_y, 10, Color::RAYWHITE);
+    draw_remote_player_bar(
+        draw,
+        label_x,
+        label_y + 14,
+        "Fuel",
+        player.fuel,
+        100.0,
+        Color::LIME,
+        Color::ORANGE,
+    );
+    draw_remote_player_bar(
+        draw,
+        label_x,
+        label_y + 25,
+        "Hull",
+        player.hull,
+        100.0,
+        Color::SKYBLUE,
+        Color::RED,
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tiny immediate-mode bar helper keeps remote player status drawing local"
+)]
+fn draw_remote_player_bar(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    x: i32,
+    y: i32,
+    label: &str,
+    value: f32,
+    max_value: f32,
+    good_color: Color,
+    danger_color: Color,
+) {
+    let ratio = (value / max_value).clamp(0.0, 1.0);
+    let color = if ratio < 0.3 {
+        danger_color
+    } else {
+        good_color
+    };
+    draw.draw_text(label, x, y - 1, 8, Color::LIGHTGRAY);
+    draw.draw_rectangle(x + 28, y, 50, 6, Color::new(35, 35, 45, 220));
+    draw.draw_rectangle(x + 28, y, (50.0 * ratio) as i32, 6, color);
+    draw.draw_rectangle_lines(x + 28, y, 50, 6, Color::DARKGRAY);
 }
 
 #[allow(
