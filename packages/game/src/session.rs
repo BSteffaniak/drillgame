@@ -24,8 +24,8 @@ use crate::{
         NetworkDeltaPayload, NetworkPlayerLoadoutSnapshot, NetworkPlayerSnapshot,
         NetworkTerrainChunkRevision, NetworkTerrainChunkSnapshot, NetworkTerrainTile,
         NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind,
-        ProtocolMessage, QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand,
-        SessionToken, SimulationTick,
+        ProtocolMessage, QuinnSessionTickInput, QuinnSessionTickSummary, SIMULATION_HZ,
+        SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -44,6 +44,26 @@ use crate::{
 pub enum CompatibilityMode {
     SinglePlayerLegacy,
     MultiplayerReady,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OnlineTickApplicationSummary {
+    pub applied_remote_commands: usize,
+    pub synced_replicated_players: usize,
+    pub applied_terrain_tiles: usize,
+    pub roster_seeded: bool,
+    pub joined_local_synced: bool,
+}
+
+impl OnlineTickApplicationSummary {
+    #[must_use]
+    pub const fn changed_session_state(self) -> bool {
+        self.applied_remote_commands > 0
+            || self.synced_replicated_players > 0
+            || self.applied_terrain_tiles > 0
+            || self.roster_seeded
+            || self.joined_local_synced
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5961,6 +5981,102 @@ impl GameSession {
             tick,
             players: players.to_vec(),
         })
+    }
+
+    pub fn apply_online_tick_summary(
+        &mut self,
+        mode_label: &str,
+        summary: &QuinnSessionTickSummary,
+    ) -> OnlineTickApplicationSummary {
+        let applied_remote_commands = if mode_label == "descriptor-host-accepted" {
+            summary
+                .command_summary
+                .as_ref()
+                .map_or(0, |command_summary| {
+                    self.apply_accepted_online_remote_commands(command_summary)
+                })
+        } else {
+            0
+        };
+        let mut synced_replicated_players = 0;
+        let mut applied_terrain_tiles = 0;
+        let mut roster_seeded = false;
+        let mut joined_local_synced = false;
+        if mode_label == "descriptor-client-connected" {
+            roster_seeded = self.ensure_local_online_player_presentation_from_roster();
+            joined_local_synced = self.sync_joined_local_player_from_replicated_game();
+            applied_terrain_tiles =
+                self.apply_client_terrain_chunk_response(summary.terrain_chunk_response.as_ref());
+            synced_replicated_players = self
+                .sync_legacy_remote_presentations_to_world()
+                .remote_players_updated;
+        }
+        OnlineTickApplicationSummary {
+            applied_remote_commands,
+            synced_replicated_players,
+            applied_terrain_tiles,
+            roster_seeded,
+            joined_local_synced,
+        }
+    }
+
+    pub fn online_tick_diagnostic(
+        summary: &QuinnSessionTickSummary,
+        application: OnlineTickApplicationSummary,
+    ) -> String {
+        let base = format!(
+            "command={}, snapshot={}, delta={}, chunk={}, correction={}",
+            summary.command_summary.is_some(),
+            summary.snapshot_replicated,
+            summary.delta_replicated,
+            summary.terrain_chunk_response.is_some(),
+            summary.correction_summary.is_some()
+        );
+        let mut details = Vec::new();
+        if application.applied_remote_commands > 0 {
+            details.push(format!(
+                "applied_remote_commands={}",
+                application.applied_remote_commands
+            ));
+        }
+        if application.synced_replicated_players > 0 {
+            details.push(format!(
+                "synced_replicated_players={}",
+                application.synced_replicated_players
+            ));
+        }
+        if application.applied_terrain_tiles > 0 {
+            details.push(format!(
+                "applied_terrain_tiles={}",
+                application.applied_terrain_tiles
+            ));
+        }
+        if application.roster_seeded {
+            details.push("roster_seeded=true".to_owned());
+        }
+        if application.joined_local_synced {
+            details.push("joined_local_synced=true".to_owned());
+        }
+        if details.is_empty() {
+            base
+        } else {
+            format!("{base}; {}", details.join("; "))
+        }
+    }
+
+    fn apply_client_terrain_chunk_response(&mut self, response: Option<&ProtocolMessage>) -> usize {
+        let Some(ProtocolMessage::TerrainChunkResponse {
+            chunk_x,
+            chunk_y,
+            revision,
+            tiles,
+        }) = response
+        else {
+            return 0;
+        };
+        self.apply_replicated_terrain_chunk_to_world_presentation(
+            *chunk_x, *chunk_y, *revision, tiles,
+        )
     }
 
     pub fn sync_legacy_remote_presentations_to_world(

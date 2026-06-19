@@ -330,50 +330,6 @@ impl OnlineTaskDispatcher {
         )
     }
 
-    fn tick_diagnostic(summary: &crate::multiplayer::QuinnSessionTickSummary) -> String {
-        format!(
-            "command={}, snapshot={}, delta={}, chunk={}, correction={}",
-            summary.command_summary.is_some(),
-            summary.snapshot_replicated,
-            summary.delta_replicated,
-            summary.terrain_chunk_response.is_some(),
-            summary.correction_summary.is_some()
-        )
-    }
-
-    fn apply_accepted_remote_commands(
-        session: &mut GameSession,
-        summary: Option<&crate::multiplayer::CommandPacketExchangeSummary>,
-    ) -> usize {
-        summary.map_or(0, |summary| {
-            session.apply_accepted_online_remote_commands(summary)
-        })
-    }
-
-    fn sync_remote_presentations_to_session(session: &mut GameSession) -> usize {
-        session
-            .sync_legacy_remote_presentations_to_world()
-            .remote_players_updated
-    }
-
-    fn apply_client_terrain_chunk_response(
-        session: &mut GameSession,
-        response: Option<&crate::multiplayer::ProtocolMessage>,
-    ) -> usize {
-        let Some(crate::multiplayer::ProtocolMessage::TerrainChunkResponse {
-            chunk_x,
-            chunk_y,
-            revision,
-            tiles,
-        }) = response
-        else {
-            return 0;
-        };
-        session.apply_replicated_terrain_chunk_to_world_presentation(
-            *chunk_x, *chunk_y, *revision, tiles,
-        )
-    }
-
     fn drive_scheduled_tick(
         &mut self,
         session: &mut GameSession,
@@ -428,37 +384,8 @@ impl OnlineTaskDispatcher {
         };
         match result {
             Ok(summary) => {
-                let applied_remote_commands = if mode_label == "descriptor-host-accepted" {
-                    Self::apply_accepted_remote_commands(session, summary.command_summary.as_ref())
-                } else {
-                    0
-                };
-                let synced_replicated_players = if mode_label == "descriptor-client-connected" {
-                    let _seeded = session.ensure_local_online_player_presentation_from_roster();
-                    let _local_synced = session.sync_joined_local_player_from_replicated_game();
-                    let _terrain_tiles = Self::apply_client_terrain_chunk_response(
-                        session,
-                        summary.terrain_chunk_response.as_ref(),
-                    );
-                    Self::sync_remote_presentations_to_session(session)
-                } else {
-                    0
-                };
-                let diagnostic = match (applied_remote_commands, synced_replicated_players) {
-                    (0, 0) => Self::tick_diagnostic(&summary),
-                    (commands, 0) => format!(
-                        "{}; applied_remote_commands={commands}",
-                        Self::tick_diagnostic(&summary)
-                    ),
-                    (0, players) => format!(
-                        "{}; synced_replicated_players={players}",
-                        Self::tick_diagnostic(&summary)
-                    ),
-                    (commands, players) => format!(
-                        "{}; applied_remote_commands={commands}; synced_replicated_players={players}",
-                        Self::tick_diagnostic(&summary)
-                    ),
-                };
+                let application = session.apply_online_tick_summary(mode_label, &summary);
+                let diagnostic = GameSession::online_tick_diagnostic(&summary, application);
                 session
                     .game_mut()
                     .apply_online_diagnostics(mode_label, diagnostic);
@@ -701,8 +628,7 @@ mod tests {
             }],
         };
 
-        let applied =
-            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let applied = session.apply_accepted_online_remote_commands(&summary);
 
         assert_eq!(applied, 1);
         assert!(session.has_client(crate::multiplayer::ClientId::new(2)));
@@ -754,8 +680,7 @@ mod tests {
             }],
         };
 
-        let applied =
-            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let applied = session.apply_accepted_online_remote_commands(&summary);
         let advance = session.advance_authoritative_world_ticks(30);
         let delta = session.drain_world_delta().compact_network_delta();
 
@@ -819,8 +744,7 @@ mod tests {
             ],
         };
 
-        let applied =
-            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let applied = session.apply_accepted_online_remote_commands(&summary);
         let player = session
             .world()
             .player(remote_player)
@@ -875,8 +799,7 @@ mod tests {
             }],
         };
 
-        let applied =
-            OnlineTaskDispatcher::apply_accepted_remote_commands(&mut session, Some(&summary));
+        let applied = session.apply_accepted_online_remote_commands(&summary);
         let after = session
             .world()
             .player_survival_snapshot(remote_player)
@@ -938,7 +861,9 @@ mod tests {
             },
         );
 
-        let synced = OnlineTaskDispatcher::sync_remote_presentations_to_session(&mut session);
+        let synced = session
+            .sync_legacy_remote_presentations_to_world()
+            .remote_players_updated;
 
         assert_eq!(synced, 1);
         assert!(session.has_client(crate::multiplayer::ClientId::new(2)));
