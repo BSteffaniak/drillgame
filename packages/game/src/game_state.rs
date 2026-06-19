@@ -2854,6 +2854,11 @@ impl RealOnlineSessionController {
                     let chunk = authoritative_terrain_chunks
                         .iter()
                         .find(|chunk| chunk.chunk_x == chunk_x && chunk.chunk_y == chunk_y)
+                        .or_else(|| {
+                            authoritative_terrain_chunks
+                                .iter()
+                                .find(|chunk| chunk.revision > known_revision)
+                        })
                         .or_else(|| authoritative_terrain_chunks.first());
                     let (response_chunk_x, response_chunk_y, revision, tiles) = chunk.map_or_else(
                         || {

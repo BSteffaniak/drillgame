@@ -178,7 +178,7 @@ pub struct OnlineTickIdentitySummary {
     pub slot: Option<u8>,
     pub descriptor_client_connected: bool,
     pub roster_seeded: bool,
-    pub legacy_bridge_seeded: bool,
+    pub joined_local_synced: bool,
 }
 
 impl OnlineTickIdentitySummary {
@@ -189,7 +189,7 @@ impl OnlineTickIdentitySummary {
 
     #[must_use]
     pub const fn seeded_session_presentation(self) -> bool {
-        self.roster_seeded || self.legacy_bridge_seeded
+        self.roster_seeded || self.joined_local_synced
     }
 }
 
@@ -5662,17 +5662,11 @@ impl GameSession {
         } else {
             local_client_id
         };
-        let (roster_seeded, legacy_bridge_seeded) =
+        let (roster_seeded, joined_local_synced) =
             if descriptor_client_connected || online_player_slot.is_some() {
                 let roster_seeded = self.ensure_local_online_player_presentation_from_roster();
                 self.refresh_online_roster_status_on_shell();
-                let update_existing_from_legacy = online_player_slot.is_none();
-                let legacy_bridge_seeded = self
-                    .ensure_local_online_player_presentation_from_legacy_view(
-                        player_id,
-                        update_existing_from_legacy,
-                    );
-                (roster_seeded, legacy_bridge_seeded)
+                (roster_seeded, false)
             } else {
                 (false, false)
             };
@@ -5682,7 +5676,7 @@ impl GameSession {
             slot: online_player_slot,
             descriptor_client_connected,
             roster_seeded,
-            legacy_bridge_seeded,
+            joined_local_synced,
         }
     }
 
@@ -5801,27 +5795,6 @@ impl GameSession {
         self.world
             .set_scanner_cooldown_seconds(player_id, self.game.scanner_cooldown_seconds);
         true
-    }
-
-    pub fn ensure_local_online_player_presentation_from_legacy_view(
-        &mut self,
-        player_id: PlayerId,
-        update_existing: bool,
-    ) -> bool {
-        let client_id = ClientId::new(player_id.get());
-        if !self.has_client(client_id) {
-            let _added = self.add_local_client_player(client_id, player_id);
-        }
-        let player = self.game.player.clone();
-        if let Some(existing) = self.world.player_mut(player_id) {
-            if update_existing {
-                *existing = player;
-            }
-            false
-        } else {
-            self.world.insert_player(player_id, player);
-            true
-        }
     }
 
     pub fn mark_world_terrain_tiles_changed<I>(&mut self, positions: I) -> Vec<TerrainChunkRevision>
@@ -9092,47 +9065,29 @@ mod tests {
     }
 
     #[test]
-    fn local_joined_client_seed_does_not_overwrite_existing_authoritative_world_player() {
+    fn roster_seeding_creates_joined_client_without_legacy_bridge() {
         let mut session = GameSession::new();
-        let joined_player = PlayerId::new(2);
+        session.game.online_player_slot = Some(2);
         session.game.player.x = TILE_SIZE * 9.0;
         session.game.player.credits = 5;
-        let _seeded =
-            session.ensure_local_online_player_presentation_from_legacy_view(joined_player, true);
-        {
-            let player = session
-                .world_mut()
-                .player_mut(joined_player)
-                .expect("joined player exists");
-            player.x = TILE_SIZE * 44.0;
-            player.credits = 777;
-        }
-        session.game.player.x = TILE_SIZE * 3.0;
-        session.game.player.credits = 1;
 
-        assert!(
-            !session
-                .ensure_local_online_player_presentation_from_legacy_view(joined_player, false,)
-        );
+        let identity = session.prepare_online_tick_identity(true);
 
+        assert!(identity.seeded_session_presentation());
+        assert!(!identity.joined_local_synced);
         let player = session
             .world()
-            .player(joined_player)
-            .expect("joined player remains authoritative");
-        let authoritative_x = TILE_SIZE * 44.0;
-        assert!((player.x - authoritative_x).abs() < f32::EPSILON);
-        assert_eq!(player.credits, 777);
-
+            .player(PlayerId::new(2))
+            .expect("joined player exists from roster/session seeding");
+        let expected_x = TILE_SIZE * 10.0;
+        assert!((player.x - expected_x).abs() < f32::EPSILON);
+        assert_eq!(player.credits, 5);
         assert!(
-            !session.ensure_local_online_player_presentation_from_legacy_view(joined_player, true,)
+            session
+                .game()
+                .online_session_roster_status
+                .contains("joined-client slot=2")
         );
-        let synced = session
-            .world()
-            .player(joined_player)
-            .expect("joined player synced from presentation");
-        let synced_x = TILE_SIZE * 3.0;
-        assert!((synced.x - synced_x).abs() < f32::EPSILON);
-        assert_eq!(synced.credits, 1);
     }
 
     #[test]
