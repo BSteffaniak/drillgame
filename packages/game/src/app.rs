@@ -307,89 +307,38 @@ impl OnlineTaskDispatcher {
         }
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "pixel coordinates are intentionally mapped onto bounded terrain tile/chunk indices for network chunk requests"
-    )]
-    fn player_network_chunk(game: &GameState) -> (i32, i32) {
-        const NETWORK_TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
-        let tile_x = (game.player.x / crate::game_state::TILE_SIZE).floor() as i32;
-        let tile_y = (game.player.y / crate::game_state::TILE_SIZE).floor() as i32;
-        (
-            tile_x.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
-            tile_y.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
-        )
-    }
-
     fn live_session_tick_input(
         &mut self,
-        session: &GameSession,
+        session: &mut GameSession,
         local_player_commands: Vec<PlayerCommand>,
     ) -> crate::multiplayer::QuinnSessionTickInput {
-        let local_client = session.local_client();
+        let local_client_id = session.local_client().client_id;
+        let local_player_id = session.local_client().controlled_player_id;
         let online_player_slot = session.game().online_player_slot;
-        let player_id = online_player_slot.map_or(local_client.controlled_player_id, |slot| {
+        let player_id = online_player_slot.map_or(local_player_id, |slot| {
             crate::multiplayer::PlayerId::new(u64::from(slot))
         });
         let client_id = if online_player_slot == Some(2) {
             crate::multiplayer::ClientId::new(1)
         } else {
-            local_client.client_id
+            local_client_id
         };
-        let tick = session.current_tick().get().saturating_add(1);
+        let descriptor_client_connected = self
+            .controller
+            .as_ref()
+            .is_some_and(|controller| controller.mode_label() == "descriptor-client-connected");
+        if descriptor_client_connected || online_player_slot.is_some() {
+            let _seeded =
+                session.ensure_local_online_player_presentation_from_legacy_view(player_id);
+        }
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
-        let chunk_coord = Self::player_network_chunk(session.game());
-        let snapshot = session.world_snapshot().network_snapshot();
-        let correction_probe = snapshot.players.first().map(|player| {
-            (
-                player.x,
-                player.y,
-                player.clone(),
-                crate::multiplayer::SimulationTick::new(tick.saturating_add(2)),
-            )
-        });
-        let commands = if local_player_commands.is_empty() {
-            vec![crate::multiplayer::PlayerCommand::Movement {
-                horizontal: 0.0,
-                thrust: false,
-                drill_down: false,
-            }]
-        } else {
-            local_player_commands
-        };
-        let delta_payload = if snapshot.players.is_empty() {
-            crate::multiplayer::NetworkDeltaPayload::Noop
-        } else {
-            crate::multiplayer::NetworkDeltaPayload::Players {
-                players: snapshot
-                    .players
-                    .iter()
-                    .map(|player| player.player_id)
-                    .collect(),
-            }
-        };
-        crate::multiplayer::QuinnSessionTickInput {
-            command_packet: Some(crate::multiplayer::CommandPacket {
-                client_id,
-                commands: commands
-                    .into_iter()
-                    .map(|command| crate::multiplayer::SequencedPlayerCommand {
-                        player_id,
-                        sequence: crate::multiplayer::InputSequence::new(sequence),
-                        target_tick: crate::multiplayer::SimulationTick::new(tick),
-                        command,
-                    })
-                    .collect(),
-            }),
-            snapshot: Some(snapshot),
-            delta: Some((
-                crate::multiplayer::SimulationTick::new(tick.saturating_add(1)),
-                delta_payload,
-            )),
-            terrain_chunk_request: Some((chunk_coord.0, chunk_coord.1, 0, 0)),
-            correction_probe,
-        }
+        session.live_session_tick_input_from_world(
+            client_id,
+            player_id,
+            sequence,
+            local_player_commands,
+        )
     }
 
     fn tick_diagnostic(summary: &crate::multiplayer::QuinnSessionTickSummary) -> String {
@@ -1053,10 +1002,10 @@ mod tests {
 
     #[test]
     fn live_session_tick_input_uses_real_local_player_commands() {
-        let session = GameSession::new();
+        let mut session = GameSession::new();
         let mut dispatcher = OnlineTaskDispatcher::new();
         let input = dispatcher.live_session_tick_input(
-            &session,
+            &mut session,
             vec![
                 PlayerCommand::Movement {
                     horizontal: 1.0,
@@ -1093,7 +1042,7 @@ mod tests {
         session.game_mut().online_player_slot = Some(2);
         let mut dispatcher = OnlineTaskDispatcher::new();
         let input = dispatcher.live_session_tick_input(
-            &session,
+            &mut session,
             vec![PlayerCommand::Movement {
                 horizontal: -1.0,
                 thrust: false,
@@ -1145,11 +1094,19 @@ mod tests {
     #[test]
     fn live_session_tick_input_requests_chunk_containing_visible_player() {
         let mut session = GameSession::new();
-        session.game_mut().player.x = crate::game_state::TILE_SIZE * 33.0;
-        session.game_mut().player.y = crate::game_state::TILE_SIZE * 18.0;
+        session
+            .world_mut()
+            .player_mut(crate::multiplayer::LOCAL_PLAYER_ID)
+            .expect("local world player exists")
+            .x = crate::game_state::TILE_SIZE * 33.0;
+        session
+            .world_mut()
+            .player_mut(crate::multiplayer::LOCAL_PLAYER_ID)
+            .expect("local world player exists")
+            .y = crate::game_state::TILE_SIZE * 18.0;
         let mut dispatcher = OnlineTaskDispatcher::new();
 
-        let input = dispatcher.live_session_tick_input(&session, Vec::new());
+        let input = dispatcher.live_session_tick_input(&mut session, Vec::new());
 
         assert_eq!(input.terrain_chunk_request, Some((2, 1, 0, 0)));
     }
@@ -1191,9 +1148,9 @@ mod tests {
 
     #[test]
     fn live_session_tick_input_keeps_idle_movement_when_no_commands_are_available() {
-        let session = GameSession::new();
+        let mut session = GameSession::new();
         let mut dispatcher = OnlineTaskDispatcher::new();
-        let input = dispatcher.live_session_tick_input(&session, Vec::new());
+        let input = dispatcher.live_session_tick_input(&mut session, Vec::new());
 
         let packet = input.command_packet.expect("idle packet is generated");
         assert_eq!(packet.commands.len(), 1);
@@ -1559,8 +1516,8 @@ mod tests {
     #[test]
     fn online_task_dispatcher_builds_tick_payload_from_live_session_state() {
         let mut dispatcher = OnlineTaskDispatcher::new();
-        let session = GameSession::new();
-        let input = dispatcher.live_session_tick_input(&session, Vec::new());
+        let mut session = GameSession::new();
+        let input = dispatcher.live_session_tick_input(&mut session, Vec::new());
         let packet = input.command_packet.expect("command packet");
         let command = packet.commands.first().expect("sequenced command");
 

@@ -18,7 +18,8 @@ use crate::{
         CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
         NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
         NetworkWorldSnapshot, PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind,
-        ProtocolMessage, SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
+        ProtocolMessage, QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand,
+        SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -192,6 +193,14 @@ pub const fn fixed_tick_audit_items() -> [FixedTickAuditItem; 8] {
             plan: FixedTickMigrationPlan::KeepVariablePresentationOnly,
         },
     ]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplicatedWorldPresentationApplySummary {
+    pub snapshot_tick: SimulationTick,
+    pub local_players_updated: usize,
+    pub remote_players_updated: usize,
+    pub clients_created: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2085,6 +2094,19 @@ impl WorldState {
         self.authoritative_summary =
             AuthoritativeWorldSummary::from_legacy_game(tick, game, self.players.len());
     }
+}
+
+fn apply_network_player_snapshot_to_player(player: &mut Player, snapshot: &NetworkPlayerSnapshot) {
+    player.x = snapshot.x;
+    player.y = snapshot.y;
+    player.velocity_x = snapshot.velocity_x;
+    player.velocity_y = snapshot.velocity_y;
+    player.fuel = snapshot.fuel;
+    player.hull = snapshot.hull;
+    player.credits = snapshot.credits;
+    player.cargo.clone_from(&snapshot.cargo);
+    player.artifacts.clone_from(&snapshot.artifacts);
+    player.materials.clone_from(&snapshot.materials);
 }
 
 fn authoritative_mine_target(
@@ -4598,6 +4620,101 @@ impl GameSession {
             .collect()
     }
 
+    pub fn ensure_local_online_player_presentation_from_legacy_view(
+        &mut self,
+        player_id: PlayerId,
+    ) -> bool {
+        let client_id = ClientId::new(player_id.get());
+        if !self.has_client(client_id) {
+            let _added = self.add_local_client_player(client_id, player_id);
+        }
+        let player = self.game.player.clone();
+        if let Some(existing) = self.world.player_mut(player_id) {
+            *existing = player;
+            false
+        } else {
+            self.world.insert_player(player_id, player);
+            true
+        }
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "pixel coordinates are intentionally mapped onto bounded terrain tile/chunk indices for network chunk requests"
+    )]
+    fn replicated_player_network_chunk(&self, player_id: PlayerId) -> (i32, i32) {
+        const NETWORK_TERRAIN_CHUNK_SIZE_TILES: i32 = 16;
+        let player = self.world.player(player_id).unwrap_or_else(|| {
+            self.world
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+        });
+        let tile_x = (player.x / TILE_SIZE).floor() as i32;
+        let tile_y = (player.y / TILE_SIZE).floor() as i32;
+        (
+            tile_x.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
+            tile_y.div_euclid(NETWORK_TERRAIN_CHUNK_SIZE_TILES),
+        )
+    }
+
+    pub fn live_session_tick_input_from_world(
+        &self,
+        client_id: ClientId,
+        player_id: PlayerId,
+        sequence: u32,
+        local_player_commands: Vec<PlayerCommand>,
+    ) -> QuinnSessionTickInput {
+        let tick = self.current_tick().get().saturating_add(1);
+        let chunk_coord = self.replicated_player_network_chunk(player_id);
+        let snapshot = self.world_snapshot().network_snapshot();
+        let correction_probe = snapshot.players.first().map(|player| {
+            (
+                player.x,
+                player.y,
+                player.clone(),
+                SimulationTick::new(tick.saturating_add(2)),
+            )
+        });
+        let commands = if local_player_commands.is_empty() {
+            vec![PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            }]
+        } else {
+            local_player_commands
+        };
+        let delta_payload = if snapshot.players.is_empty() {
+            NetworkDeltaPayload::Noop
+        } else {
+            NetworkDeltaPayload::Players {
+                players: snapshot
+                    .players
+                    .iter()
+                    .map(|player| player.player_id)
+                    .collect(),
+            }
+        };
+        QuinnSessionTickInput {
+            command_packet: Some(CommandPacket {
+                client_id,
+                commands: commands
+                    .into_iter()
+                    .map(|command| SequencedPlayerCommand {
+                        player_id,
+                        sequence: InputSequence::new(sequence),
+                        target_tick: SimulationTick::new(tick),
+                        command,
+                    })
+                    .collect(),
+            }),
+            snapshot: Some(snapshot),
+            delta: Some((SimulationTick::new(tick.saturating_add(1)), delta_payload)),
+            terrain_chunk_request: Some((chunk_coord.0, chunk_coord.1, 0, 0)),
+            correction_probe,
+        }
+    }
+
     pub fn advance_authoritative_world_ticks(
         &mut self,
         fixed_steps: u32,
@@ -4645,6 +4762,58 @@ impl GameSession {
             terrain_events,
             cargo_events,
         }
+    }
+
+    pub fn apply_replicated_snapshot_to_world_presentation(
+        &mut self,
+        snapshot: &NetworkWorldSnapshot,
+    ) -> ReplicatedWorldPresentationApplySummary {
+        let local_player_id = self.local_client().controlled_player_id;
+        let mut local_players_updated = 0;
+        let mut remote_players_updated = 0;
+        let mut clients_created = 0;
+        for player_snapshot in &snapshot.players {
+            if player_snapshot.player_id != local_player_id {
+                let client_id = ClientId::new(player_snapshot.player_id.get());
+                if !self.has_client(client_id) {
+                    let _added = self.add_local_client_player(client_id, player_snapshot.player_id);
+                    clients_created += 1;
+                }
+            }
+            if !self.world.players.contains_key(&player_snapshot.player_id) {
+                let mut player = self.game.player.clone();
+                apply_network_player_snapshot_to_player(&mut player, player_snapshot);
+                self.world.insert_player(player_snapshot.player_id, player);
+            } else if let Some(player) = self.world.player_mut(player_snapshot.player_id) {
+                apply_network_player_snapshot_to_player(player, player_snapshot);
+            }
+            self.world.set_scanner_cooldown_seconds(
+                player_snapshot.player_id,
+                player_snapshot.scanner_cooldown_seconds,
+            );
+            if player_snapshot.player_id == local_player_id {
+                local_players_updated += 1;
+            } else {
+                remote_players_updated += 1;
+            }
+        }
+        ReplicatedWorldPresentationApplySummary {
+            snapshot_tick: snapshot.tick,
+            local_players_updated,
+            remote_players_updated,
+            clients_created,
+        }
+    }
+
+    pub fn apply_replicated_player_delta_to_world_presentation(
+        &mut self,
+        tick: SimulationTick,
+        players: &[NetworkPlayerSnapshot],
+    ) -> ReplicatedWorldPresentationApplySummary {
+        self.apply_replicated_snapshot_to_world_presentation(&NetworkWorldSnapshot {
+            tick,
+            players: players.to_vec(),
+        })
     }
 
     pub fn apply_accepted_online_remote_commands(
@@ -5231,8 +5400,9 @@ mod tests {
         multiplayer::{
             ClientId, CommandAcknowledgement, CommandPacket, CommandRejection, CommandSource,
             FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-            NetworkDeltaPayload, PlayerCommand, PlayerId, ProtocolExchangeKind, ProtocolMessage,
-            SequencedPlayerCommand, SessionToken, SimulationTick,
+            NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkWorldSnapshot, PlayerCommand,
+            PlayerId, ProtocolExchangeKind, ProtocolMessage, SequencedPlayerCommand, SessionToken,
+            SimulationTick,
         },
         terrain::{MineResult, TileKind, TilePosition},
     };
@@ -7070,6 +7240,126 @@ mod tests {
             .expect("remote player exists in authoritative world");
         assert!(player.velocity_x > 0.0);
         assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn live_session_tick_input_is_built_from_world_snapshot_and_world_player_chunk() {
+        let mut session = GameSession::new();
+        session.game.player.x = TILE_SIZE * 1.0;
+        session.game.player.y = TILE_SIZE * 1.0;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local world player exists");
+            player.x = TILE_SIZE * 48.0;
+            player.y = TILE_SIZE * 32.0;
+            player.fuel = 77.0;
+            player.hull = 88.0;
+            player.credits = 99;
+        }
+
+        let input = session.live_session_tick_input_from_world(
+            LOCAL_CLIENT_ID,
+            LOCAL_PLAYER_ID,
+            9,
+            vec![PlayerCommand::Movement {
+                horizontal: 0.5,
+                thrust: true,
+                drill_down: false,
+            }],
+        );
+
+        assert_eq!(input.terrain_chunk_request, Some((3, 2, 0, 0)));
+        let snapshot = input.snapshot.expect("snapshot included");
+        let player = snapshot
+            .players
+            .iter()
+            .find(|player| player.player_id == LOCAL_PLAYER_ID)
+            .expect("local player snapshot included");
+        let expected_x = TILE_SIZE * 48.0;
+        assert!((player.x - expected_x).abs() < f32::EPSILON);
+        assert!((player.fuel - 77.0).abs() < f32::EPSILON);
+        assert_eq!(player.credits, 99);
+        assert!(matches!(
+            input.delta,
+            Some((_, NetworkDeltaPayload::Players { players })) if players.contains(&LOCAL_PLAYER_ID)
+        ));
+        let packet = input.command_packet.expect("command packet included");
+        assert_eq!(packet.client_id, LOCAL_CLIENT_ID);
+        assert_eq!(packet.commands[0].sequence, InputSequence::new(9));
+    }
+
+    #[test]
+    fn replicated_snapshot_updates_session_world_presentation_before_legacy_game() {
+        let mut session = GameSession::new();
+        session.game.player.x = 1.0;
+        let local_player = LOCAL_PLAYER_ID;
+        let remote_player = PlayerId::new(2);
+        let snapshot = NetworkWorldSnapshot {
+            tick: SimulationTick::new(7),
+            players: vec![
+                NetworkPlayerSnapshot {
+                    player_id: local_player,
+                    x: 20.0,
+                    y: 21.0,
+                    velocity_x: 2.0,
+                    velocity_y: 3.0,
+                    fuel: 40.0,
+                    hull: 50.0,
+                    credits: 60,
+                    cargo_used: 0,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
+                    scanner_cooldown_seconds: 0.25,
+                },
+                NetworkPlayerSnapshot {
+                    player_id: remote_player,
+                    x: 120.0,
+                    y: 121.0,
+                    velocity_x: 12.0,
+                    velocity_y: 13.0,
+                    fuel: 140.0,
+                    hull: 150.0,
+                    credits: 160,
+                    cargo_used: 0,
+                    cargo: BTreeMap::new(),
+                    artifacts: BTreeMap::new(),
+                    materials: BTreeMap::new(),
+                    scanner_cooldown_seconds: 0.75,
+                },
+            ],
+        };
+
+        let summary = session.apply_replicated_snapshot_to_world_presentation(&snapshot);
+
+        assert!(summary.local_players_updated > 0 || summary.remote_players_updated > 0);
+        assert_eq!(summary.local_players_updated, 1);
+        assert_eq!(summary.remote_players_updated, 1);
+        assert_eq!(summary.clients_created, 1);
+        assert!((session.game().player.x - 1.0).abs() < f32::EPSILON);
+        assert!(
+            (session
+                .world()
+                .player(local_player)
+                .expect("local world player updated")
+                .x
+                - 20.0)
+                .abs()
+                < f32::EPSILON
+        );
+        let remote = session
+            .world()
+            .player(remote_player)
+            .expect("remote world player updated");
+        assert!((remote.x - 120.0).abs() < f32::EPSILON);
+        assert_eq!(remote.credits, 160);
+        assert_eq!(
+            session.world().scanner_cooldown_seconds(remote_player),
+            Some(0.75)
+        );
+        assert!(session.has_client(ClientId::new(2)));
     }
 
     #[test]
