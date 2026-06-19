@@ -496,6 +496,19 @@ impl PersistentWorldObjects {
             self.scanner_cooldowns.clone(),
         );
     }
+
+    pub fn restore_into_game(&self, game: &mut GameState) {
+        game.terrain = self.terrain.clone();
+        game.hazard_clouds.clone_from(&self.hazards);
+        game.placed_bombs.clone_from(&self.bombs);
+        game.infrastructure.clone_from(&self.infrastructure);
+        game.active_drill = self.active_drills.get(&LOCAL_PLAYER_ID).copied();
+        game.scanner_cooldown_seconds = self
+            .scanner_cooldowns
+            .get(&LOCAL_PLAYER_ID)
+            .copied()
+            .unwrap_or(game.scanner_cooldown_seconds);
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -566,6 +579,27 @@ impl PersistentWorldSave {
     #[must_use]
     pub fn world_object_counts(&self) -> PersistentWorldObjectCounts {
         self.world.object_counts()
+    }
+
+    #[must_use]
+    pub fn restore_shell_game(&self) -> GameState {
+        let mut game = self.game.clone();
+        if let Some(player_state) = self.default_player_state() {
+            player_state.apply_to_player(&mut game.player);
+        }
+        self.world.restore_into_game(&mut game);
+        game.migrate_after_load();
+        game
+    }
+
+    #[must_use]
+    pub const fn restored_player_count(&self) -> usize {
+        self.session.players.len()
+    }
+
+    #[must_use]
+    pub fn restores_world_state_without_legacy_conversion(&self) -> bool {
+        self.default_player_roster_contains_state() && self.restored_player_count() > 0
     }
 
     #[must_use]
@@ -854,7 +888,7 @@ mod tests {
         multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
         save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
         session::WorldState,
-        terrain::{ArtifactKind, MineralKind, StrategicResourceKind},
+        terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TilePosition},
     };
 
     #[test]
@@ -916,6 +950,57 @@ mod tests {
             session.players[0].cargo_capacity,
             game.player.cargo_capacity
         );
+    }
+
+    #[test]
+    fn persistent_world_restore_shell_game_uses_session_world_state_without_consuming_save() {
+        let mut game = GameState::new();
+        game.player.x = 5.0;
+        game.player.credits = 10;
+        let mut world = WorldState::from_legacy_game(&game);
+        let player_id = LOCAL_PLAYER_ID;
+        {
+            let player = world.player_mut(player_id).expect("player exists");
+            player.x = 123.0;
+            player.credits = 456;
+        }
+        let target = TilePosition { x: 0, y: 1 };
+        world
+            .terrain_mut()
+            .set_kind(target, crate::terrain::TileKind::Air);
+        world.set_scanner_cooldown_seconds(player_id, 7.5);
+
+        let save = PersistentWorldSave::from_world_and_legacy_game(&world, &game);
+        let restored = save.restore_shell_game();
+
+        assert!(save.restores_world_state_without_legacy_conversion());
+        assert!((restored.player.x - 123.0).abs() < f32::EPSILON);
+        assert_eq!(restored.player.credits, 456);
+        assert!((restored.scanner_cooldown_seconds - 7.5).abs() < f32::EPSILON);
+        assert_eq!(
+            restored.terrain.tile(target).expect("tile exists").kind,
+            crate::terrain::TileKind::Air
+        );
+        assert_eq!(save.restored_player_count(), 1);
+    }
+
+    #[test]
+    fn persistent_world_restore_into_game_restores_world_objects() {
+        let mut game = GameState::new();
+        game.hazard_clouds.push(crate::game_state::HazardCloud {
+            x: 1.0,
+            y: 2.0,
+            life: 5.0,
+            radius: 3.0,
+        });
+        game.scanner_cooldown_seconds = 2.5;
+        let world_objects = super::PersistentWorldObjects::from_legacy_game(&game);
+        let mut restored = GameState::new();
+
+        world_objects.restore_into_game(&mut restored);
+
+        assert_eq!(restored.hazard_clouds.len(), 1);
+        assert!((restored.scanner_cooldown_seconds - 2.5).abs() < f32::EPSILON);
     }
 
     #[test]

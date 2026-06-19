@@ -4802,8 +4802,7 @@ impl GameSession {
 
     #[must_use]
     pub fn from_persistent_world(save: &crate::save::PersistentWorldSave) -> Self {
-        let mut game = save.clone().into_legacy_game();
-        game.migrate_after_load();
+        let game = save.restore_shell_game();
         let mut session = Self::from_game(game);
         save.restore_into_world(&mut session.world);
         session.current_tick = session.world.simulation_tick();
