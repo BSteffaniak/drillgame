@@ -71,6 +71,38 @@ pub struct SaveSlotMetadata {
     pub won_game: bool,
 }
 
+impl SaveSlotMetadata {
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "save slot depth is displayed as an integral tile depth"
+    )]
+    pub fn from_persistent_world(
+        save: &PersistentWorldSave,
+        modified_unix_seconds: Option<u64>,
+    ) -> Self {
+        let default_player = save.default_player_state();
+        let shell_player = &save.game.player;
+        let depth_y = default_player.map_or(shell_player.y, |player| player.y);
+        Self {
+            depth: (depth_y / crate::game_state::TILE_SIZE).floor() as i32,
+            credits: default_player.map_or(shell_player.credits, |player| player.credits),
+            cargo_used: default_player
+                .map_or_else(|| shell_player.cargo_used(), |player| player.cargo_used),
+            cargo_capacity: default_player
+                .map_or(shell_player.cargo_capacity, |player| player.cargo_capacity),
+            contracts_completed: save.game.contracts.completed,
+            play_seconds: save.game.play_seconds,
+            total_earnings: save.game.total_earnings,
+            mode: save_mode_label(&save.game).to_owned(),
+            deep_claim_unlocked: save.game.deep_claim_status
+                == crate::economy::DeepClaimStatus::Unlocked,
+            modified_unix_seconds,
+            won_game: save.game.won_game,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct SaveFile {
     version: u32,
@@ -365,6 +397,33 @@ impl PersistentWorldRestoreSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PersistentWorldObjectCounts {
+    pub terrain_width: i32,
+    pub terrain_height: i32,
+    pub hazards: usize,
+    pub bombs: usize,
+    pub infrastructure: usize,
+    pub active_drills: usize,
+    pub scanner_cooldowns: usize,
+}
+
+impl PersistentWorldObjectCounts {
+    #[must_use]
+    pub const fn has_authoritative_terrain(self) -> bool {
+        self.terrain_width > 0 && self.terrain_height > 0
+    }
+
+    #[must_use]
+    pub const fn has_session_objects(self) -> bool {
+        self.hazards > 0
+            || self.bombs > 0
+            || self.infrastructure > 0
+            || self.active_drills > 0
+            || self.scanner_cooldowns > 0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentWorldObjects {
     pub terrain: Terrain,
@@ -411,6 +470,19 @@ impl PersistentWorldObjects {
             infrastructure: world.infrastructure().to_vec(),
             active_drills: world.active_drills_snapshot(),
             scanner_cooldowns: world.scanner_cooldowns_snapshot(),
+        }
+    }
+
+    #[must_use]
+    pub fn object_counts(&self) -> PersistentWorldObjectCounts {
+        PersistentWorldObjectCounts {
+            terrain_width: self.terrain.width(),
+            terrain_height: self.terrain.height(),
+            hazards: self.hazards.len(),
+            bombs: self.bombs.len(),
+            infrastructure: self.infrastructure.len(),
+            active_drills: self.active_drills.len(),
+            scanner_cooldowns: self.scanner_cooldowns.len(),
         }
     }
 
@@ -474,6 +546,26 @@ impl PersistentWorldSave {
             world: PersistentWorldObjects::from_world(world),
             game: game.clone_for_save(),
         }
+    }
+
+    #[must_use]
+    pub fn default_player_state(&self) -> Option<&PersistentPlayerState> {
+        self.session
+            .players
+            .iter()
+            .find(|player| player.player_id == self.default_player_id)
+            .or_else(|| self.session.players.first())
+    }
+
+    #[must_use]
+    pub fn default_player_roster_contains_state(&self) -> bool {
+        self.default_player_state()
+            .is_some_and(|player| self.player_roster.contains(&player.player_id))
+    }
+
+    #[must_use]
+    pub fn world_object_counts(&self) -> PersistentWorldObjectCounts {
+        self.world.object_counts()
     }
 
     #[must_use]
@@ -651,20 +743,11 @@ fn save_metadata_from_path(path: impl AsRef<Path>) -> Option<SaveSlotMetadata> {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
-    let game = load_game_from_path(path).ok()?;
-    Some(SaveSlotMetadata {
-        depth: (game.player.y / crate::game_state::TILE_SIZE).floor() as i32,
-        credits: game.player.credits,
-        cargo_used: game.player.cargo_used(),
-        cargo_capacity: game.player.cargo_capacity,
-        contracts_completed: game.contracts.completed,
-        play_seconds: game.play_seconds,
-        total_earnings: game.total_earnings,
-        mode: save_mode_label(&game).to_owned(),
-        deep_claim_unlocked: game.deep_claim_status == crate::economy::DeepClaimStatus::Unlocked,
+    let save = load_persistent_world_from_path(path).ok()?;
+    Some(SaveSlotMetadata::from_persistent_world(
+        &save,
         modified_unix_seconds,
-        won_game: game.won_game,
-    })
+    ))
 }
 
 #[must_use]
