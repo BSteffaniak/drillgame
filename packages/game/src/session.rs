@@ -2653,6 +2653,36 @@ impl WorldState {
         Some(sync)
     }
 
+    pub fn active_drills_snapshot(&self) -> BTreeMap<PlayerId, DrillState> {
+        self.active_drills.clone()
+    }
+
+    pub fn scanner_cooldowns_snapshot(&self) -> BTreeMap<PlayerId, f32> {
+        self.scanner_cooldowns.clone()
+    }
+
+    pub fn restore_static_world_state(
+        &mut self,
+        terrain: Terrain,
+        hazards: Vec<HazardCloud>,
+        bombs: Vec<PlacedBomb>,
+        infrastructure: Vec<PlacedInfrastructure>,
+        active_drills: BTreeMap<PlayerId, DrillState>,
+        scanner_cooldowns: BTreeMap<PlayerId, f32>,
+    ) {
+        self.terrain = terrain;
+        self.hazards = hazards;
+        self.bombs = bombs;
+        self.infrastructure = infrastructure;
+        self.active_drills = active_drills;
+        self.scanner_cooldowns = scanner_cooldowns;
+        self.authoritative_summary.terrain_width = self.terrain.width();
+        self.authoritative_summary.terrain_height = self.terrain.height();
+        self.authoritative_summary.hazard_count = self.hazards.len();
+        self.authoritative_summary.bomb_count = self.bombs.len();
+        self.authoritative_summary.infrastructure_count = self.infrastructure.len();
+    }
+
     fn sync_from_legacy_game(&mut self, tick: SimulationTick, game: &GameState) {
         self.simulation_tick = tick;
         self.players.insert(LOCAL_PLAYER_ID, game.player.clone());

@@ -15,11 +15,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    game_state::GameState,
+    game_state::{DrillState, GameState, HazardCloud, PlacedBomb, PlacedInfrastructure},
     multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
     player::Player,
     session::WorldState,
-    terrain::{ArtifactKind, MineralKind, StrategicResourceKind},
+    terrain::{ArtifactKind, MineralKind, StrategicResourceKind, Terrain},
 };
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -366,6 +366,67 @@ impl PersistentWorldRestoreSummary {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PersistentWorldObjects {
+    pub terrain: Terrain,
+    #[serde(default)]
+    pub hazards: Vec<HazardCloud>,
+    #[serde(default)]
+    pub bombs: Vec<PlacedBomb>,
+    #[serde(default)]
+    pub infrastructure: Vec<PlacedInfrastructure>,
+    #[serde(default)]
+    pub active_drills: BTreeMap<PlayerId, DrillState>,
+    #[serde(default)]
+    pub scanner_cooldowns: BTreeMap<PlayerId, f32>,
+}
+
+impl PersistentWorldObjects {
+    #[must_use]
+    pub fn from_default_game() -> Self {
+        Self::from_legacy_game(&GameState::new())
+    }
+
+    #[must_use]
+    pub fn from_legacy_game(game: &GameState) -> Self {
+        let mut active_drills = BTreeMap::new();
+        if let Some(drill) = game.active_drill {
+            active_drills.insert(LOCAL_PLAYER_ID, drill);
+        }
+        Self {
+            terrain: game.terrain.clone(),
+            hazards: game.hazard_clouds.clone(),
+            bombs: game.placed_bombs.clone(),
+            infrastructure: game.infrastructure.clone(),
+            active_drills,
+            scanner_cooldowns: BTreeMap::from([(LOCAL_PLAYER_ID, game.scanner_cooldown_seconds)]),
+        }
+    }
+
+    #[must_use]
+    pub fn from_world(world: &WorldState) -> Self {
+        Self {
+            terrain: world.terrain().clone(),
+            hazards: world.hazards().to_vec(),
+            bombs: world.bombs().to_vec(),
+            infrastructure: world.infrastructure().to_vec(),
+            active_drills: world.active_drills_snapshot(),
+            scanner_cooldowns: world.scanner_cooldowns_snapshot(),
+        }
+    }
+
+    pub fn restore_into_world(&self, world: &mut WorldState) {
+        world.restore_static_world_state(
+            self.terrain.clone(),
+            self.hazards.clone(),
+            self.bombs.clone(),
+            self.infrastructure.clone(),
+            self.active_drills.clone(),
+            self.scanner_cooldowns.clone(),
+        );
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistentWorldSave {
     #[serde(default)]
     pub save_authority: SaveAuthority,
@@ -376,6 +437,8 @@ pub struct PersistentWorldSave {
     pub default_player_id: PlayerId,
     #[serde(default)]
     pub session: PersistentSessionState,
+    #[serde(default = "PersistentWorldObjects::from_default_game")]
+    pub world: PersistentWorldObjects,
     pub game: GameState,
 }
 
@@ -388,6 +451,7 @@ impl PersistentWorldSave {
             player_roster: default_player_roster(),
             default_player_id: LOCAL_PLAYER_ID,
             session: PersistentSessionState::local_from_game(game),
+            world: PersistentWorldObjects::from_legacy_game(game),
             game: game.clone_for_save(),
         }
     }
@@ -407,6 +471,7 @@ impl PersistentWorldSave {
             default_player_id: player_roster.first().copied().unwrap_or(LOCAL_PLAYER_ID),
             player_roster,
             session: PersistentSessionState::from_world(world),
+            world: PersistentWorldObjects::from_world(world),
             game: game.clone_for_save(),
         }
     }
@@ -417,6 +482,7 @@ impl PersistentWorldSave {
     }
 
     pub fn restore_into_world(&self, world: &mut WorldState) {
+        self.world.restore_into_world(world);
         world.set_simulation_tick(self.session.simulation_tick);
         for player_state in &self.session.players {
             if let Some(player) = world.player_mut(player_state.player_id) {
@@ -511,6 +577,7 @@ pub fn load_persistent_world_from_path(
         player_roster: default_player_roster(),
         default_player_id: LOCAL_PLAYER_ID,
         session: PersistentSessionState::local_from_game(&legacy_save.game),
+        world: PersistentWorldObjects::from_legacy_game(&legacy_save.game),
         game: legacy_save.game,
     })
 }
