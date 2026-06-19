@@ -1589,6 +1589,96 @@ impl OnlineReconnectPolicyStatus {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineRuntimeStatusDeck {
+    pub lines: Vec<String>,
+}
+
+impl OnlineRuntimeStatusDeck {
+    #[must_use]
+    pub const fn from_lines(lines: Vec<String>) -> Self {
+        Self { lines }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn contains_line_matching(&self, needle: &str) -> bool {
+        self.lines.iter().any(|line| line.contains(needle))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalMultiplayerRuntimePhase {
+    Inactive,
+    Requested,
+    Active,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalMultiplayerRuntimeStatus {
+    pub phase: LocalMultiplayerRuntimePhase,
+    pub requested: bool,
+    pub active: bool,
+    pub player_slots: u8,
+    pub online_isolated: bool,
+    pub player_message: String,
+}
+
+impl LocalMultiplayerRuntimeStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let phase = if game.local_multiplayer_active {
+            LocalMultiplayerRuntimePhase::Active
+        } else if game.local_multiplayer_requested {
+            LocalMultiplayerRuntimePhase::Requested
+        } else {
+            LocalMultiplayerRuntimePhase::Inactive
+        };
+        let online_isolated = !game.local_multiplayer_active
+            || matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Idle
+                    | OnlineSessionUxState::Disconnected
+                    | OnlineSessionUxState::Shutdown
+            );
+        let player_message = match phase {
+            LocalMultiplayerRuntimePhase::Inactive => {
+                "Local split-screen inactive; online direct-connect state is handled separately."
+                    .to_owned()
+            }
+            LocalMultiplayerRuntimePhase::Requested => {
+                "Local split-screen requested; waiting for the app/session layer to attach local players."
+                    .to_owned()
+            }
+            LocalMultiplayerRuntimePhase::Active => format!(
+                "Local split-screen active with {} players; no online direct-connect session owns these local-only slots.",
+                game.local_multiplayer_player_slots
+            ),
+        };
+        Self {
+            phase,
+            requested: game.local_multiplayer_requested,
+            active: game.local_multiplayer_active,
+            player_slots: game.local_multiplayer_player_slots,
+            online_isolated,
+            player_message,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Local split-screen runtime: phase={:?} requested={} active={} slots={} online_isolated={} | {}",
+            self.phase,
+            yes_no(self.requested),
+            yes_no(self.active),
+            self.player_slots,
+            yes_no(self.online_isolated),
+            self.player_message
+        )
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "manual working-game gate mirrors independent owner-validation checklist rows"
@@ -5260,6 +5350,7 @@ impl GameState {
             self.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
         ));
+        lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
         lines.push(if self.online_last_ownership_status.is_empty() {
             OnlineOwnershipStatus::from_game(self).status_line()
         } else {
@@ -5462,7 +5553,7 @@ impl GameState {
         lines.extend(self.online_lobby_participant_lines());
         lines.extend(self.online_direct_connect_setup_lines());
         lines.extend(Self::online_session_limitations());
-        lines
+        OnlineRuntimeStatusDeck::from_lines(lines).lines
     }
 
     #[must_use]
@@ -6167,25 +6258,48 @@ impl GameState {
         "Welcome to the dig site. Visit the depot for contracts.".clone_into(&mut self.message);
     }
 
+    fn apply_local_multiplayer_status(&mut self, status: LocalMultiplayerRuntimeStatus) {
+        self.local_multiplayer_requested = status.requested;
+        self.local_multiplayer_active = status.active;
+        self.local_multiplayer_player_slots = status.player_slots.max(1);
+        self.local_multiplayer_status_message = status.player_message;
+        self.message = self.local_multiplayer_status_message.clone();
+    }
+
     fn start_local_multiplayer_request(&mut self) {
         self.start_new_game();
-        self.local_multiplayer_requested = true;
-        "Local split-screen starting: Player 1 uses WASD, Player 2 uses arrow keys."
-            .clone_into(&mut self.local_multiplayer_status_message);
-        self.message = self.local_multiplayer_status_message.clone();
+        self.apply_local_multiplayer_status(LocalMultiplayerRuntimeStatus {
+            phase: LocalMultiplayerRuntimePhase::Requested,
+            requested: true,
+            active: false,
+            player_slots: 2,
+            online_isolated: true,
+            player_message:
+                "Local split-screen starting: Player 1 uses WASD, Player 2 uses arrow keys."
+                    .to_owned(),
+        });
     }
 
     pub fn take_local_multiplayer_request(&mut self) -> bool {
-        mem::take(&mut self.local_multiplayer_requested)
+        let requested = mem::take(&mut self.local_multiplayer_requested);
+        if requested {
+            self.local_multiplayer_status_message =
+                LocalMultiplayerRuntimeStatus::from_game(self).status_line();
+        }
+        requested
     }
 
     pub fn mark_local_multiplayer_active(&mut self, player_slots: u8) {
-        self.local_multiplayer_active = true;
-        self.local_multiplayer_player_slots = player_slots;
-        self.local_multiplayer_status_message = format!(
-            "Local split-screen active with {player_slots} players: Player 1 WASD, Player 2 arrow keys."
-        );
-        self.message = self.local_multiplayer_status_message.clone();
+        self.apply_local_multiplayer_status(LocalMultiplayerRuntimeStatus {
+            phase: LocalMultiplayerRuntimePhase::Active,
+            requested: false,
+            active: true,
+            player_slots,
+            online_isolated: true,
+            player_message: format!(
+                "Local split-screen active with {player_slots} players: Player 1 WASD, Player 2 arrow keys."
+            ),
+        });
     }
 
     fn load_latest_into_self(&mut self) {
@@ -10243,6 +10357,67 @@ mod tests {
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
         assert!(GameState::title_options().contains(&TitleOption::LocalMultiplayer));
+    }
+
+    #[test]
+    fn online_runtime_status_deck_wraps_consolidated_status_lines_for_named_checks() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_remote_player_connected = true;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_last_session_boundary_status =
+            OnlineSessionBoundaryStatus::client_left("deck check").status_line();
+        game.refresh_online_save_boundary_status();
+
+        let deck = OnlineRuntimeStatusDeck::from_lines(game.online_multiplayer_status_lines());
+
+        assert!(deck.contains_line_matching("Transport: Quinn/QUIC"));
+        assert!(deck.contains_line_matching("Local split-screen runtime"));
+        assert!(deck.contains_line_matching("Online manual working-game gate"));
+        assert!(deck.contains_line_matching("Online reconnect policy"));
+        assert!(deck.contains_line_matching("Online save boundary"));
+    }
+
+    #[test]
+    fn local_split_screen_runtime_status_isolated_from_online_direct_connect_state() {
+        let mut game = GameState::new();
+        assert_eq!(
+            LocalMultiplayerRuntimeStatus::from_game(&game).phase,
+            LocalMultiplayerRuntimePhase::Inactive
+        );
+
+        game.start_local_multiplayer_request();
+        let requested = LocalMultiplayerRuntimeStatus::from_game(&game);
+        assert_eq!(requested.phase, LocalMultiplayerRuntimePhase::Requested);
+        assert!(requested.requested);
+        assert!(!requested.active);
+        assert_eq!(requested.player_slots, 2);
+        assert!(requested.online_isolated);
+        assert!(requested.status_line().contains("phase=Requested"));
+        assert!(game.take_local_multiplayer_request());
+        assert!(!game.take_local_multiplayer_request());
+
+        game.mark_local_multiplayer_active(2);
+        let active = LocalMultiplayerRuntimeStatus::from_game(&game);
+        assert_eq!(active.phase, LocalMultiplayerRuntimePhase::Active);
+        assert!(active.active);
+        assert_eq!(active.player_slots, 2);
+        assert!(active.online_isolated);
+        assert!(
+            game.online_multiplayer_status_lines()
+                .iter()
+                .any(|line| line.contains("Local split-screen runtime")
+                    && line.contains("online_isolated=yes"))
+        );
+
+        game.online_session_state = OnlineSessionUxState::Connected;
+        let mixed_state = LocalMultiplayerRuntimeStatus::from_game(&game);
+        assert_eq!(mixed_state.phase, LocalMultiplayerRuntimePhase::Active);
+        assert!(!mixed_state.online_isolated);
+        assert!(mixed_state.status_line().contains("online_isolated=no"));
     }
 
     #[test]
