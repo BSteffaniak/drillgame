@@ -1031,6 +1031,14 @@ pub enum RunMode {
     Paused,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionShellUpdateSummary {
+    ShellHandled,
+    GameplayPresentationUpdated,
+    Paused,
+    ExitRequested,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OnlineAddressEditTarget {
     HostBind,
@@ -5150,6 +5158,116 @@ impl GameState {
     #[allow(
         clippy::too_many_lines,
         reason = "top-level mode dispatcher keeps frame order explicit"
+    )]
+    pub fn update_shell_after_session_authority(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+    ) -> SessionShellUpdateSummary {
+        self.last_delta_seconds = delta_seconds;
+        self.update_ticks = self.update_ticks.saturating_add(1);
+        self.sound_cues.clear();
+        self.show_details = input.details;
+        self.handle_save_load(input);
+        if self.handle_exit_modal(input) {
+            return SessionShellUpdateSummary::ShellHandled;
+        }
+        if input.exit_requested {
+            self.request_exit_or_prompt();
+            return SessionShellUpdateSummary::ExitRequested;
+        }
+        if self.run_mode != RunMode::Title && input_changes_game(input) {
+            self.save_dirty = true;
+        }
+        if input.map {
+            self.modal = if self.modal == Some(ModalScreen::Map) {
+                None
+            } else {
+                Some(ModalScreen::Map)
+            };
+        }
+        if input.help {
+            self.modal = if self.modal == Some(ModalScreen::Help) {
+                None
+            } else {
+                Some(ModalScreen::Help)
+            };
+        }
+        if input.volume_up {
+            self.master_volume = (self.master_volume + 0.1).min(1.0);
+            self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
+        }
+        if input.volume_down {
+            self.master_volume = (self.master_volume - 0.1).max(0.0);
+            self.message = format!("Volume: {:.0}%", self.master_volume * 100.0);
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
+        }
+        if input.fullscreen {
+            self.fullscreen = !self.fullscreen;
+            self.settings_dirty = true;
+            self.sound_cues.push(SoundCue::Ui);
+        }
+        self.update_persistent_ore_prediction();
+        self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
+        if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
+            && !self.game_over
+            && !self.won_game
+        {
+            self.play_seconds += delta_seconds;
+        }
+        match self.run_mode {
+            RunMode::Title => {
+                if self.handle_modal(input) {
+                    return SessionShellUpdateSummary::ShellHandled;
+                }
+                self.handle_title_menu(input);
+                return SessionShellUpdateSummary::ShellHandled;
+            }
+            RunMode::Paused => {
+                self.handle_pause_menu(input);
+                return SessionShellUpdateSummary::ShellHandled;
+            }
+            RunMode::Playing | RunMode::Interior => {}
+        }
+        if self.run_mode == RunMode::Interior {
+            self.handle_interior(input, delta_seconds);
+            return SessionShellUpdateSummary::ShellHandled;
+        }
+        if self.game_over {
+            self.handle_rescue(input);
+            self.update_camera(delta_seconds);
+            return SessionShellUpdateSummary::ShellHandled;
+        }
+        self.current_zone = surface_zone_at(self.player.x, self.player.y);
+        self.update_npc_story_records();
+        if self.handle_modal(input) {
+            self.update_camera(delta_seconds);
+            return SessionShellUpdateSummary::ShellHandled;
+        }
+        if input.pause || input.cancel {
+            self.run_mode = RunMode::Paused;
+            return SessionShellUpdateSummary::Paused;
+        }
+        self.apply_depth_pressure(delta_seconds);
+        self.apply_lava_damage(delta_seconds);
+        self.update_depth_milestones();
+        self.update_deep_run_pressure(delta_seconds);
+        self.update_escape_sequence(delta_seconds);
+        self.update_layer_band();
+        self.award_return_bonus();
+        self.update_warning_messages();
+        self.update_status_messages();
+        self.check_failure();
+        self.update_camera(delta_seconds);
+        SessionShellUpdateSummary::GameplayPresentationUpdated
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "legacy app-shell update remains monolithic while gameplay authority is moved into GameSession/WorldState"
     )]
     pub fn update(&mut self, input: PlayerInput, delta_seconds: f32) {
         self.last_delta_seconds = delta_seconds;

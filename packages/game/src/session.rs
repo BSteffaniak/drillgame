@@ -5424,6 +5424,49 @@ impl GameSession {
         input: PlayerInput,
         delta_seconds: f32,
     ) -> SessionAuthorityUpdateSummary {
+        if self.game.run_mode == RunMode::Playing && self.game.modal.is_none() {
+            self.update_authoritative_gameplay_frame(input, delta_seconds)
+        } else {
+            self.update_legacy_frame(input, delta_seconds)
+        }
+    }
+
+    fn update_authoritative_gameplay_frame(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+    ) -> SessionAuthorityUpdateSummary {
+        let fixed_steps = self.accumulate_frame_delta(delta_seconds);
+        let _advance = self.advance_authoritative_world_ticks(fixed_steps);
+        self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+        self.sync_legacy_terrain_from_world();
+        let shell_update = self
+            .game
+            .update_shell_after_session_authority(input, delta_seconds);
+        if matches!(
+            shell_update,
+            crate::game_state::SessionShellUpdateSummary::ExitRequested
+        ) {
+            self.push_event(WorldEvent::ClientExitRequested {
+                client_id: self.local_client_id,
+            });
+        }
+        self.world
+            .sync_from_legacy_game(self.current_tick, &self.game);
+        SessionAuthorityUpdateSummary {
+            used_legacy_presentation_adapter: false,
+            local_movement_authority: self.latest_local_movement_intent.is_some(),
+            command_adapter_count: self.latest_local_authoritative_commands.len(),
+            current_tick: self.current_tick,
+        }
+    }
+
+    fn update_legacy_frame(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+    ) -> SessionAuthorityUpdateSummary {
         let authoritative_input = self.legacy_presentation_input_from_authoritative_commands(input);
         self.update_legacy(authoritative_input, delta_seconds);
         SessionAuthorityUpdateSummary {
@@ -8297,7 +8340,7 @@ mod tests {
             0.016,
         );
 
-        assert!(summary.legacy_bridge_active());
+        assert!(!summary.legacy_bridge_active());
         assert!(summary.local_movement_authority);
         assert_eq!(summary.command_adapter_count, 1);
         let world_player = session
@@ -9670,7 +9713,7 @@ mod tests {
         let summary = session
             .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
 
-        assert!(summary.legacy_bridge_active());
+        assert!(!summary.legacy_bridge_active());
         assert_eq!(summary.command_adapter_count, 2);
         let player = session
             .world()
