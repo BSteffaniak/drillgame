@@ -2081,6 +2081,96 @@ impl OnlinePlayableSessionStatus {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "ready/start transition reports each production UI acceptance condition independently"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineReadyStartTransitionStatus {
+    pub local_ready_sent: bool,
+    pub remote_ready_received: bool,
+    pub start_gated_on_connected_ready: bool,
+    pub start_message_sendable: bool,
+    pub host_enters_gameplay_from_ui: bool,
+    pub joined_enters_gameplay_from_ui: bool,
+    pub modal_closes_only_when_playing: bool,
+    pub role_slot_save_authority_preserved: bool,
+    pub transition_ready: bool,
+    pub status: String,
+}
+
+impl OnlineReadyStartTransitionStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let start_gate = game.online_gameplay_start_gate();
+        let connected = game.online_session_state == OnlineSessionUxState::Connected;
+        let local_ready_sent = game.online_local_ready
+            && (game.online_diagnostic_last_tick.contains("ready")
+                || game.online_session_status_message.contains("ready")
+                || connected);
+        let remote_ready_received =
+            game.online_remote_player_connected && game.online_remote_player_ready;
+        let start_gated_on_connected_ready = start_gate.ready
+            || matches!(
+                start_gate.blocker,
+                Some(
+                    OnlineGameplayStartBlocker::NotConnected
+                        | OnlineGameplayStartBlocker::LocalNotReady
+                        | OnlineGameplayStartBlocker::RemoteNotConnected
+                        | OnlineGameplayStartBlocker::RemoteNotReady
+                )
+            );
+        let start_message_sendable = start_gate.ready
+            && game.online_remote_player_connected
+            && game.online_remote_player_ready;
+        let host_enters_gameplay_from_ui = game.online_host_owns_save
+            && (game.run_mode == RunMode::Playing)
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected);
+        let joined_enters_gameplay_from_ui = !game.online_host_owns_save
+            && (game.run_mode == RunMode::Playing)
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected);
+        let modal_closes_only_when_playing =
+            game.run_mode == RunMode::Playing || game.modal.is_some();
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(game);
+        let role_slot_save_authority_preserved = game.online_player_slot.is_some()
+            && ((game.online_host_owns_save
+                && save_boundary.save_authority == OnlineSaveAuthority::LocalPlayer)
+                || (!game.online_host_owns_save
+                    && save_boundary.save_authority == OnlineSaveAuthority::RemoteHost));
+        let transition_ready = local_ready_sent
+            && remote_ready_received
+            && start_gated_on_connected_ready
+            && start_message_sendable
+            && modal_closes_only_when_playing
+            && role_slot_save_authority_preserved;
+        let status = format!(
+            "Online ready/start transition: ready={} local_ready_sent={} remote_ready_received={} start_gated_on_connected_ready={} start_message_sendable={} host_enters_gameplay_from_ui={} joined_enters_gameplay_from_ui={} modal_closes_only_when_playing={} role_slot_save_authority_preserved={} blocker={:?}",
+            yes_no(transition_ready),
+            yes_no(local_ready_sent),
+            yes_no(remote_ready_received),
+            yes_no(start_gated_on_connected_ready),
+            yes_no(start_message_sendable),
+            yes_no(host_enters_gameplay_from_ui),
+            yes_no(joined_enters_gameplay_from_ui),
+            yes_no(modal_closes_only_when_playing),
+            yes_no(role_slot_save_authority_preserved),
+            start_gate.blocker
+        );
+        Self {
+            local_ready_sent,
+            remote_ready_received,
+            start_gated_on_connected_ready,
+            start_message_sendable,
+            host_enters_gameplay_from_ui,
+            joined_enters_gameplay_from_ui,
+            modal_closes_only_when_playing,
+            role_slot_save_authority_preserved,
+            transition_ready,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineGameplayStartBlocker {
     NotConnected,
@@ -5931,6 +6021,7 @@ impl GameState {
     pub fn online_multiplayer_status_lines(&self) -> Vec<String> {
         let mut lines = self.online_multiplayer_status_lines_without_production_ui_gate();
         lines.push(ProductionOnlineUiRuntimeStatus::from_game(self).status);
+        lines.push(OnlineReadyStartTransitionStatus::from_game(self).status);
         OnlineRuntimeStatusDeck::from_lines(lines).lines
     }
 
@@ -10735,6 +10826,85 @@ mod tests {
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
         assert!(GameState::title_options().contains(&TitleOption::LocalMultiplayer));
+    }
+
+    #[test]
+    fn online_ready_start_transition_blocks_start_until_connected_and_both_ready() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_remote_player_connected = true;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = false;
+
+        let blocked = game.online_gameplay_start_gate();
+        let status = OnlineReadyStartTransitionStatus::from_game(&game);
+
+        assert!(!blocked.ready);
+        assert_eq!(
+            blocked.blocker,
+            Some(OnlineGameplayStartBlocker::RemoteNotReady)
+        );
+        assert!(status.local_ready_sent);
+        assert!(!status.remote_ready_received);
+        assert!(status.start_gated_on_connected_ready);
+        assert!(!status.start_message_sendable);
+        assert!(!status.transition_ready);
+        assert!(status.status.contains("blocker=Some(RemoteNotReady)"));
+    }
+
+    #[test]
+    fn online_ready_start_transition_enters_host_gameplay_when_ui_gate_is_ready() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_remote_player_connected = true;
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.modal = Some(ModalScreen::OnlineMultiplayer);
+
+        game.request_online_gameplay_start();
+        let status = OnlineReadyStartTransitionStatus::from_game(&game);
+
+        assert_eq!(game.run_mode, RunMode::Playing);
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Connected);
+        assert!(status.transition_ready);
+        assert!(status.host_enters_gameplay_from_ui);
+        assert!(!status.joined_enters_gameplay_from_ui);
+        assert!(status.modal_closes_only_when_playing);
+        assert!(status.role_slot_save_authority_preserved);
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online ready/start transition") && line.contains("ready=yes")
+        }));
+    }
+
+    #[test]
+    fn online_ready_start_transition_tracks_joined_client_gameplay_entry_and_save_authority() {
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_remote_player_connected = true;
+        client.online_local_ready = true;
+        client.online_remote_player_ready = true;
+        client.run_mode = RunMode::Playing;
+        client.modal = None;
+        client.refresh_online_save_boundary_status();
+
+        let status = OnlineReadyStartTransitionStatus::from_game(&client);
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(&client);
+
+        assert!(status.transition_ready);
+        assert!(!status.host_enters_gameplay_from_ui);
+        assert!(status.joined_enters_gameplay_from_ui);
+        assert!(status.modal_closes_only_when_playing);
+        assert!(status.role_slot_save_authority_preserved);
+        assert_eq!(
+            save_boundary.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
     }
 
     #[test]
