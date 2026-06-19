@@ -1499,6 +1499,59 @@ pub enum WorldEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionSaveLoadAction {
+    None,
+    Saved,
+    Loaded,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSaveLoadSummary {
+    pub action: SessionSaveLoadAction,
+    pub message: String,
+}
+
+impl SessionSaveLoadSummary {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            action: SessionSaveLoadAction::None,
+            message: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn saved(message: String) -> Self {
+        Self {
+            action: SessionSaveLoadAction::Saved,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn loaded(message: String) -> Self {
+        Self {
+            action: SessionSaveLoadAction::Loaded,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn failed(message: String) -> Self {
+        Self {
+            action: SessionSaveLoadAction::Failed,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn acted(&self) -> bool {
+        !matches!(self.action, SessionSaveLoadAction::None)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayerShellEffectSync {
     pub player_id: PlayerId,
@@ -4469,6 +4522,65 @@ impl GameSession {
         load_latest_persistent_world().map(|save| Self::from_persistent_world(&save))
     }
 
+    pub fn handle_session_save_load_input(&mut self, input: PlayerInput) -> SessionSaveLoadSummary {
+        match (input.save, input.load) {
+            (true, false) => self.save_from_session_input(),
+            (false, true) => self.load_from_session_input(),
+            (true, true) => SessionSaveLoadSummary::failed(
+                "Save/load ignored: choose either save or load, not both.".to_owned(),
+            ),
+            (false, false) => SessionSaveLoadSummary::none(),
+        }
+    }
+
+    fn save_from_session_input(&mut self) -> SessionSaveLoadSummary {
+        if self.game.online_player_slot.is_some() && !self.game.online_host_owns_save {
+            let message = "Joined online clients cannot write the host-owned save.".to_owned();
+            self.game.message.clone_from(&message);
+            return SessionSaveLoadSummary::failed(message);
+        }
+        match self.save_session() {
+            Ok(()) => {
+                self.game.save_dirty = false;
+                "Game saved from authoritative session.".clone_into(&mut self.game.message);
+                self.game.sound_cues.push(SoundCue::Ui);
+                SessionSaveLoadSummary::saved(self.game.message.clone())
+            }
+            Err(error) => {
+                self.game.message = format!("Save failed: {error}");
+                SessionSaveLoadSummary::failed(self.game.message.clone())
+            }
+        }
+    }
+
+    fn load_from_session_input(&mut self) -> SessionSaveLoadSummary {
+        if self.game.online_player_slot.is_some() && !self.game.online_host_owns_save {
+            let message =
+                "Joined online clients cannot load over host-owned session state.".to_owned();
+            self.game.message.clone_from(&message);
+            return SessionSaveLoadSummary::failed(message);
+        }
+        match Self::load_session() {
+            Ok(mut loaded) => {
+                loaded.apply_settings(self.current_settings());
+                "Game loaded into authoritative session.".clone_into(&mut loaded.game.message);
+                loaded.game.sound_cues.push(SoundCue::Ui);
+                *self = loaded;
+                SessionSaveLoadSummary::loaded(self.game.message.clone())
+            }
+            Err(error) => {
+                self.game.message = format!("Load failed: {error}");
+                SessionSaveLoadSummary::failed(self.game.message.clone())
+            }
+        }
+    }
+
+    const fn input_without_session_save_load(mut input: PlayerInput) -> PlayerInput {
+        input.save = false;
+        input.load = false;
+        input
+    }
+
     fn from_game_and_world(game: GameState, world: WorldState) -> Self {
         let local_client = ClientState::default();
         Self {
@@ -5548,6 +5660,8 @@ impl GameSession {
         input: PlayerInput,
         delta_seconds: f32,
     ) -> SessionAuthorityUpdateSummary {
+        let save_load = self.handle_session_save_load_input(input);
+        let input = Self::input_without_session_save_load(input);
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         let _advance = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
@@ -5575,6 +5689,11 @@ impl GameSession {
             }
             self.sync_legacy_player_from_world(sync.player_id);
         }
+        if save_load.acted() {
+            self.push_event(WorldEvent::MessageChanged {
+                message: save_load.message,
+            });
+        }
         self.world.authoritative_summary = AuthoritativeWorldSummary::from_world_and_shell(
             self.current_tick,
             &self.world,
@@ -5593,8 +5712,15 @@ impl GameSession {
         input: PlayerInput,
         delta_seconds: f32,
     ) -> SessionAuthorityUpdateSummary {
+        let save_load = self.handle_session_save_load_input(input);
+        let input = Self::input_without_session_save_load(input);
         let authoritative_input = self.legacy_presentation_input_from_authoritative_commands(input);
         self.update_legacy(authoritative_input, delta_seconds);
+        if save_load.acted() {
+            self.push_event(WorldEvent::MessageChanged {
+                message: save_load.message,
+            });
+        }
         SessionAuthorityUpdateSummary {
             used_legacy_presentation_adapter: true,
             local_movement_authority: self.latest_local_movement_intent.is_some(),
