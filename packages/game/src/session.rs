@@ -1776,6 +1776,7 @@ pub enum SessionSaveLoadAction {
     None,
     Saved,
     Loaded,
+    SaveDenied,
     Failed,
 }
 
@@ -1806,6 +1807,14 @@ impl SessionSaveLoadSummary {
     pub const fn loaded(message: String) -> Self {
         Self {
             action: SessionSaveLoadAction::Loaded,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn save_denied(message: String) -> Self {
+        Self {
+            action: SessionSaveLoadAction::SaveDenied,
             message,
         }
     }
@@ -4812,11 +4821,29 @@ impl GameSession {
         persistent_world_from_session(&self.world, &self.game)
     }
 
+    pub const fn can_write_local_save(&self) -> bool {
+        self.game.online_player_slot.is_none() || self.game.online_host_owns_save
+    }
+
+    pub fn local_save_authority_denial(&self) -> Option<String> {
+        if self.can_write_local_save() {
+            None
+        } else {
+            Some("Joined online clients cannot write the host-owned save.".to_owned())
+        }
+    }
+
     pub fn save_session(&self) -> Result<(), crate::save::SaveError> {
+        if let Some(reason) = self.local_save_authority_denial() {
+            return Err(crate::save::SaveError::SaveDenied(reason));
+        }
         save_world_session(&self.world, &self.game)
     }
 
     pub fn save_session_slot(&self, slot: usize) -> Result<(), crate::save::SaveError> {
+        if let Some(reason) = self.local_save_authority_denial() {
+            return Err(crate::save::SaveError::SaveDenied(reason));
+        }
         save_world_session_slot(&self.world, &self.game, slot)
     }
 
@@ -4844,10 +4871,9 @@ impl GameSession {
     }
 
     fn save_from_session_input(&mut self) -> SessionSaveLoadSummary {
-        if self.game.online_player_slot.is_some() && !self.game.online_host_owns_save {
-            let message = "Joined online clients cannot write the host-owned save.".to_owned();
+        if let Some(message) = self.local_save_authority_denial() {
             self.game.message.clone_from(&message);
-            return SessionSaveLoadSummary::failed(message);
+            return SessionSaveLoadSummary::save_denied(message);
         }
         match self.save_session() {
             Ok(()) => {
@@ -9396,6 +9422,52 @@ mod tests {
                 .all(|command| command.player_id == second_player)
         }));
         assert_eq!(session.pending_command_count(session.current_tick()), 6);
+    }
+
+    #[test]
+    fn online_joined_client_save_authority_blocks_session_save_entrypoints() {
+        let mut session = GameSession::new();
+        session.game.online_player_slot = Some(2);
+        session.game.online_host_owns_save = false;
+
+        assert!(!session.can_write_local_save());
+        assert_eq!(
+            session.local_save_authority_denial().as_deref(),
+            Some("Joined online clients cannot write the host-owned save.")
+        );
+        match session.save_session() {
+            Err(crate::save::SaveError::SaveDenied(reason)) => {
+                assert!(reason.contains("Joined online clients"));
+            }
+            other => panic!("expected save denied, got {other:?}"),
+        }
+        match session.save_session_slot(0) {
+            Err(crate::save::SaveError::SaveDenied(reason)) => {
+                assert!(reason.contains("host-owned save"));
+            }
+            other => panic!("expected slot save denied, got {other:?}"),
+        }
+
+        let summary = session.handle_session_save_load_input(PlayerInput {
+            save: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(summary.action, super::SessionSaveLoadAction::SaveDenied);
+        assert!(summary.message.contains("Joined online clients"));
+        assert_eq!(session.game().message, summary.message);
+    }
+
+    #[test]
+    fn online_host_and_single_player_keep_local_save_authority() {
+        let single_player = GameSession::new();
+        assert!(single_player.can_write_local_save());
+        assert!(single_player.local_save_authority_denial().is_none());
+
+        let mut host = GameSession::new();
+        host.game.online_player_slot = Some(1);
+        host.game.online_host_owns_save = true;
+        assert!(host.can_write_local_save());
+        assert!(host.local_save_authority_denial().is_none());
     }
 
     #[test]

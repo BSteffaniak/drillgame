@@ -828,6 +828,7 @@ pub enum SaveError {
     Serialize(serde_json::Error),
     UnsupportedVersion(u32),
     NoSaveFound,
+    SaveDenied(String),
 }
 
 impl fmt::Display for SaveError {
@@ -839,6 +840,7 @@ impl fmt::Display for SaveError {
                 write!(formatter, "unsupported save version: {version}")
             }
             Self::NoSaveFound => formatter.write_str("no save file found"),
+            Self::SaveDenied(reason) => write!(formatter, "save denied: {reason}"),
         }
     }
 }
