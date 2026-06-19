@@ -384,6 +384,7 @@ impl OnlineTaskDispatcher {
                 cargo: remote.cargo,
                 artifacts: remote.artifacts,
                 materials: remote.materials,
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             })
             .collect::<Vec<_>>();

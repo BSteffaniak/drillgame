@@ -16,10 +16,10 @@ use crate::{
         ClientAction, ClientId, CommandAcknowledgement, CommandApplicationResponse,
         CommandNetworkSession, CommandPacket, CommandPacketExchangeSummary, CommandRejection,
         CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-        NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkTerrainChunkRevision,
-        NetworkTerrainChunkSnapshot, NetworkWorldSnapshot, PlayerCommand, PlayerId,
-        ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage, QuinnSessionTickInput,
-        SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
+        NetworkDeltaPayload, NetworkPlayerLoadoutSnapshot, NetworkPlayerSnapshot,
+        NetworkTerrainChunkRevision, NetworkTerrainChunkSnapshot, NetworkWorldSnapshot,
+        PlayerCommand, PlayerId, ProtocolExchangeBatch, ProtocolExchangeKind, ProtocolMessage,
+        QuinnSessionTickInput, SIMULATION_HZ, SequencedPlayerCommand, SessionToken, SimulationTick,
     },
     player::Player,
     rendering::render_camera,
@@ -519,6 +519,7 @@ pub struct PlayerSnapshot {
     pub cargo: BTreeMap<MineralKind, u32>,
     pub artifacts: BTreeMap<ArtifactKind, u32>,
     pub materials: BTreeMap<StrategicResourceKind, u32>,
+    pub loadout: NetworkPlayerLoadoutSnapshot,
     pub scanner_cooldown_seconds: f32,
 }
 
@@ -538,6 +539,7 @@ impl PlayerSnapshot {
             cargo: player.cargo.clone(),
             artifacts: player.artifacts.clone(),
             materials: player.materials.clone(),
+            loadout: NetworkPlayerLoadoutSnapshot::from_player(player),
             scanner_cooldown_seconds: 0.0,
         }
     }
@@ -660,6 +662,7 @@ impl WorldSnapshot {
                     cargo: player.cargo.clone(),
                     artifacts: player.artifacts.clone(),
                     materials: player.materials.clone(),
+                    loadout: player.loadout.clone(),
                     scanner_cooldown_seconds: player.scanner_cooldown_seconds,
                 })
                 .collect(),
@@ -2116,6 +2119,7 @@ fn apply_network_player_snapshot_to_player(player: &mut Player, snapshot: &Netwo
     player.cargo.clone_from(&snapshot.cargo);
     player.artifacts.clone_from(&snapshot.artifacts);
     player.materials.clone_from(&snapshot.materials);
+    snapshot.loadout.apply_to_player(player);
 }
 
 fn authoritative_mine_target(
@@ -3481,6 +3485,7 @@ impl ClientPredictionState {
             cargo: BTreeMap::new(),
             artifacts: BTreeMap::new(),
             materials: BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         };
         let replay = Self::replay_unacknowledged_movement(&authoritative, self.replay_commands());
@@ -5636,6 +5641,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             });
         let plan = session.render_frame_plan();
@@ -5667,6 +5673,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             });
         let frame_plan = session.render_frame_plan();
@@ -5952,6 +5959,7 @@ mod tests {
             cargo: BTreeMap::new(),
             artifacts: BTreeMap::new(),
             materials: BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         };
         let next = super::PlayerSnapshot {
@@ -6069,6 +6077,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             });
         {
@@ -6433,6 +6442,40 @@ mod tests {
             world.service_transactions()[4].kind,
             super::PlayerTransactionKind::Rescue
         );
+    }
+
+    #[test]
+    fn world_network_snapshot_carries_upgrade_and_inventory_affecting_loadout() {
+        let mut game = GameState::new();
+        game.player.credits = 2_000;
+        game.player.fuel_tank_level = 2;
+        game.player.cargo_bay_level = 3;
+        game.player.drill_strength = 4;
+        game.player.engine_level = 5;
+        game.player.hull_level = 6;
+        game.player.radiator_level = 7;
+        game.player.scanner_level = 8;
+        game.player.bombs = 9;
+        game.player.insured = true;
+        game.player.insurance_tier = 2;
+        game.player.signal_relay_kits = 3;
+        let world = WorldState::from_legacy_game(&game);
+
+        let snapshot =
+            super::WorldSnapshot::from_world(SimulationTick::new(1), &world).network_snapshot();
+        let player = snapshot.players.first().expect("local player snapshot");
+
+        assert_eq!(player.loadout.fuel_tank_level, 2);
+        assert_eq!(player.loadout.cargo_bay_level, 3);
+        assert_eq!(player.loadout.drill_strength, 4);
+        assert_eq!(player.loadout.engine_level, 5);
+        assert_eq!(player.loadout.hull_level, 6);
+        assert_eq!(player.loadout.radiator_level, 7);
+        assert_eq!(player.loadout.scanner_level, 8);
+        assert_eq!(player.loadout.bombs, 9);
+        assert!(player.loadout.insured);
+        assert_eq!(player.loadout.insurance_tier, 2);
+        assert_eq!(player.loadout.signal_relay_kits, 3);
     }
 
     #[test]
@@ -6993,6 +7036,7 @@ mod tests {
             cargo: BTreeMap::new(),
             artifacts: BTreeMap::new(),
             materials: BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         });
 
@@ -7068,6 +7112,7 @@ mod tests {
             cargo: BTreeMap::new(),
             artifacts: BTreeMap::new(),
             materials: BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         };
         let next = super::PlayerSnapshot {
@@ -7515,6 +7560,7 @@ mod tests {
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                     scanner_cooldown_seconds: 0.25,
                 },
                 NetworkPlayerSnapshot {
@@ -7530,6 +7576,7 @@ mod tests {
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                     scanner_cooldown_seconds: 0.75,
                 },
             ],
@@ -8725,6 +8772,7 @@ mod tests {
             cargo: BTreeMap::new(),
             artifacts: BTreeMap::new(),
             materials: BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         };
         let commands = vec![

@@ -1060,6 +1060,7 @@ fn validate_descriptor_file_correction(
         cargo: authoritative.cargo.clone(),
         artifacts: authoritative.artifacts.clone(),
         materials: authoritative.materials.clone(),
+        loadout: authoritative.loadout.clone(),
         scanner_cooldown_seconds: authoritative.scanner_cooldown_seconds,
     };
     let predicted = crate::session::PredictedMovement {
@@ -1167,6 +1168,7 @@ fn gameplay_descriptor_snapshot(tick_index: u32) -> crate::multiplayer::NetworkW
             cargo: std::collections::BTreeMap::new(),
             artifacts: std::collections::BTreeMap::new(),
             materials: std::collections::BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         }],
     }
@@ -1206,6 +1208,7 @@ fn descriptor_file_snapshot() -> crate::multiplayer::NetworkWorldSnapshot {
             cargo: std::collections::BTreeMap::new(),
             artifacts: std::collections::BTreeMap::new(),
             materials: std::collections::BTreeMap::new(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
             scanner_cooldown_seconds: 0.0,
         }],
     }

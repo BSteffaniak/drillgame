@@ -1473,6 +1473,7 @@ impl QuinnOnlineSession {
             cargo: authoritative.cargo.clone(),
             artifacts: authoritative.artifacts.clone(),
             materials: authoritative.materials.clone(),
+            loadout: authoritative.loadout.clone(),
             scanner_cooldown_seconds: authoritative.scanner_cooldown_seconds,
         };
         let predicted = crate::session::PredictedMovement {
@@ -1701,6 +1702,7 @@ pub async fn local_online_smoke_summary() -> Result<LocalOnlineSmokeSummary, Qui
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                     scanner_cooldown_seconds: 0.0,
                 },
                 SimulationTick::new(204),
@@ -1801,6 +1803,7 @@ pub async fn local_online_soak_summary(
                         cargo: BTreeMap::new(),
                         artifacts: BTreeMap::new(),
                         materials: BTreeMap::new(),
+                        loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                         scanner_cooldown_seconds: 0.0,
                     }],
                 }),
@@ -1828,6 +1831,7 @@ pub async fn local_online_soak_summary(
                         cargo: BTreeMap::new(),
                         artifacts: BTreeMap::new(),
                         materials: BTreeMap::new(),
+                        loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(tick + 3),
@@ -3428,6 +3432,88 @@ pub enum NetworkDeltaPayload {
     KeyframeRequired,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct NetworkPlayerLoadoutSnapshot {
+    pub fuel_capacity: f32,
+    pub cargo_capacity: u32,
+    pub fuel_tank_level: u8,
+    pub cargo_bay_level: u8,
+    pub drill_strength: u8,
+    pub engine_level: u8,
+    pub hull_level: u8,
+    pub radiator_level: u8,
+    pub scanner_level: u8,
+    pub bombs: u32,
+    pub loan_debt: u32,
+    pub insured: bool,
+    pub insurance_tier: u8,
+    pub crafted_bulkheads: u8,
+    pub crafted_sorters: u8,
+    pub signal_relay_kits: u32,
+    pub survey_drone_kits: u32,
+    pub cargo_lift_kits: u32,
+    pub tunnel_support_kits: u32,
+    pub pump_station_kits: u32,
+    pub ore_processor_kits: u32,
+}
+
+impl NetworkPlayerLoadoutSnapshot {
+    #[must_use]
+    pub const fn from_player(player: &crate::player::Player) -> Self {
+        Self {
+            fuel_capacity: player.fuel_capacity,
+            cargo_capacity: player.cargo_capacity,
+            fuel_tank_level: player.fuel_tank_level,
+            cargo_bay_level: player.cargo_bay_level,
+            drill_strength: player.drill_strength,
+            engine_level: player.engine_level,
+            hull_level: player.hull_level,
+            radiator_level: player.radiator_level,
+            scanner_level: player.scanner_level,
+            bombs: player.bombs,
+            loan_debt: player.loan_debt,
+            insured: player.insured,
+            insurance_tier: player.insurance_tier,
+            crafted_bulkheads: player.crafted_bulkheads,
+            crafted_sorters: player.crafted_sorters,
+            signal_relay_kits: player.signal_relay_kits,
+            survey_drone_kits: player.survey_drone_kits,
+            cargo_lift_kits: player.cargo_lift_kits,
+            tunnel_support_kits: player.tunnel_support_kits,
+            pump_station_kits: player.pump_station_kits,
+            ore_processor_kits: player.ore_processor_kits,
+        }
+    }
+
+    pub fn apply_to_player(&self, player: &mut crate::player::Player) {
+        if self.fuel_capacity > 0.0 {
+            player.fuel_capacity = self.fuel_capacity;
+        }
+        if self.cargo_capacity > 0 {
+            player.cargo_capacity = self.cargo_capacity;
+        }
+        player.fuel_tank_level = self.fuel_tank_level;
+        player.cargo_bay_level = self.cargo_bay_level;
+        player.drill_strength = self.drill_strength;
+        player.engine_level = self.engine_level;
+        player.hull_level = self.hull_level;
+        player.radiator_level = self.radiator_level;
+        player.scanner_level = self.scanner_level;
+        player.bombs = self.bombs;
+        player.loan_debt = self.loan_debt;
+        player.insured = self.insured;
+        player.insurance_tier = self.insurance_tier;
+        player.crafted_bulkheads = self.crafted_bulkheads;
+        player.crafted_sorters = self.crafted_sorters;
+        player.signal_relay_kits = self.signal_relay_kits;
+        player.survey_drone_kits = self.survey_drone_kits;
+        player.cargo_lift_kits = self.cargo_lift_kits;
+        player.tunnel_support_kits = self.tunnel_support_kits;
+        player.pump_station_kits = self.pump_station_kits;
+        player.ore_processor_kits = self.ore_processor_kits;
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct NetworkPlayerSnapshot {
     pub player_id: PlayerId,
@@ -3442,6 +3528,8 @@ pub struct NetworkPlayerSnapshot {
     pub cargo: BTreeMap<crate::terrain::MineralKind, u32>,
     pub artifacts: BTreeMap<crate::terrain::ArtifactKind, u32>,
     pub materials: BTreeMap<crate::terrain::StrategicResourceKind, u32>,
+    #[serde(default)]
+    pub loadout: NetworkPlayerLoadoutSnapshot,
     pub scanner_cooldown_seconds: f32,
 }
 
@@ -4491,6 +4579,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             }],
         };
@@ -4651,6 +4740,7 @@ mod tests {
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                     scanner_cooldown_seconds: 0.0,
                 },
                 SimulationTick::new(91),
@@ -4716,6 +4806,7 @@ mod tests {
                         cargo: BTreeMap::new(),
                         artifacts: BTreeMap::new(),
                         materials: BTreeMap::new(),
+                        loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(104),
@@ -4786,6 +4877,7 @@ mod tests {
                         cargo: BTreeMap::new(),
                         artifacts: BTreeMap::new(),
                         materials: BTreeMap::new(),
+                        loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                         scanner_cooldown_seconds: 0.0,
                     },
                     SimulationTick::new(124),

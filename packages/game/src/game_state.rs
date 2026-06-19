@@ -2991,6 +2991,7 @@ fn live_player_network_snapshot(
             cargo: game.player.cargo.clone(),
             artifacts: game.player.artifacts.clone(),
             materials: game.player.materials.clone(),
+            loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::from_player(&game.player),
             scanner_cooldown_seconds: 0.0,
         }],
     }
@@ -3214,6 +3215,7 @@ fn apply_network_player_snapshot_to_game(
     game.player.cargo = snapshot.cargo.clone();
     game.player.artifacts = snapshot.artifacts.clone();
     game.player.materials = snapshot.materials.clone();
+    snapshot.loadout.apply_to_player(&mut game.player);
     game.scanner_cooldown_seconds = snapshot.scanner_cooldown_seconds;
     game.mark_full_terrain_refresh();
 }
@@ -12554,6 +12556,7 @@ mod tests {
                 cargo,
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.25,
             }],
         };
@@ -12590,6 +12593,7 @@ mod tests {
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                     scanner_cooldown_seconds: 0.0,
                 },
                 crate::multiplayer::NetworkPlayerSnapshot {
@@ -12605,6 +12609,29 @@ mod tests {
                     cargo: BTreeMap::new(),
                     artifacts: BTreeMap::new(),
                     materials: BTreeMap::new(),
+                    loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot {
+                        fuel_capacity: 140.0,
+                        cargo_capacity: 25,
+                        fuel_tank_level: 2,
+                        cargo_bay_level: 3,
+                        drill_strength: 4,
+                        engine_level: 5,
+                        hull_level: 6,
+                        radiator_level: 7,
+                        scanner_level: 8,
+                        bombs: 9,
+                        loan_debt: 10,
+                        insured: true,
+                        insurance_tier: 2,
+                        crafted_bulkheads: 1,
+                        crafted_sorters: 2,
+                        signal_relay_kits: 3,
+                        survey_drone_kits: 4,
+                        cargo_lift_kits: 5,
+                        tunnel_support_kits: 6,
+                        pump_station_kits: 7,
+                        ore_processor_kits: 8,
+                    },
                     scanner_cooldown_seconds: 0.5,
                 },
             ],
@@ -12619,6 +12646,20 @@ mod tests {
         assert!((game.player.fuel - 55.0).abs() < f32::EPSILON);
         assert_eq!(game.player.credits, 77);
         assert!((game.scanner_cooldown_seconds - 0.5).abs() < f32::EPSILON);
+        assert!((game.player.fuel_capacity - 140.0).abs() < f32::EPSILON);
+        assert_eq!(game.player.cargo_capacity, 25);
+        assert_eq!(game.player.fuel_tank_level, 2);
+        assert_eq!(game.player.cargo_bay_level, 3);
+        assert_eq!(game.player.drill_strength, 4);
+        assert_eq!(game.player.engine_level, 5);
+        assert_eq!(game.player.hull_level, 6);
+        assert_eq!(game.player.radiator_level, 7);
+        assert_eq!(game.player.scanner_level, 8);
+        assert_eq!(game.player.bombs, 9);
+        assert_eq!(game.player.loan_debt, 10);
+        assert!(game.player.insured);
+        assert_eq!(game.player.insurance_tier, 2);
+        assert_eq!(game.player.signal_relay_kits, 3);
     }
 
     #[test]
@@ -12644,6 +12685,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 2.0,
             }],
         };
@@ -12678,6 +12720,7 @@ mod tests {
                 cargo: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
                 materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
                 scanner_cooldown_seconds: 0.0,
             }],
         };
