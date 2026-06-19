@@ -2334,6 +2334,59 @@ impl OnlineSessionUxReducerStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineRuntimeTickPresentation {
+    pub controller_mode: String,
+    pub tick_status: String,
+}
+
+impl OnlineRuntimeTickPresentation {
+    #[must_use]
+    pub fn new(controller_mode: impl Into<String>, tick_status: impl Into<String>) -> Self {
+        Self {
+            controller_mode: controller_mode.into(),
+            tick_status: tick_status.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn awaiting(controller_mode: impl Into<String>) -> Self {
+        Self::new(controller_mode, "connected; awaiting ticks")
+    }
+
+    #[must_use]
+    pub fn reconnected(controller_mode: impl Into<String>) -> Self {
+        Self::new(controller_mode, "reconnected; awaiting ticks")
+    }
+
+    #[must_use]
+    pub fn controller_label(&self) -> &str {
+        if self.controller_mode.is_empty() {
+            "none"
+        } else {
+            &self.controller_mode
+        }
+    }
+
+    #[must_use]
+    pub fn tick_label(&self) -> &str {
+        if self.tick_status.is_empty() {
+            "none"
+        } else {
+            &self.tick_status
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!(
+            "Runtime tick: controller={} status={}",
+            self.controller_label(),
+            self.tick_label()
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineNetworkTaskOrchestrationStatus {
     pub pending_task: Option<OnlineNetworkTaskRequest>,
     pub controller_mode: String,
@@ -2345,16 +2398,20 @@ pub struct OnlineNetworkTaskOrchestrationStatus {
 impl OnlineNetworkTaskOrchestrationStatus {
     #[must_use]
     pub fn from_game(game: &GameState) -> Self {
-        let controller_mode = if game.online_diagnostic_controller_mode.is_empty() {
-            "none".to_owned()
-        } else {
-            game.online_diagnostic_controller_mode.clone()
-        };
-        let last_tick = if game.online_diagnostic_last_tick.is_empty() {
-            "none".to_owned()
-        } else {
-            game.online_diagnostic_last_tick.clone()
-        };
+        let runtime_tick = OnlineRuntimeTickPresentation::new(
+            if game.online_runtime_controller_mode.is_empty() {
+                game.online_diagnostic_controller_mode.clone()
+            } else {
+                game.online_runtime_controller_mode.clone()
+            },
+            if game.online_runtime_tick_status.is_empty() {
+                game.online_diagnostic_last_tick.clone()
+            } else {
+                game.online_runtime_tick_status.clone()
+            },
+        );
+        let controller_mode = runtime_tick.controller_label().to_owned();
+        let last_tick = runtime_tick.tick_label().to_owned();
         let ui_presenter_separated =
             !controller_mode.contains("modal") && !controller_mode.contains("status-line");
         let pending_label = game
@@ -2362,10 +2419,9 @@ impl OnlineNetworkTaskOrchestrationStatus {
             .as_ref()
             .map_or_else(|| "none".to_owned(), |task| format!("{task:?}"));
         let status = format!(
-            "Online network orchestration: pending={} controller={} last_tick={} ui_presenter_separated={}",
+            "Online network orchestration: pending={} {} ui_presenter_separated={}",
             pending_label,
-            controller_mode,
-            last_tick,
+            runtime_tick.status_line(),
             yes_no(ui_presenter_separated)
         );
         Self {
@@ -4690,6 +4746,10 @@ pub struct GameState {
     #[serde(default = "default_online_gameplay_ticks")]
     pub online_gameplay_ticks: u32,
     #[serde(default)]
+    pub online_runtime_controller_mode: String,
+    #[serde(default)]
+    pub online_runtime_tick_status: String,
+    #[serde(default)]
     pub online_diagnostic_controller_mode: String,
     #[serde(default)]
     pub online_diagnostic_last_tick: String,
@@ -4976,6 +5036,8 @@ impl GameState {
             online_host_advertise_addr: default_online_host_advertise_addr(),
             online_client_bind_addr: default_online_client_bind_addr(),
             online_gameplay_ticks: default_online_gameplay_ticks(),
+            online_runtime_controller_mode: String::new(),
+            online_runtime_tick_status: String::new(),
             online_diagnostic_controller_mode: String::new(),
             online_diagnostic_last_tick: String::new(),
             online_last_replication_status: String::new(),
@@ -5606,13 +5668,27 @@ impl GameState {
         self.refresh_online_lobby_status();
     }
 
+    pub fn apply_online_runtime_tick_status(
+        &mut self,
+        presentation: OnlineRuntimeTickPresentation,
+    ) {
+        self.online_runtime_controller_mode = presentation.controller_mode;
+        self.online_runtime_tick_status = presentation.tick_status;
+        self.online_diagnostic_controller_mode
+            .clone_from(&self.online_runtime_controller_mode);
+        self.online_diagnostic_last_tick
+            .clone_from(&self.online_runtime_tick_status);
+    }
+
     pub fn apply_online_diagnostics(
         &mut self,
         controller_mode: impl Into<String>,
         last_tick: impl Into<String>,
     ) {
-        self.online_diagnostic_controller_mode = controller_mode.into();
-        self.online_diagnostic_last_tick = last_tick.into();
+        self.apply_online_runtime_tick_status(OnlineRuntimeTickPresentation::new(
+            controller_mode,
+            last_tick,
+        ));
     }
 
     pub fn apply_online_replication_status(&mut self, status: impl Into<String>) {
@@ -5761,6 +5837,8 @@ impl GameState {
     }
 
     pub fn clear_online_diagnostics(&mut self) {
+        self.online_runtime_controller_mode.clear();
+        self.online_runtime_tick_status.clear();
         self.online_diagnostic_controller_mode.clear();
         self.online_diagnostic_last_tick.clear();
         self.online_last_replication_status.clear();

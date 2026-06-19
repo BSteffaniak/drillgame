@@ -69,9 +69,10 @@ impl OnlineTaskDispatcher {
         match completion {
             OnlineDescriptorAcceptCompletion::Accepted(Ok(controller)) => {
                 self.controller = Some(controller);
-                game.apply_online_diagnostics(
-                    "descriptor-host-accepted",
-                    "client accepted; awaiting ticks",
+                game.apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::awaiting(
+                        "descriptor-host-accepted",
+                    ),
                 );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(
@@ -101,17 +102,21 @@ impl OnlineTaskDispatcher {
                         &game.online_descriptor_path,
                     );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Hosted(snapshot));
-                game.apply_online_diagnostics(
-                    "descriptor-host-pending",
-                    "waiting for descriptor client",
+                game.apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::new(
+                        "descriptor-host-pending",
+                        "waiting for descriptor client",
+                    ),
                 );
                 self.spawn_descriptor_accept(controller);
             }
             OnlineTaskCompletion::JoinedDescriptor(Ok((controller, path))) => {
                 self.controller = Some(controller);
-                game.apply_online_diagnostics(
-                    "descriptor-client-connected",
-                    "join accepted; awaiting ticks",
+                game.apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::new(
+                        "descriptor-client-connected",
+                        "join accepted; awaiting ticks",
+                    ),
                 );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::JoinedDescriptor(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
@@ -122,14 +127,23 @@ impl OnlineTaskDispatcher {
             }
             OnlineTaskCompletion::Connected(Ok(controller)) => {
                 self.controller = Some(controller);
-                game.apply_online_diagnostics("combined-localhost", "connected; awaiting ticks");
+                game.apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::new(
+                        "combined-localhost",
+                        "connected; awaiting ticks",
+                    ),
+                );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Connected(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_joined_session(Some(1)),
                 ));
             }
             OnlineTaskCompletion::Reconnected(Ok(controller)) => {
                 self.controller = Some(controller);
-                game.apply_online_diagnostics("combined-localhost", "reconnected; awaiting ticks");
+                game.apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::reconnected(
+                        "combined-localhost",
+                    ),
+                );
                 game.apply_online_network_task_result(OnlineNetworkTaskResult::Reconnected(
                     crate::game_state::RealOnlineSessionUxSnapshot::from_reconnect(Some(1)),
                 ));
@@ -388,9 +402,9 @@ impl OnlineTaskDispatcher {
             Ok(summary) => {
                 let application = session.apply_online_tick_summary(mode_label, &summary);
                 let diagnostic = GameSession::online_tick_diagnostic(&summary, application);
-                session
-                    .game_mut()
-                    .apply_online_diagnostics(mode_label, diagnostic);
+                session.game_mut().apply_online_runtime_tick_status(
+                    crate::game_state::OnlineRuntimeTickPresentation::new(mode_label, diagnostic),
+                );
             }
             Err(error) => {
                 session.game_mut().apply_online_network_task_result(
