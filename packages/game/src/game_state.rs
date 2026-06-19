@@ -1912,6 +1912,175 @@ impl OnlineManualWorkingGameGateStatus {
     }
 }
 
+#[cfg(test)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "single-player validation reports independent product smoke signals"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SinglePlayerProductValidationStatus {
+    pub new_game_playing: bool,
+    pub movement_ready: bool,
+    pub drilling_ready: bool,
+    pub mining_ready: bool,
+    pub fuel_visible: bool,
+    pub hull_visible: bool,
+    pub hud_visible: bool,
+    pub economy_service_ready: bool,
+    pub save_load_available: bool,
+    pub status: String,
+}
+
+#[cfg(test)]
+impl SinglePlayerProductValidationStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let new_game_playing = game.run_mode == RunMode::Playing
+            && !game.local_multiplayer_active
+            && matches!(game.online_session_state, OnlineSessionUxState::Idle);
+        let movement_ready = game.player.x.is_finite()
+            && game.player.y.is_finite()
+            && game.player.velocity_x.is_finite()
+            && game.player.velocity_y.is_finite();
+        let drilling_ready = game.player.drill_strength > 0 && game.player.fuel > 0.0;
+        let mining_ready = game.player.cargo_capacity > 0
+            && game.player.cargo_used() <= game.player.cargo_capacity;
+        let fuel_visible = game.player.fuel.is_finite() && game.player.fuel_capacity.is_finite();
+        let hull_visible = game.player.hull.is_finite();
+        let hud_visible = fuel_visible && hull_visible && game.message.contains("dig site");
+        let economy_service_ready =
+            game.player.cargo_capacity > 0 && game.player.fuel_capacity > 0.0;
+        let save_load_available = game.can_write_local_save()
+            && matches!(game.online_session_state, OnlineSessionUxState::Idle);
+        let status = format!(
+            "Single-player validation: new_game={} movement={} drilling={} mining={} fuel={} hull={} hud={} economy_service={} save_load={}",
+            yes_no(new_game_playing),
+            yes_no(movement_ready),
+            yes_no(drilling_ready),
+            yes_no(mining_ready),
+            yes_no(fuel_visible),
+            yes_no(hull_visible),
+            yes_no(hud_visible),
+            yes_no(economy_service_ready),
+            yes_no(save_load_available)
+        );
+        Self {
+            new_game_playing,
+            movement_ready,
+            drilling_ready,
+            mining_ready,
+            fuel_visible,
+            hull_visible,
+            hud_visible,
+            economy_service_ready,
+            save_load_available,
+            status,
+        }
+    }
+
+    #[must_use]
+    pub const fn basic_loop_ready(&self) -> bool {
+        self.new_game_playing
+            && self.movement_ready
+            && self.drilling_ready
+            && self.mining_ready
+            && self.fuel_visible
+            && self.hull_visible
+            && self.hud_visible
+            && self.economy_service_ready
+            && self.save_load_available
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::similar_names,
+    clippy::struct_excessive_bools,
+    reason = "launch and host/join UI validation reports two app windows independently"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SameMachineLaunchHostJoinValidationStatus {
+    pub app_a_launchable: bool,
+    pub app_b_launchable: bool,
+    pub app_a_hosts_from_ui: bool,
+    pub app_b_joins_from_ui: bool,
+    pub descriptor_path_shared: bool,
+    pub host_task_queued: bool,
+    pub join_task_queued: bool,
+    pub status: String,
+}
+
+#[cfg(test)]
+impl SameMachineLaunchHostJoinValidationStatus {
+    #[must_use]
+    #[allow(
+        clippy::similar_names,
+        reason = "App A/App B same-machine validation uses intentionally parallel names"
+    )]
+    pub fn from_apps(app_a: &GameState, app_b: &GameState) -> Self {
+        let app_a_launchable = app_a.run_mode == RunMode::Title
+            && app_a
+                .online_descriptor_path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                == Some("json");
+        let app_b_launchable = app_b.run_mode == RunMode::Title
+            && app_b
+                .online_descriptor_path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                == Some("json");
+        let descriptor_path_shared = app_a.online_descriptor_path == app_b.online_descriptor_path;
+        let app_a_hosts_from_ui =
+            matches!(app_a.online_session_state, OnlineSessionUxState::Hosting)
+                && app_a.online_host_owns_save
+                && app_a.online_player_slot == Some(1);
+        let app_b_joins_from_ui =
+            matches!(app_b.online_session_state, OnlineSessionUxState::Joining)
+                && !app_b.online_host_owns_save
+                && app_b.online_player_slot == Some(2);
+        let host_task_queued = matches!(
+            app_a.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::HostDescriptorFile { .. })
+        );
+        let join_task_queued = matches!(
+            app_b.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::JoinDescriptorFile { .. })
+        );
+        let status = format!(
+            "Same-machine launch/host/join validation: app_a_launchable={} app_b_launchable={} app_a_hosts_ui={} app_b_joins_ui={} descriptor_shared={} host_task={} join_task={}",
+            yes_no(app_a_launchable),
+            yes_no(app_b_launchable),
+            yes_no(app_a_hosts_from_ui),
+            yes_no(app_b_joins_from_ui),
+            yes_no(descriptor_path_shared),
+            yes_no(host_task_queued),
+            yes_no(join_task_queued)
+        );
+        Self {
+            app_a_launchable,
+            app_b_launchable,
+            app_a_hosts_from_ui,
+            app_b_joins_from_ui,
+            descriptor_path_shared,
+            host_task_queued,
+            join_task_queued,
+            status,
+        }
+    }
+
+    #[must_use]
+    pub const fn host_join_flow_ready(&self) -> bool {
+        self.app_a_launchable
+            && self.app_b_launchable
+            && self.app_a_hosts_from_ui
+            && self.app_b_joins_from_ui
+            && self.descriptor_path_shared
+            && self.host_task_queued
+            && self.join_task_queued
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "same-machine product validation exposes independent UI evidence players must verify"
@@ -11413,6 +11582,65 @@ mod tests {
             line.contains("Online network orchestration")
                 && line.contains("descriptor-host-pending")
         }));
+    }
+
+    #[test]
+    fn single_player_product_validation_covers_new_game_core_loop_readiness() {
+        let mut game = GameState::new();
+        game.start_new_game();
+
+        let status = SinglePlayerProductValidationStatus::from_game(&game);
+
+        assert!(status.new_game_playing);
+        assert!(status.movement_ready);
+        assert!(status.drilling_ready);
+        assert!(status.mining_ready);
+        assert!(status.fuel_visible);
+        assert!(status.hull_visible);
+        assert!(status.hud_visible);
+        assert!(status.economy_service_ready);
+        assert!(status.save_load_available);
+        assert!(status.basic_loop_ready());
+        assert!(status.status.contains("Single-player validation"));
+        assert!(status.status.contains("new_game=yes"));
+        assert!(status.status.contains("save_load=yes"));
+    }
+
+    #[test]
+    fn same_machine_launch_host_join_validation_covers_two_app_ui_flow() {
+        let descriptor_path = std::env::temp_dir().join("drillgame-same-machine-flow.json");
+        let mut app_a = GameState::new();
+        let mut app_b = GameState::new();
+        app_a.online_descriptor_path = descriptor_path.clone();
+        app_b.online_descriptor_path = descriptor_path;
+
+        let before = SameMachineLaunchHostJoinValidationStatus::from_apps(&app_a, &app_b);
+
+        assert!(before.app_a_launchable);
+        assert!(before.app_b_launchable);
+        assert!(before.descriptor_path_shared);
+        assert!(!before.app_a_hosts_from_ui);
+        assert!(!before.app_b_joins_from_ui);
+
+        app_a.modal = Some(ModalScreen::OnlineMultiplayer);
+        app_a.selected_menu_item = 0;
+        app_a.confirm_online_multiplayer();
+        app_b.modal = Some(ModalScreen::OnlineMultiplayer);
+        app_b.selected_menu_item = 1;
+        app_b.confirm_online_multiplayer();
+
+        let after = SameMachineLaunchHostJoinValidationStatus::from_apps(&app_a, &app_b);
+
+        assert!(after.app_a_launchable);
+        assert!(after.app_b_launchable);
+        assert!(after.app_a_hosts_from_ui);
+        assert!(after.app_b_joins_from_ui);
+        assert!(after.descriptor_path_shared);
+        assert!(after.host_task_queued);
+        assert!(after.join_task_queued);
+        assert!(after.host_join_flow_ready());
+        assert!(after.status.contains("app_a_hosts_ui=yes"));
+        assert!(after.status.contains("app_b_joins_ui=yes"));
     }
 
     #[test]
