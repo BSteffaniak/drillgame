@@ -46,6 +46,28 @@ pub enum CompatibilityMode {
     MultiplayerReady,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OnlineTickIdentitySummary {
+    pub client_id: ClientId,
+    pub player_id: PlayerId,
+    pub slot: Option<u8>,
+    pub descriptor_client_connected: bool,
+    pub roster_seeded: bool,
+    pub legacy_bridge_seeded: bool,
+}
+
+impl OnlineTickIdentitySummary {
+    #[must_use]
+    pub const fn uses_joined_slot(self) -> bool {
+        self.slot.is_some()
+    }
+
+    #[must_use]
+    pub const fn seeded_session_presentation(self) -> bool {
+        self.roster_seeded || self.legacy_bridge_seeded
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LegacyRemotePresentationSyncSummary {
     pub source_snapshots: usize,
@@ -5456,6 +5478,43 @@ impl GameSession {
             .into_iter()
             .map(|producer| self.route_command_producer(client_id, producer))
             .collect()
+    }
+
+    pub fn prepare_online_tick_identity(
+        &mut self,
+        descriptor_client_connected: bool,
+    ) -> OnlineTickIdentitySummary {
+        let local_client_id = self.local_client().client_id;
+        let local_player_id = self.local_client().controlled_player_id;
+        let online_player_slot = self.game.online_player_slot;
+        let player_id =
+            online_player_slot.map_or(local_player_id, |slot| PlayerId::new(u64::from(slot)));
+        let client_id = if online_player_slot == Some(2) {
+            ClientId::new(1)
+        } else {
+            local_client_id
+        };
+        let (roster_seeded, legacy_bridge_seeded) =
+            if descriptor_client_connected || online_player_slot.is_some() {
+                let roster_seeded = self.ensure_local_online_player_presentation_from_roster();
+                let update_existing_from_legacy = online_player_slot.is_none();
+                let legacy_bridge_seeded = self
+                    .ensure_local_online_player_presentation_from_legacy_view(
+                        player_id,
+                        update_existing_from_legacy,
+                    );
+                (roster_seeded, legacy_bridge_seeded)
+            } else {
+                (false, false)
+            };
+        OnlineTickIdentitySummary {
+            client_id,
+            player_id,
+            slot: online_player_slot,
+            descriptor_client_connected,
+            roster_seeded,
+            legacy_bridge_seeded,
+        }
     }
 
     #[must_use]

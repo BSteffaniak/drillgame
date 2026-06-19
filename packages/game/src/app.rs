@@ -315,34 +315,16 @@ impl OnlineTaskDispatcher {
         session: &mut GameSession,
         local_player_commands: Vec<PlayerCommand>,
     ) -> crate::multiplayer::QuinnSessionTickInput {
-        let local_client_id = session.local_client().client_id;
-        let local_player_id = session.local_client().controlled_player_id;
-        let online_player_slot = session.game().online_player_slot;
-        let player_id = online_player_slot.map_or(local_player_id, |slot| {
-            crate::multiplayer::PlayerId::new(u64::from(slot))
-        });
-        let client_id = if online_player_slot == Some(2) {
-            crate::multiplayer::ClientId::new(1)
-        } else {
-            local_client_id
-        };
         let descriptor_client_connected = self
             .controller
             .as_ref()
             .is_some_and(|controller| controller.mode_label() == "descriptor-client-connected");
-        if descriptor_client_connected || online_player_slot.is_some() {
-            let _seeded = session.ensure_local_online_player_presentation_from_roster();
-            let update_existing_from_legacy = online_player_slot.is_none();
-            let _seeded = session.ensure_local_online_player_presentation_from_legacy_view(
-                player_id,
-                update_existing_from_legacy,
-            );
-        }
+        let identity = session.prepare_online_tick_identity(descriptor_client_connected);
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
         session.live_session_tick_input_from_world(
-            client_id,
-            player_id,
+            identity.client_id,
+            identity.player_id,
             sequence,
             local_player_commands,
         )
