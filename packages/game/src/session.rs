@@ -6,6 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem,
+    ops::Deref,
     time::Duration,
 };
 
@@ -44,6 +45,110 @@ use crate::{
 pub enum CompatibilityMode {
     SinglePlayerLegacy,
     MultiplayerReady,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkPayloadSource {
+    AuthoritativeWorld,
+    LocalPresentationShell,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkTickPayloadProvenance {
+    pub snapshot_source: NetworkPayloadSource,
+    pub delta_source: NetworkPayloadSource,
+    pub terrain_source: NetworkPayloadSource,
+    pub snapshot_tick: Option<SimulationTick>,
+    pub snapshot_player_ids: Vec<PlayerId>,
+    pub delta_player_ids: Vec<PlayerId>,
+    pub authoritative_chunk_count: usize,
+    pub authoritative_chunk_tile_count: usize,
+    pub correction_player_id: Option<PlayerId>,
+}
+
+impl NetworkTickPayloadProvenance {
+    #[must_use]
+    pub fn from_session_tick_input(input: &QuinnSessionTickInput) -> Self {
+        let (snapshot_tick, snapshot_player_ids) = input.snapshot.as_ref().map_or_else(
+            || (None, Vec::new()),
+            |snapshot| {
+                (
+                    Some(snapshot.tick),
+                    snapshot
+                        .players
+                        .iter()
+                        .map(|player| player.player_id)
+                        .collect(),
+                )
+            },
+        );
+        let delta_player_ids = input.delta.as_ref().map_or_else(Vec::new, |(_, payload)| {
+            if let NetworkDeltaPayload::Players { players } = payload {
+                players.clone()
+            } else {
+                Vec::new()
+            }
+        });
+        Self {
+            snapshot_source: NetworkPayloadSource::AuthoritativeWorld,
+            delta_source: NetworkPayloadSource::AuthoritativeWorld,
+            terrain_source: NetworkPayloadSource::AuthoritativeWorld,
+            snapshot_tick,
+            snapshot_player_ids,
+            delta_player_ids,
+            authoritative_chunk_count: input.authoritative_terrain_chunks.len(),
+            authoritative_chunk_tile_count: input
+                .authoritative_terrain_chunks
+                .iter()
+                .map(|chunk| chunk.tiles.len())
+                .sum(),
+            correction_player_id: input
+                .correction_probe
+                .as_ref()
+                .map(|(_, _, player, _)| player.player_id),
+        }
+    }
+
+    #[must_use]
+    pub const fn world_sourced(&self) -> bool {
+        matches!(
+            self.snapshot_source,
+            NetworkPayloadSource::AuthoritativeWorld
+        ) && matches!(self.delta_source, NetworkPayloadSource::AuthoritativeWorld)
+            && matches!(
+                self.terrain_source,
+                NetworkPayloadSource::AuthoritativeWorld
+            )
+    }
+
+    #[must_use]
+    pub fn delta_matches_snapshot_players(&self) -> bool {
+        self.delta_player_ids
+            .iter()
+            .all(|player_id| self.snapshot_player_ids.contains(player_id))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveSessionTickInput {
+    pub input: QuinnSessionTickInput,
+    pub provenance: NetworkTickPayloadProvenance,
+}
+
+impl LiveSessionTickInput {
+    #[must_use]
+    pub fn from_input(input: QuinnSessionTickInput) -> Self {
+        let provenance = NetworkTickPayloadProvenance::from_session_tick_input(&input);
+        Self { input, provenance }
+    }
+}
+
+impl Deref for LiveSessionTickInput {
+    type Target = QuinnSessionTickInput;
+
+    fn deref(&self) -> &Self::Target {
+        &self.input
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -5752,6 +5857,21 @@ impl GameSession {
             .into_iter()
             .map(|(chunk_x, chunk_y)| self.network_terrain_chunk_from_world(chunk_x, chunk_y))
             .collect()
+    }
+
+    pub fn live_session_tick_input_with_provenance(
+        &self,
+        client_id: ClientId,
+        player_id: PlayerId,
+        sequence: u32,
+        local_player_commands: Vec<PlayerCommand>,
+    ) -> LiveSessionTickInput {
+        LiveSessionTickInput::from_input(self.live_session_tick_input_from_world(
+            client_id,
+            player_id,
+            sequence,
+            local_player_commands,
+        ))
     }
 
     pub fn live_session_tick_input_from_world(

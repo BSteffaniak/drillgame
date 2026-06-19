@@ -322,12 +322,14 @@ impl OnlineTaskDispatcher {
         let identity = session.prepare_online_tick_identity(descriptor_client_connected);
         let sequence = self.live_tick_sequence;
         self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
-        session.live_session_tick_input_from_world(
-            identity.client_id,
-            identity.player_id,
-            sequence,
-            local_player_commands,
-        )
+        session
+            .live_session_tick_input_with_provenance(
+                identity.client_id,
+                identity.player_id,
+                sequence,
+                local_player_commands,
+            )
+            .input
     }
 
     fn drive_scheduled_tick(
