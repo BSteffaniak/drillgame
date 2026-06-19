@@ -449,6 +449,72 @@ pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
     save_game_to_path(game, slot_path(slot))
 }
 
+pub fn save_world_session(world: &WorldState, shell: &GameState) -> Result<(), SaveError> {
+    save_world_session_to_path(world, shell, save_path())
+}
+
+pub fn save_world_session_slot(
+    world: &WorldState,
+    shell: &GameState,
+    slot: usize,
+) -> Result<(), SaveError> {
+    save_world_session_to_path(world, shell, slot_path(slot))
+}
+
+pub fn save_world_session_to_path(
+    world: &WorldState,
+    shell: &GameState,
+    path: impl AsRef<Path>,
+) -> Result<(), SaveError> {
+    let save = SaveFile {
+        version: SAVE_VERSION,
+        world: PersistentWorldSave::from_world_and_legacy_game(world, shell),
+    };
+    let json = serde_json::to_string_pretty(&save).map_err(SaveError::Serialize)?;
+    write_state_file(path, json)
+}
+
+#[must_use]
+pub fn persistent_world_from_session(world: &WorldState, shell: &GameState) -> PersistentWorldSave {
+    PersistentWorldSave::from_world_and_legacy_game(world, shell)
+}
+
+pub fn load_persistent_world() -> Result<PersistentWorldSave, SaveError> {
+    load_persistent_world_from_path(save_path())
+}
+
+pub fn load_persistent_world_slot(slot: usize) -> Result<PersistentWorldSave, SaveError> {
+    load_persistent_world_from_path(slot_path(slot))
+}
+
+pub fn load_latest_persistent_world() -> Result<PersistentWorldSave, SaveError> {
+    let Some(path) = latest_save_path() else {
+        return Err(SaveError::NoSaveFound);
+    };
+    load_persistent_world_from_path(path)
+}
+
+pub fn load_persistent_world_from_path(
+    path: impl AsRef<Path>,
+) -> Result<PersistentWorldSave, SaveError> {
+    let json = fs::read_to_string(path).map_err(SaveError::Io)?;
+    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
+        validate_save_version(save.version)?;
+        return Ok(save.world);
+    }
+
+    let legacy_save: LegacySaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
+    validate_save_version(legacy_save.version)?;
+    Ok(PersistentWorldSave {
+        save_authority: SaveAuthority::LocalSinglePlayer,
+        session_kind: SaveSessionKind::LocalOnly,
+        player_roster: default_player_roster(),
+        default_player_id: LOCAL_PLAYER_ID,
+        session: PersistentSessionState::local_from_game(&legacy_save.game),
+        game: legacy_save.game,
+    })
+}
+
 fn save_game_to_path(game: &GameState, path: impl AsRef<Path>) -> Result<(), SaveError> {
     let save = SaveFile {
         version: SAVE_VERSION,
@@ -474,25 +540,8 @@ pub fn load_latest_game() -> Result<GameState, SaveError> {
 }
 
 fn load_game_from_path(path: impl AsRef<Path>) -> Result<GameState, SaveError> {
-    let json = fs::read_to_string(path).map_err(SaveError::Io)?;
-    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
-        validate_save_version(save.version)?;
-        let mut game = save.world.into_legacy_game();
-        game.migrate_after_load();
-        return Ok(game);
-    }
-
-    let legacy_save: LegacySaveFile = serde_json::from_str(&json).map_err(SaveError::Serialize)?;
-    validate_save_version(legacy_save.version)?;
-    let mut game = PersistentWorldSave {
-        save_authority: SaveAuthority::LocalSinglePlayer,
-        session_kind: SaveSessionKind::LocalOnly,
-        player_roster: default_player_roster(),
-        default_player_id: LOCAL_PLAYER_ID,
-        session: PersistentSessionState::local_from_game(&legacy_save.game),
-        game: legacy_save.game,
-    }
-    .into_legacy_game();
+    let save = load_persistent_world_from_path(path)?;
+    let mut game = save.into_legacy_game();
     game.migrate_after_load();
     Ok(game)
 }

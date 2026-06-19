@@ -28,7 +28,11 @@ use crate::{
     },
     player::Player,
     rendering::render_camera,
-    save::SettingsFile,
+    save::{
+        SettingsFile, load_latest_persistent_world, load_persistent_world,
+        load_persistent_world_slot, persistent_world_from_session, save_world_session,
+        save_world_session_slot,
+    },
     terrain::{
         ArtifactKind, MineResult, MineralKind, StrategicResourceKind, Terrain, TileKind,
         TilePosition,
@@ -4415,8 +4419,57 @@ impl GameSession {
 
     #[must_use]
     pub fn new() -> Self {
-        let game = GameState::new();
+        Self::from_game(GameState::new())
+    }
+
+    #[must_use]
+    pub fn from_game(game: GameState) -> Self {
         let world = WorldState::from_legacy_game(&game);
+        Self::from_game_and_world(game, world)
+    }
+
+    #[must_use]
+    pub fn from_persistent_world(save: &crate::save::PersistentWorldSave) -> Self {
+        let mut game = save.clone().into_legacy_game();
+        game.migrate_after_load();
+        let mut session = Self::from_game(game);
+        save.restore_into_world(&mut session.world);
+        session.current_tick = session.world.simulation_tick();
+        session
+            .command_network_session
+            .set_current_tick(session.current_tick);
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        session.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
+        session.sync_legacy_terrain_from_world();
+        session
+    }
+
+    #[must_use]
+    pub fn persistent_world_save(&self) -> crate::save::PersistentWorldSave {
+        persistent_world_from_session(&self.world, &self.game)
+    }
+
+    pub fn save_session(&self) -> Result<(), crate::save::SaveError> {
+        save_world_session(&self.world, &self.game)
+    }
+
+    pub fn save_session_slot(&self, slot: usize) -> Result<(), crate::save::SaveError> {
+        save_world_session_slot(&self.world, &self.game, slot)
+    }
+
+    pub fn load_session() -> Result<Self, crate::save::SaveError> {
+        load_persistent_world().map(|save| Self::from_persistent_world(&save))
+    }
+
+    pub fn load_session_slot(slot: usize) -> Result<Self, crate::save::SaveError> {
+        load_persistent_world_slot(slot).map(|save| Self::from_persistent_world(&save))
+    }
+
+    pub fn load_latest_session() -> Result<Self, crate::save::SaveError> {
+        load_latest_persistent_world().map(|save| Self::from_persistent_world(&save))
+    }
+
+    fn from_game_and_world(game: GameState, world: WorldState) -> Self {
         let local_client = ClientState::default();
         Self {
             game,
