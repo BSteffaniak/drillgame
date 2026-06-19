@@ -2215,41 +2215,6 @@ impl OnlineGameplayStartGate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OnlineScaffoldingQuarantineStatus {
-    pub cli_helpers_runtime_blocking: bool,
-    pub simulator_runtime_blocking: bool,
-    pub production_ui_preferred: bool,
-    pub status: String,
-}
-
-impl OnlineScaffoldingQuarantineStatus {
-    #[must_use]
-    pub fn from_game(game: &GameState) -> Self {
-        let production_ui_preferred = OnlineManualWorkingGameGateStatus::from_game(game).ready
-            || matches!(
-                game.online_session_state,
-                OnlineSessionUxState::Hosting
-                    | OnlineSessionUxState::Joining
-                    | OnlineSessionUxState::Connected
-            );
-        let cli_helpers_runtime_blocking = false;
-        let simulator_runtime_blocking = false;
-        let status = format!(
-            "Online scaffolding quarantine: cli_helpers_runtime_blocking={} simulator_runtime_blocking={} production_ui_preferred={}",
-            yes_no(cli_helpers_runtime_blocking),
-            yes_no(simulator_runtime_blocking),
-            yes_no(production_ui_preferred)
-        );
-        Self {
-            cli_helpers_runtime_blocking,
-            simulator_runtime_blocking,
-            production_ui_preferred,
-            status,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultiplayerPortabilityBoundaryStatus {
     pub gameplay_state_render_input_decoupled: bool,
     pub network_adapter_isolated: bool,
@@ -5959,7 +5924,6 @@ impl GameState {
         lines.push(LocalMultiplayerRuntimeStatus::from_game(self).status_line());
         lines.push(OnlineSessionUxReducerStatus::from_game(self).status);
         lines.push(OnlineNetworkTaskOrchestrationStatus::from_game(self).status);
-        lines.push(OnlineScaffoldingQuarantineStatus::from_game(self).status);
         lines.push(MultiplayerPortabilityBoundaryStatus::from_game(self).status);
         lines.push(if self.online_last_ownership_status.is_empty() {
             OnlineOwnershipStatus::from_game(self).status_line()
@@ -11234,7 +11198,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffolding_quarantine_and_portability_boundary_statuses_track_runtime_dependencies() {
+    fn portability_boundary_status_tracks_runtime_dependencies() {
         let mut game = GameState::new();
         game.online_session_state = OnlineSessionUxState::Connected;
         game.online_host_owns_save = true;
@@ -11243,23 +11207,13 @@ mod tests {
         game.refresh_online_gameplay_domain_status();
         game.refresh_online_save_boundary_status();
 
-        let quarantine = OnlineScaffoldingQuarantineStatus::from_game(&game);
         let portability = MultiplayerPortabilityBoundaryStatus::from_game(&game);
 
-        assert!(!quarantine.cli_helpers_runtime_blocking);
-        assert!(!quarantine.simulator_runtime_blocking);
-        assert!(quarantine.production_ui_preferred);
-        assert!(quarantine.status.contains("production_ui_preferred=yes"));
         assert!(portability.gameplay_state_render_input_decoupled);
         assert!(portability.network_adapter_isolated);
         assert!(portability.save_boundary_explicit);
         assert!(portability.status.contains("save_boundary_explicit=yes"));
         let lines = game.online_multiplayer_status_lines();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Online scaffolding quarantine"))
-        );
         assert!(
             lines
                 .iter()
