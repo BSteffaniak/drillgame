@@ -1591,6 +1591,102 @@ impl OnlineReconnectPolicyStatus {
 
 #[allow(
     clippy::struct_excessive_bools,
+    reason = "manual working-game gate mirrors independent owner-validation checklist rows"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineManualWorkingGameGateStatus {
+    pub two_instances_ready: bool,
+    pub ui_host_join_ready: bool,
+    pub ui_ready_start_ready: bool,
+    pub movement_observable: bool,
+    pub mining_observable: bool,
+    pub survival_observable: bool,
+    pub shutdown_safe: bool,
+    pub failures_triaged: bool,
+    pub ready: bool,
+    pub status: String,
+}
+
+impl OnlineManualWorkingGameGateStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let playable = OnlinePlayableSessionStatus::from_game(game);
+        let sustained = OnlineSustainedMiningSessionStatus::from_game(game);
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(game);
+        let two_instances_ready = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+        ) && game.online_player_slot.is_some();
+        let ui_host_join_ready = playable.host_from_ui || playable.joined_from_ui;
+        let ui_ready_start_ready = playable.both_entered_gameplay
+            || (game.online_local_ready && game.online_remote_player_ready)
+            || game.run_mode == RunMode::Playing;
+        let movement_observable = playable.movement_visible
+            || sustained.movement_visible
+            || !game.online_remote_player_snapshots.is_empty();
+        let mining_observable = sustained.terrain_visible
+            && sustained.cargo_or_economy_visible
+            && (game
+                .online_last_gameplay_sync_evidence_status
+                .contains("terrain")
+                || game.online_last_sync_loop_status.contains("terrain"));
+        let survival_observable = sustained.survival_visible
+            && game.player.fuel.is_finite()
+            && game.player.hull.is_finite();
+        let shutdown_safe = game
+            .online_last_session_boundary_status
+            .contains("Online session boundary")
+            && matches!(
+                save_boundary.unsaved_exit_action,
+                OnlineUnsavedExitAction::CleanExitAllowed
+                    | OnlineUnsavedExitAction::SaveAndExitAllowed
+                    | OnlineUnsavedExitAction::DiscardOrCancelOnly
+            );
+        let failures_triaged = game.online_last_failure_status.is_empty()
+            || game.online_last_failure_status.contains("Online failure:")
+            || game.online_last_failure_status.contains("category=");
+        let ready = two_instances_ready
+            && ui_host_join_ready
+            && ui_ready_start_ready
+            && movement_observable
+            && mining_observable
+            && survival_observable
+            && shutdown_safe
+            && failures_triaged;
+        let status = format!(
+            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} role={} slot={}",
+            yes_no(ready),
+            yes_no(two_instances_ready),
+            yes_no(ui_host_join_ready),
+            yes_no(ui_ready_start_ready),
+            yes_no(movement_observable),
+            yes_no(mining_observable),
+            yes_no(survival_observable),
+            yes_no(shutdown_safe),
+            yes_no(failures_triaged),
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        );
+        Self {
+            two_instances_ready,
+            ui_host_join_ready,
+            ui_ready_start_ready,
+            movement_observable,
+            mining_observable,
+            survival_observable,
+            shutdown_safe,
+            failures_triaged,
+            ready,
+            status,
+        }
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
     reason = "sustained-play status checks independent runtime sync signals for manual mining sessions"
 )]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5301,6 +5397,7 @@ impl GameState {
             self.online_last_playable_session_status.clone()
         });
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
+        lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
@@ -12207,6 +12304,145 @@ mod tests {
         assert!(status.preserves_dirty_save_state);
         assert!(status.player_message.contains("not automatic"));
         assert!(status.status_line().contains("dirty_save_preserved=yes"));
+    }
+
+    #[test]
+    fn manual_working_game_gate_passes_when_ui_runtime_sync_and_shutdown_evidence_are_present() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = None;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 12.0,
+                y: 34.0,
+                velocity_x: 1.0,
+                velocity_y: -1.0,
+                fuel: 90.0,
+                hull: 80.0,
+                credits: 70,
+                cargo_used: 2,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+        game.online_last_replicated_player_status = "updated remote player 2".to_owned();
+        game.online_last_terrain_status = "answered chunk (0,0) rev 2".to_owned();
+        game.online_last_replication_status = "host sent snapshot with cargo".to_owned();
+        game.online_last_sync_loop_status =
+            "snapshot applied: players=2 cargo=yes terrain=yes".to_owned();
+        game.online_last_gameplay_sync_evidence_status =
+            "Gameplay sync evidence: movement=good terrain=good cargo=good survival=good"
+                .to_owned();
+        game.online_last_session_boundary_status =
+            OnlineSessionBoundaryStatus::client_left("prior manual check").status_line();
+        game.refresh_online_save_boundary_status();
+
+        let manual_status = OnlineManualWorkingGameGateStatus::from_game(&game);
+
+        assert!(manual_status.ready);
+        assert!(manual_status.two_instances_ready);
+        assert!(manual_status.ui_host_join_ready);
+        assert!(manual_status.ui_ready_start_ready);
+        assert!(manual_status.movement_observable);
+        assert!(manual_status.mining_observable);
+        assert!(manual_status.survival_observable);
+        assert!(manual_status.shutdown_safe);
+        assert!(manual_status.failures_triaged);
+        assert!(manual_status.status.contains("ready=yes"));
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online manual working-game gate") && line.contains("ready=yes")
+        }));
+    }
+
+    #[test]
+    fn manual_working_game_gate_blocks_when_ui_or_sync_evidence_is_missing() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.refresh_online_save_boundary_status();
+
+        let manual_status = OnlineManualWorkingGameGateStatus::from_game(&game);
+
+        assert!(!manual_status.ready);
+        assert!(manual_status.two_instances_ready);
+        assert!(manual_status.ui_host_join_ready);
+        assert!(manual_status.ui_ready_start_ready);
+        assert!(!manual_status.movement_observable);
+        assert!(!manual_status.mining_observable);
+        assert!(!manual_status.survival_observable);
+        assert!(!manual_status.shutdown_safe);
+        assert!(manual_status.status.contains("movement=no"));
+        assert!(manual_status.status.contains("mining=no"));
+    }
+
+    #[test]
+    fn manual_working_game_gate_accepts_joined_client_ui_path_and_discard_or_cancel_save_policy() {
+        let mut client = GameState::new();
+        client.run_mode = RunMode::Playing;
+        client.modal = None;
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_local_ready = true;
+        client.online_remote_player_ready = true;
+        client.online_remote_player_connected = true;
+        client.save_dirty = true;
+        client.player.fuel = 55.0;
+        client.player.hull = 66.0;
+        client
+            .online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                x: 1.0,
+                y: 2.0,
+                velocity_x: 0.5,
+                velocity_y: 0.0,
+                fuel: 100.0,
+                hull: 100.0,
+                credits: 10,
+                cargo_used: 1,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+        client.online_last_replicated_player_status = "updated host player".to_owned();
+        client.online_last_terrain_status = "applied chunk (0,0) rev 3".to_owned();
+        client.online_last_replication_status = "client received snapshot with cargo".to_owned();
+        client.online_last_sync_loop_status =
+            "snapshot applied: players=2 cargo=yes terrain=yes".to_owned();
+        client.online_last_gameplay_sync_evidence_status =
+            "Gameplay sync evidence: movement=good terrain=good cargo=good survival=good"
+                .to_owned();
+        client.online_last_session_boundary_status =
+            OnlineSessionBoundaryStatus::host_ended("previous shutdown check").status_line();
+        client.refresh_online_save_boundary_status();
+
+        let manual_status = OnlineManualWorkingGameGateStatus::from_game(&client);
+        let save_boundary = OnlineSaveBoundaryStatus::from_game(&client);
+
+        assert!(manual_status.ready);
+        assert!(manual_status.ui_host_join_ready);
+        assert_eq!(
+            save_boundary.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
+        assert_eq!(
+            save_boundary.unsaved_exit_action,
+            OnlineUnsavedExitAction::DiscardOrCancelOnly
+        );
+        assert!(manual_status.status.contains("role=client"));
+        assert!(manual_status.status.contains("shutdown_safe=yes"));
     }
 
     #[test]
