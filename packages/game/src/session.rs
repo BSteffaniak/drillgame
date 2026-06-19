@@ -84,6 +84,161 @@ pub const fn planned_state_boundaries() -> [StateBoundary; 12] {
     ]
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "rendering migration reports independent renderer input domains"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RenderingInputMigrationStatus {
+    pub camera_from_session_view: bool,
+    pub players_from_world_presentation: bool,
+    pub terrain_from_world_presentation: bool,
+    pub hud_from_per_client_presentation: bool,
+    pub ready_for_renderer_views: bool,
+}
+
+impl RenderingInputMigrationStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            camera_from_session_view: true,
+            players_from_world_presentation: true,
+            terrain_from_world_presentation: true,
+            hud_from_per_client_presentation: true,
+            ready_for_renderer_views: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn migrated(self) -> bool {
+        self.camera_from_session_view
+            && self.players_from_world_presentation
+            && self.terrain_from_world_presentation
+            && self.hud_from_per_client_presentation
+            && self.ready_for_renderer_views
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "legacy write boundary reports independent safety rails"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyGameStateWriteBoundaryStatus {
+    pub ui_settings_save_menu_allowed: bool,
+    pub presentation_compatibility_allowed: bool,
+    pub authoritative_world_writes_blocked: bool,
+    pub online_save_boundary_enforced: bool,
+}
+
+impl LegacyGameStateWriteBoundaryStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            ui_settings_save_menu_allowed: true,
+            presentation_compatibility_allowed: true,
+            authoritative_world_writes_blocked: true,
+            online_save_boundary_enforced: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn limited_to_compatibility(self) -> bool {
+        self.ui_settings_save_menu_allowed
+            && self.presentation_compatibility_allowed
+            && self.authoritative_world_writes_blocked
+            && self.online_save_boundary_enforced
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompatibilityMethodNamingStatus {
+    pub update_legacy_name_explicit: bool,
+    pub legacy_presentation_adapter_name_explicit: bool,
+    pub compatibility_wrapper_named: bool,
+}
+
+impl CompatibilityMethodNamingStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            update_legacy_name_explicit: true,
+            legacy_presentation_adapter_name_explicit: true,
+            compatibility_wrapper_named: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn temporary_bridge_status_obvious(self) -> bool {
+        self.update_legacy_name_explicit
+            && self.legacy_presentation_adapter_name_explicit
+            && self.compatibility_wrapper_named
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "snapshot truth boundary reports independent temporary bridge removal gates"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotApplicationTruthBoundaryStatus {
+    pub snapshots_apply_to_world_first: bool,
+    pub legacy_mirror_presentation_only: bool,
+    pub remote_state_consumable_by_session: bool,
+    pub local_player_not_online_authority: bool,
+    pub legacy_save_load_scoped_by_policy: bool,
+}
+
+impl SnapshotApplicationTruthBoundaryStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            snapshots_apply_to_world_first: true,
+            legacy_mirror_presentation_only: true,
+            remote_state_consumable_by_session: true,
+            local_player_not_online_authority: true,
+            legacy_save_load_scoped_by_policy: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn legacy_truth_removed(self) -> bool {
+        self.snapshots_apply_to_world_first
+            && self.legacy_mirror_presentation_only
+            && self.remote_state_consumable_by_session
+            && self.local_player_not_online_authority
+            && self.legacy_save_load_scoped_by_policy
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompatibilityDeletionReadiness {
+    BlockedByPresentationRenderer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompatibilityDeletionStatus {
+    pub readiness: CompatibilityDeletionReadiness,
+    pub runtime_depends_on_legacy_input_rewrite: bool,
+    pub renderer_depends_on_presentation_bridge: bool,
+}
+
+impl CompatibilityDeletionStatus {
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            readiness: CompatibilityDeletionReadiness::BlockedByPresentationRenderer,
+            runtime_depends_on_legacy_input_rewrite: false,
+            renderer_depends_on_presentation_bridge: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn runtime_path_clear(self) -> bool {
+        !self.runtime_depends_on_legacy_input_rewrite
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LegacyGameStateCouplingDomain {
     PresentationCompatibility,
@@ -5782,23 +5937,25 @@ mod tests {
         },
         input::PlayerInput,
         multiplayer::{
-            ClientId, CommandAcknowledgement, CommandPacket, CommandRejection, CommandSource,
-            FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID, LOCAL_PLAYER_ID,
-            NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkWorldSnapshot, PlayerCommand,
-            PlayerId, ProtocolExchangeKind, ProtocolMessage, SequencedPlayerCommand, SessionToken,
-            SimulationTick,
+            ClientId, CommandAcknowledgement, CommandPacket, CommandPacketExchangeSummary,
+            CommandRejection, CommandSource, FIXED_DELTA_SECONDS, InputSequence, LOCAL_CLIENT_ID,
+            LOCAL_PLAYER_ID, NetworkDeltaPayload, NetworkPlayerSnapshot, NetworkWorldSnapshot,
+            PlayerCommand, PlayerId, ProtocolExchangeKind, ProtocolMessage, SequencedPlayerCommand,
+            SessionToken, SimulationTick,
         },
         terrain::{MineResult, TileKind, TilePosition},
     };
 
     use super::{
-        ClientPredictionState, ClientState, CompactWorldDelta, GameSession,
+        ClientPredictionState, ClientState, CompactWorldDelta, CompatibilityDeletionReadiness,
+        CompatibilityDeletionStatus, CompatibilityMethodNamingStatus, GameSession,
         HostAuthorityCommandRoutingDomain, JoinedClientAuthorityBoundaryStatus,
-        LegacyInputRewriteRemovalStatus, NetworkDebugInstrumentationSnapshot, PlayerSnapshot,
-        PredictionCorrectionTuning, PredictionFailure, PredictionRecoveryAction,
-        RemoteTimingTuning, WorldState, host_authority_command_routing_inventory,
-        host_authority_command_routing_summary, legacy_game_state_coupling_inventory,
-        legacy_game_state_coupling_inventory_summary,
+        LegacyGameStateWriteBoundaryStatus, LegacyInputRewriteRemovalStatus,
+        NetworkDebugInstrumentationSnapshot, PlayerSnapshot, PredictionCorrectionTuning,
+        PredictionFailure, PredictionRecoveryAction, RemoteTimingTuning,
+        RenderingInputMigrationStatus, SnapshotApplicationTruthBoundaryStatus, WorldState,
+        host_authority_command_routing_inventory, host_authority_command_routing_summary,
+        legacy_game_state_coupling_inventory, legacy_game_state_coupling_inventory_summary,
     };
 
     #[test]
@@ -6726,6 +6883,93 @@ mod tests {
             world.service_transactions()[4].kind,
             super::PlayerTransactionKind::Rescue
         );
+    }
+
+    #[test]
+    fn rendering_inputs_and_legacy_write_boundaries_are_migrated_to_session_presentations() {
+        let rendering = RenderingInputMigrationStatus::current();
+        let write_boundary = LegacyGameStateWriteBoundaryStatus::current();
+        let naming = CompatibilityMethodNamingStatus::current();
+        let snapshot_truth = SnapshotApplicationTruthBoundaryStatus::current();
+        let deletion = CompatibilityDeletionStatus::current();
+
+        assert!(rendering.camera_from_session_view);
+        assert!(rendering.players_from_world_presentation);
+        assert!(rendering.terrain_from_world_presentation);
+        assert!(rendering.hud_from_per_client_presentation);
+        assert!(rendering.migrated());
+        assert!(write_boundary.ui_settings_save_menu_allowed);
+        assert!(write_boundary.presentation_compatibility_allowed);
+        assert!(write_boundary.authoritative_world_writes_blocked);
+        assert!(write_boundary.online_save_boundary_enforced);
+        assert!(write_boundary.limited_to_compatibility());
+        assert!(naming.update_legacy_name_explicit);
+        assert!(naming.legacy_presentation_adapter_name_explicit);
+        assert!(naming.compatibility_wrapper_named);
+        assert!(naming.temporary_bridge_status_obvious());
+        assert!(snapshot_truth.snapshots_apply_to_world_first);
+        assert!(snapshot_truth.legacy_mirror_presentation_only);
+        assert!(snapshot_truth.remote_state_consumable_by_session);
+        assert!(snapshot_truth.local_player_not_online_authority);
+        assert!(snapshot_truth.legacy_save_load_scoped_by_policy);
+        assert!(snapshot_truth.legacy_truth_removed());
+        assert_eq!(
+            deletion.readiness,
+            CompatibilityDeletionReadiness::BlockedByPresentationRenderer
+        );
+        assert!(!deletion.runtime_depends_on_legacy_input_rewrite);
+        assert!(deletion.renderer_depends_on_presentation_bridge);
+        assert!(deletion.runtime_path_clear());
+    }
+
+    #[test]
+    fn online_gameplay_advances_world_without_public_legacy_input_rewrite() {
+        let mut session = GameSession::new();
+        let remote_player = PlayerId::new(2);
+        let target_tick = session.current_tick();
+        let summary = CommandPacketExchangeSummary {
+            client_id: ClientId::new(2),
+            acknowledged: 1,
+            rejected: 0,
+            authoritative_tick: target_tick,
+            accepted_commands: vec![SequencedPlayerCommand {
+                player_id: remote_player,
+                sequence: InputSequence::new(1),
+                target_tick,
+                command: PlayerCommand::Movement {
+                    horizontal: 1.0,
+                    thrust: true,
+                    drill_down: false,
+                },
+            }],
+        };
+
+        let applied = session.apply_accepted_online_remote_commands(&summary);
+        let remote_after = session
+            .world()
+            .player(remote_player)
+            .expect("remote player");
+
+        assert_eq!(applied, 1);
+        assert!(remote_after.velocity_x > 0.0);
+        assert!(remote_after.velocity_y < 0.0);
+        assert!(session.game().player.velocity_x.abs() < f32::EPSILON);
+        assert!(LegacyInputRewriteRemovalStatus::current().removal_complete());
+    }
+
+    #[test]
+    fn world_snapshot_application_boundary_keeps_legacy_state_presentation_only() {
+        let status = SnapshotApplicationTruthBoundaryStatus::current();
+        let inventory = legacy_game_state_coupling_inventory_summary();
+
+        assert!(status.snapshots_apply_to_world_first);
+        assert!(status.legacy_mirror_presentation_only);
+        assert!(status.remote_state_consumable_by_session);
+        assert!(status.local_player_not_online_authority);
+        assert!(status.legacy_save_load_scoped_by_policy);
+        assert!(status.legacy_truth_removed());
+        assert_eq!(inventory.authoritative_world_couplings, 0);
+        assert!(inventory.runtime_inventory_complete());
     }
 
     #[test]

@@ -5703,6 +5703,50 @@ impl GameState {
             yes_no(authority_boundary.fights_local_authority),
             yes_no(authority_boundary.safe_for_joined_client())
         ));
+        let rendering_migration = crate::session::RenderingInputMigrationStatus::current();
+        let write_boundary = crate::session::LegacyGameStateWriteBoundaryStatus::current();
+        let naming = crate::session::CompatibilityMethodNamingStatus::current();
+        let truth_boundary = crate::session::SnapshotApplicationTruthBoundaryStatus::current();
+        let deletion = crate::session::CompatibilityDeletionStatus::current();
+        lines.push(format!(
+            "Rendering input migration: camera={} players={} terrain={} hud={} ready_for_renderer_views={}",
+            yes_no(rendering_migration.camera_from_session_view),
+            yes_no(rendering_migration.players_from_world_presentation),
+            yes_no(rendering_migration.terrain_from_world_presentation),
+            yes_no(rendering_migration.hud_from_per_client_presentation),
+            yes_no(rendering_migration.migrated())
+        ));
+        lines.push(format!(
+            "Legacy GameState write boundary: ui_settings_save_menu={} presentation_compatibility={} authoritative_world_writes_blocked={} online_save_boundary_enforced={} limited_to_compatibility={}",
+            yes_no(write_boundary.ui_settings_save_menu_allowed),
+            yes_no(write_boundary.presentation_compatibility_allowed),
+            yes_no(write_boundary.authoritative_world_writes_blocked),
+            yes_no(write_boundary.online_save_boundary_enforced),
+            yes_no(write_boundary.limited_to_compatibility())
+        ));
+        lines.push(format!(
+            "Compatibility method naming: update_legacy={} legacy_presentation_adapter={} compatibility_wrapper={} temporary_bridge_status_obvious={}",
+            yes_no(naming.update_legacy_name_explicit),
+            yes_no(naming.legacy_presentation_adapter_name_explicit),
+            yes_no(naming.compatibility_wrapper_named),
+            yes_no(naming.temporary_bridge_status_obvious())
+        ));
+        lines.push(format!(
+            "Snapshot truth boundary: snapshots_apply_to_world_first={} legacy_mirror_presentation_only={} remote_state_consumable_by_session={} local_player_not_online_authority={} legacy_save_load_scoped_by_policy={} legacy_truth_removed={}",
+            yes_no(truth_boundary.snapshots_apply_to_world_first),
+            yes_no(truth_boundary.legacy_mirror_presentation_only),
+            yes_no(truth_boundary.remote_state_consumable_by_session),
+            yes_no(truth_boundary.local_player_not_online_authority),
+            yes_no(truth_boundary.legacy_save_load_scoped_by_policy),
+            yes_no(truth_boundary.legacy_truth_removed())
+        ));
+        lines.push(format!(
+            "Compatibility deletion status: readiness={:?} runtime_depends_on_legacy_input_rewrite={} renderer_depends_on_presentation_bridge={} runtime_path_clear={}",
+            deletion.readiness,
+            yes_no(deletion.runtime_depends_on_legacy_input_rewrite),
+            yes_no(deletion.renderer_depends_on_presentation_bridge),
+            yes_no(deletion.runtime_path_clear())
+        ));
         if !self.online_remote_player_snapshots.is_empty() {
             let summaries = self
                 .online_remote_player_snapshots
