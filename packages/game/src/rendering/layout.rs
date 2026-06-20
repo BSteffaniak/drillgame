@@ -36,29 +36,6 @@ impl Insets {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-#[allow(
-    dead_code,
-    reason = "legacy immediate modal measurement retained until render-plan modal parity is verified"
-)]
-pub(super) struct Constraints {
-    max_width: f32,
-    max_height: f32,
-}
-
-#[allow(
-    dead_code,
-    reason = "legacy immediate modal measurement retained until render-plan modal parity is verified"
-)]
-impl Constraints {
-    const fn new(max_width: f32, max_height: f32) -> Self {
-        Self {
-            max_width,
-            max_height,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum FontRole {
     Title,
@@ -190,52 +167,6 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 cursor += 17.0;
             }
         }
-    }
-
-    #[allow(
-        dead_code,
-        reason = "legacy immediate modal retained until all render-plan modal visual parity is verified"
-    )]
-    pub(super) fn modal(&mut self, title: &str, subtitle: &str, content: &ModalContent) {
-        self.draw.draw_rectangle(
-            self.viewport.x as i32,
-            self.viewport.y as i32,
-            self.viewport.width as i32,
-            self.viewport.height as i32,
-            Color::new(0, 0, 0, 120),
-        );
-        let rect = modal_rect_for_viewport(self.viewport);
-        self.draw_panel(rect, PanelKind::Modal);
-        let padding = Insets::all(18.0);
-        let content_rect = inset(rect, padding);
-        Self::draw_text(
-            title,
-            content_rect.x,
-            content_rect.y,
-            TextKind::Title,
-            Color::GOLD,
-        );
-        Self::draw_text(
-            subtitle,
-            content_rect.x,
-            content_rect.y + 35.0,
-            TextKind::Small,
-            Color::LIGHTGRAY,
-        );
-        self.draw.draw_line(
-            content_rect.x as i32,
-            (content_rect.y + 60.0) as i32,
-            (content_rect.x + content_rect.width) as i32,
-            (content_rect.y + 60.0) as i32,
-            Color::new(110, 120, 130, 180),
-        );
-        let body = Rectangle {
-            x: content_rect.x,
-            y: content_rect.y + 72.0,
-            width: content_rect.width,
-            height: content_rect.height - 72.0,
-        };
-        self.draw_modal_content(body, content);
     }
 
     pub(super) fn anchored_panel(
@@ -417,125 +348,6 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         node.layout(body);
         let plan = node.render_plan();
         self.render_plan(&plan);
-    }
-
-    #[allow(
-        dead_code,
-        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
-    )]
-    fn draw_modal_content(&mut self, rect: Rectangle, content: &ModalContent) {
-        unsafe {
-            ffi::BeginScissorMode(
-                rect.x as i32,
-                rect.y as i32,
-                rect.width as i32,
-                rect.height as i32,
-            );
-        }
-        let columns = if rect.width > 760.0 { 2 } else { 1 };
-        let gap = 14.0;
-        let column_width = (rect.width - gap * (columns - 1) as f32) / columns as f32;
-        let mut cursors = vec![rect.y; columns];
-        for (index, section) in content.sections.iter().enumerate() {
-            let column = if columns == 1 { 0 } else { index % columns };
-            let x = rect.x + column as f32 * (column_width + gap);
-            let y = cursors[column];
-            let measured =
-                Self::measure_section(section, Constraints::new(column_width, rect.height));
-            let section_rect = Rectangle {
-                x,
-                y,
-                width: column_width,
-                height: measured.height,
-            };
-            self.draw_section(section_rect, section);
-            cursors[column] += measured.height + gap;
-        }
-        unsafe {
-            ffi::EndScissorMode();
-        }
-    }
-
-    #[allow(
-        dead_code,
-        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
-    )]
-    fn measure_section(section: &Section, constraints: Constraints) -> Size {
-        let mut height = 34.0;
-        for item in &section.items {
-            height += match item {
-                SectionItem::Meter { .. } => 38.0,
-                SectionItem::Stat(_) => 22.0,
-                SectionItem::Text(text) => {
-                    wrapped_height(text, constraints.max_width - 20.0, TextKind::Small)
-                }
-            };
-        }
-        Size {
-            width: constraints.max_width,
-            height: height.min(constraints.max_height),
-        }
-    }
-
-    #[allow(
-        dead_code,
-        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
-    )]
-    fn draw_section(&mut self, rect: Rectangle, section: &Section) {
-        self.draw_panel(rect, PanelKind::Overlay);
-        let inner = inset(rect, Insets::symmetric(10.0, 8.0));
-        Self::draw_text(
-            &section.title,
-            inner.x,
-            inner.y,
-            TextKind::Heading,
-            section.color,
-        );
-        let mut cursor = inner.y + 28.0;
-        for item in &section.items {
-            match item {
-                SectionItem::Meter {
-                    label,
-                    value,
-                    max,
-                    fill,
-                    danger,
-                } => {
-                    let ratio = ratio(*value, *max);
-                    let fill = if ratio < 0.25 { *danger } else { *fill };
-                    Self::draw_text(
-                        &format!("{label} {value:.0}/{max:.0}"),
-                        inner.x,
-                        cursor,
-                        TextKind::Small,
-                        Color::RAYWHITE,
-                    );
-                    cursor += 17.0;
-                    self.draw_bar(inner.x, cursor, inner.width, 9.0, ratio, fill);
-                    cursor += 17.0;
-                }
-                SectionItem::Stat(stat) => {
-                    Self::draw_text(
-                        &format!("{}: {}", stat.label, stat.value),
-                        inner.x,
-                        cursor,
-                        TextKind::Small,
-                        stat.color,
-                    );
-                    cursor += 22.0;
-                }
-                SectionItem::Text(text) => {
-                    cursor = Self::draw_wrapped(
-                        text,
-                        inner.x,
-                        cursor,
-                        inner.width,
-                        TextKind::Small,
-                        Color::LIGHTGRAY,
-                    );
-                }
-            }
-        }
     }
 
     fn draw_panel(&mut self, rect: Rectangle, kind: PanelKind) {
