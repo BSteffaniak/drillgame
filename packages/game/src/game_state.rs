@@ -5190,6 +5190,7 @@ pub enum ModalScreen {
     ResearchLog,
     OnlineMultiplayer,
     Crafting,
+    Inventory,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -6289,6 +6290,13 @@ impl GameState {
         if self.run_mode != RunMode::Title && input_changes_game(input) {
             self.save_dirty = true;
         }
+        if input.inventory {
+            self.modal = if self.modal == Some(ModalScreen::Inventory) {
+                None
+            } else {
+                Some(ModalScreen::Inventory)
+            };
+        }
         if input.map {
             self.modal = if self.modal == Some(ModalScreen::Map) {
                 None
@@ -6396,6 +6404,13 @@ impl GameState {
         }
         if self.run_mode != RunMode::Title && input_changes_game(input) {
             self.save_dirty = true;
+        }
+        if input.inventory {
+            self.modal = if self.modal == Some(ModalScreen::Inventory) {
+                None
+            } else {
+                Some(ModalScreen::Inventory)
+            };
         }
         if input.map {
             self.modal = if self.modal == Some(ModalScreen::Map) {
@@ -9332,6 +9347,7 @@ impl GameState {
                 | ModalScreen::UnsavedExitConfirm
                 | ModalScreen::Map
                 | ModalScreen::Help
+                | ModalScreen::Inventory
                 | ModalScreen::ResearchLog => {}
                 ModalScreen::OnlineMultiplayer => self.confirm_online_multiplayer(),
             }

@@ -60,7 +60,7 @@ impl<'draw, 'handle> UiContext<'draw, 'handle> {
     }
 
     pub(super) fn compact_panel<'ui>(&'ui mut self, rect: Rectangle) -> UiPanel<'ui, 'handle> {
-        self.panel_with_padding(rect, 10)
+        self.panel_with_padding(rect, 6)
     }
 
     fn panel_with_padding<'ui>(

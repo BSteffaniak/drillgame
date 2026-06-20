@@ -118,7 +118,7 @@ fn draw_view_hud_panel(
         x: origin_x,
         y: origin_y,
         width: metric_width,
-        height: 74.0,
+        height: 56.0,
     });
     hull_panel.begin_clip();
     hull_panel.heading(&format!("P{} Hull", view.controlled_player_id.get()));
@@ -129,7 +129,7 @@ fn draw_view_hud_panel(
         x: origin_x + (metric_width + gap),
         y: origin_y,
         width: metric_width,
-        height: 74.0,
+        height: 56.0,
     });
     fuel_panel.begin_clip();
     fuel_panel.heading("Fuel");
@@ -140,7 +140,7 @@ fn draw_view_hud_panel(
         x: origin_x + (metric_width + gap) * 2.0,
         y: origin_y,
         width: metric_width,
-        height: 74.0,
+        height: 56.0,
     });
     cargo_panel.begin_clip();
     cargo_panel.heading("Cargo");
@@ -162,7 +162,7 @@ fn draw_view_hud_panel(
         x: origin_x + (metric_width + gap) * 3.0,
         y: origin_y,
         width: metric_width,
-        height: 74.0,
+        height: 56.0,
     });
     run_panel.begin_clip();
     run_panel.heading("Run");
@@ -174,40 +174,10 @@ fn draw_view_hud_panel(
     );
     drop(run_panel);
 
-    let objective_width = (available_width * 0.58).max(300.0);
-    let mut objective_panel = ui.compact_panel(Rectangle {
-        x: origin_x,
-        y: origin_y + 82.0,
-        width: objective_width,
-        height: 74.0,
-    });
-    objective_panel.begin_clip();
-    objective_panel.heading("Objective");
-    objective_panel.muted(&format!(
-        "{} {}/{} {}",
-        game.contracts.active.title,
-        game.contracts.active.progress(&game.player),
-        game.contracts.active.required,
-        game.contracts.active.target.name()
-    ));
-    drop(objective_panel);
-
-    let mut alert_panel = ui.compact_panel(Rectangle {
-        x: origin_x + objective_width + gap,
-        y: origin_y + 82.0,
-        width: (available_width - objective_width - gap).max(220.0),
-        height: 74.0,
-    });
-    alert_panel.begin_clip();
-    alert_panel.heading("Status");
-    alert_panel.muted(&game.warning_summary());
-    alert_panel.muted(&game.active_world_event_summary());
-    drop(alert_panel);
-
     if game.show_details {
         let detail_width = available_width.min(620.0);
         let detail_x = origin_x;
-        let detail_y = origin_y + 164.0;
+        let detail_y = origin_y + 64.0;
         let mut details = ui.compact_panel(Rectangle {
             x: detail_x,
             y: detail_y,
@@ -498,6 +468,7 @@ fn draw_modal_ui(
             ],
         ),
         ModalScreen::ResearchLog => draw_research_log_ui(draw, game),
+        ModalScreen::Inventory => draw_inventory_ui(draw, game),
         ModalScreen::OnlineMultiplayer => draw_online_multiplayer_ui(draw, game),
         ModalScreen::Map => draw_map_ui(draw, game),
         ModalScreen::Help => draw_help_ui(draw),
@@ -681,6 +652,118 @@ fn draw_research_log_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     ));
     panel.separator();
     panel.muted("Use the collection log and expedition board for detailed objectives while the UI migration continues to consolidate data models.");
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "inventory modal summarizes cargo, kits, and rig state"
+)]
+fn draw_inventory_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(880, 560));
+    panel.begin_clip();
+    panel.title("Inventory");
+    panel.muted("Tab/Esc/Backspace closes | cargo, artifacts, consumables, and field kits");
+    panel.separator();
+    panel.progress_bar(
+        "Cargo",
+        game.player.cargo_used() as f32,
+        game.player.cargo_capacity as f32,
+        Color::GOLD,
+        Color::ORANGE,
+    );
+    panel.stat_line(
+        "Credits",
+        &format!("{} cr", game.player.credits),
+        Color::GOLD,
+    );
+    panel.stat_line("Bombs", &format!("{}", game.player.bombs), Color::ORANGE);
+    panel.separator();
+    panel.heading("Minerals");
+    if game.player.cargo.is_empty() {
+        panel.muted("No minerals onboard.");
+    } else {
+        for (mineral, quantity) in &game.player.cargo {
+            let value = game
+                .mineral_market_value(*mineral)
+                .saturating_mul(*quantity);
+            panel.stat_line(
+                mineral.name(),
+                &format!("x{quantity} | est. {value} cr"),
+                Color::RAYWHITE,
+            );
+        }
+    }
+    panel.separator();
+    panel.heading("Artifacts");
+    if game.player.artifacts.is_empty() {
+        panel.muted("No artifacts onboard.");
+    } else {
+        for (artifact, quantity) in &game.player.artifacts {
+            panel.stat_line(
+                artifact.name(),
+                &format!(
+                    "x{quantity} | base {} cr",
+                    artifact.value().saturating_mul(*quantity)
+                ),
+                Color::MAGENTA,
+            );
+        }
+    }
+    panel.separator();
+    panel.heading("Field Kits");
+    for (label, count) in [
+        ("Signal relays", game.player.signal_relay_kits),
+        ("Survey drones", game.player.survey_drone_kits),
+        ("Cargo lifts", game.player.cargo_lift_kits),
+        ("Tunnel supports", game.player.tunnel_support_kits),
+        ("Pump stations", game.player.pump_station_kits),
+        ("Ore processors", game.player.ore_processor_kits),
+    ] {
+        panel.stat_line(
+            label,
+            &format!("{count}"),
+            if count > 0 { Color::LIME } else { Color::GRAY },
+        );
+    }
+    panel.separator();
+    panel.heading("Rig");
+    panel.stat_line(
+        "Drill",
+        &format!("tier {}", game.player.drill_strength),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Engine",
+        &format!("tier {}", game.player.engine_level),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Fuel Tank",
+        &format!("tier {}", game.player.fuel_tank_level),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Cargo Bay",
+        &format!("tier {}", game.player.cargo_bay_level),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Hull",
+        &format!("tier {}", game.player.hull_level),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Radiator",
+        &format!("tier {}", game.player.radiator_level),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Scanner",
+        &format!("tier {}", game.player.scanner_level),
+        Color::LIGHTGRAY,
+    );
 }
 
 fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {

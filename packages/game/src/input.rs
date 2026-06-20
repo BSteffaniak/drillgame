@@ -22,6 +22,7 @@ pub struct PlayerInput {
     pub menu_left: bool,
     pub menu_right: bool,
     pub details: bool,
+    pub inventory: bool,
     pub save: bool,
     pub load: bool,
     pub selected_upgrade: Option<usize>,
@@ -135,6 +136,7 @@ pub fn combine_player_input(primary: PlayerInput, secondary: PlayerInput) -> Pla
         menu_left: primary.menu_left || secondary.menu_left,
         menu_right: primary.menu_right || secondary.menu_right,
         details: primary.details || secondary.details,
+        inventory: primary.inventory || secondary.inventory,
         save: primary.save || secondary.save,
         load: primary.load || secondary.load,
         selected_upgrade: primary.selected_upgrade.or(secondary.selected_upgrade),
@@ -182,6 +184,9 @@ fn read_primary_keyboard_input_with_options(
         || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_UP));
     let down = raylib.is_key_down(KeyboardKey::KEY_S)
         || (include_arrow_aliases && raylib.is_key_down(KeyboardKey::KEY_DOWN));
+    let ctrl_down = raylib.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
+        || raylib.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
+    let tab_pressed = raylib.is_key_pressed(KeyboardKey::KEY_TAB);
     let text_input = raylib.get_char_pressed();
 
     PlayerInput {
@@ -202,7 +207,8 @@ fn read_primary_keyboard_input_with_options(
             || raylib.is_key_pressed(KeyboardKey::KEY_A),
         menu_right: raylib.is_key_pressed(KeyboardKey::KEY_RIGHT)
             || raylib.is_key_pressed(KeyboardKey::KEY_D),
-        details: raylib.is_key_down(KeyboardKey::KEY_TAB),
+        details: ctrl_down && raylib.is_key_down(KeyboardKey::KEY_TAB),
+        inventory: tab_pressed && !ctrl_down,
         save: raylib.is_key_pressed(KeyboardKey::KEY_F5),
         load: raylib.is_key_pressed(KeyboardKey::KEY_F9),
         selected_upgrade: selected_upgrade(raylib),
