@@ -59,6 +59,10 @@ impl<'draw, 'handle> UiContext<'draw, 'handle> {
         self.panel_with_padding(rect, self.theme.padding)
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy measured panel helper retained during layout engine rollout"
+    )]
     pub(super) fn compact_panel<'ui>(&'ui mut self, rect: Rectangle) -> UiPanel<'ui, 'handle> {
         self.panel_with_padding(rect, 6)
     }
@@ -157,11 +161,19 @@ impl UiPanel<'_, '_> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy measured panel helper retained during layout engine rollout"
+    )]
     pub(super) fn stat_line(&mut self, label: &str, value: &str, color: Color) {
         let text = format!("{label}: {value}");
         self.wrapped_text(&text, TextStyle::Small, color);
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy measured panel helper retained during layout engine rollout"
+    )]
     pub(super) fn progress_bar(
         &mut self,
         label: &str,

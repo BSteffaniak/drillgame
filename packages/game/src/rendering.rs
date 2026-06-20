@@ -9,6 +9,7 @@
 use raylib::{ffi, prelude::*};
 
 mod interior;
+mod layout;
 mod screen;
 mod terrain;
 mod ui;
