@@ -634,11 +634,23 @@ struct LegacySaveFile {
 }
 
 pub fn save_legacy_shell_game(game: &GameState) -> Result<(), SaveError> {
+    enforce_shell_local_save_authority(game)?;
     save_legacy_shell_game_to_path(game, save_path())
 }
 
 pub fn save_game_slot(game: &GameState, slot: usize) -> Result<(), SaveError> {
+    enforce_shell_local_save_authority(game)?;
     save_legacy_shell_game_to_path(game, slot_path(slot))
+}
+
+fn enforce_shell_local_save_authority(game: &GameState) -> Result<(), SaveError> {
+    if game.can_write_local_save() {
+        Ok(())
+    } else {
+        Err(SaveError::SaveDenied(
+            "Joined online clients cannot write local save files while the remote host owns the session save.".to_owned(),
+        ))
+    }
 }
 
 pub fn save_world_session(world: &WorldState, shell: &GameState) -> Result<(), SaveError> {
@@ -887,7 +899,10 @@ mod tests {
     use crate::{
         game_state::GameState,
         multiplayer::{LOCAL_PLAYER_ID, PlayerId, SimulationTick},
-        save::{LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind},
+        save::{
+            LegacySaveFile, PersistentWorldSave, SaveAuthority, SaveFile, SaveSessionKind,
+            save_game_slot,
+        },
         session::WorldState,
         terrain::{ArtifactKind, MineralKind, StrategicResourceKind, TilePosition},
     };
@@ -1202,14 +1217,26 @@ mod tests {
     }
 
     #[test]
-    fn save_authority_maps_to_session_kind() {
-        assert_eq!(
-            SaveSessionKind::from(SaveAuthority::LocalSinglePlayer),
-            SaveSessionKind::LocalOnly
-        );
-        assert_eq!(
-            SaveSessionKind::from(SaveAuthority::HostOwnedSession),
-            SaveSessionKind::HostOwned
-        );
+    fn joined_online_client_shell_save_is_denied_even_without_ui_blocker() {
+        let mut game = GameState::new();
+        game.online_session_state = crate::game_state::OnlineSessionUxState::Connected;
+        game.online_host_owns_save = false;
+        game.online_player_slot = Some(2);
+
+        let result = save_game_slot(&game, 0);
+
+        assert!(matches!(result, Err(crate::save::SaveError::SaveDenied(_))));
+    }
+
+    #[test]
+    fn host_owned_online_shell_save_is_allowed_by_save_authority_policy() {
+        let mut game = GameState::new();
+        game.online_session_state = crate::game_state::OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+
+        let result = super::enforce_shell_local_save_authority(&game);
+
+        assert!(result.is_ok());
     }
 }

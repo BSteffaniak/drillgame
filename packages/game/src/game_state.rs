@@ -6204,7 +6204,7 @@ impl GameState {
         OnlineFailureStatus::classify(error).player_message
     }
 
-    const fn can_write_local_save(&self) -> bool {
+    const fn online_local_save_allowed(&self) -> bool {
         !matches!(
             self.online_session_state,
             OnlineSessionUxState::Hosting
@@ -6214,8 +6214,14 @@ impl GameState {
         ) || self.online_host_owns_save
     }
 
+    #[must_use]
+    pub const fn can_write_local_save(&self) -> bool {
+        self.online_local_save_allowed()
+    }
+
+    #[must_use]
     pub const fn online_save_exit_policy(&self) -> OnlineSaveExitPolicy {
-        let local_allowed = self.can_write_local_save();
+        let local_allowed = self.online_local_save_allowed();
         OnlineSaveExitPolicy {
             save_authority: if local_allowed {
                 OnlineSaveAuthority::LocalPlayer
@@ -6238,7 +6244,7 @@ impl GameState {
     }
 
     fn block_joined_client_load(&mut self) -> bool {
-        if self.can_write_local_save() {
+        if self.online_local_save_allowed() {
             return false;
         }
         let message = "Load blocked: host owns the online session save; leave the session before loading a local save.";
@@ -6248,7 +6254,7 @@ impl GameState {
     }
 
     fn block_joined_client_save(&mut self) -> bool {
-        if self.can_write_local_save() {
+        if self.online_local_save_allowed() {
             return false;
         }
         let message = "Save blocked: host owns the online session save; joined clients cannot write local saves.";
