@@ -2192,6 +2192,145 @@ impl OnlineReconnectAttemptDecision {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "LAN/VPN QA readiness mirrors independent manual network setup requirements"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLanVpnQaReadinessStatus {
+    pub descriptor_json_path: bool,
+    pub host_bind_listens: bool,
+    pub advertised_address_shareable: bool,
+    pub client_bind_valid: bool,
+    pub lan_or_vpn_address_configured: bool,
+    pub host_join_commands_visible: bool,
+    pub ready_for_same_machine: bool,
+    pub ready_for_lan_or_vpn: bool,
+    pub status: String,
+}
+
+impl OnlineLanVpnQaReadinessStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let descriptor_json_path = game
+            .online_descriptor_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        let host_bind_listens = game.online_host_bind_addr.port() != 0;
+        let advertised_address_shareable = game.online_host_advertise_addr.port() != 0
+            && !game.online_host_advertise_addr.ip().is_unspecified();
+        let client_bind_valid = game.online_client_bind_addr.port() != 0;
+        let advertise_ip = game.online_host_advertise_addr.ip();
+        let lan_or_vpn_address_configured = advertised_address_shareable
+            && !advertise_ip.is_loopback()
+            && !advertise_ip.is_unspecified();
+        let setup_lines = game.online_direct_connect_setup_lines();
+        let host_join_commands_visible = setup_lines
+            .iter()
+            .any(|line| line.contains("Host CLI helper"))
+            && setup_lines
+                .iter()
+                .any(|line| line.contains("Join CLI helper"));
+        let ready_for_same_machine = descriptor_json_path
+            && host_bind_listens
+            && advertised_address_shareable
+            && client_bind_valid
+            && host_join_commands_visible;
+        let ready_for_lan_or_vpn = ready_for_same_machine && lan_or_vpn_address_configured;
+        let status = format!(
+            "Online LAN/VPN QA readiness: same_machine={} lan_vpn={} descriptor_json={} host_bind={} advertise_shareable={} client_bind={} lan_vpn_addr={} commands_visible={} descriptor={} bind={} advertise={} client={}",
+            yes_no(ready_for_same_machine),
+            yes_no(ready_for_lan_or_vpn),
+            yes_no(descriptor_json_path),
+            yes_no(host_bind_listens),
+            yes_no(advertised_address_shareable),
+            yes_no(client_bind_valid),
+            yes_no(lan_or_vpn_address_configured),
+            yes_no(host_join_commands_visible),
+            game.online_descriptor_path.display(),
+            game.online_host_bind_addr,
+            game.online_host_advertise_addr,
+            game.online_client_bind_addr
+        );
+        Self {
+            descriptor_json_path,
+            host_bind_listens,
+            advertised_address_shareable,
+            client_bind_valid,
+            lan_or_vpn_address_configured,
+            host_join_commands_visible,
+            ready_for_same_machine,
+            ready_for_lan_or_vpn,
+            status,
+        }
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "soak readiness separates local, degraded, and long-run runtime evidence"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSoakReadinessStatus {
+    pub local_smoke_ticks_configured: bool,
+    pub long_soak_ticks_configured: bool,
+    pub degraded_soak_evidence: bool,
+    pub runtime_sync_evidence: bool,
+    pub shutdown_recovery_evidence: bool,
+    pub ready_for_local_soak: bool,
+    pub ready_for_degraded_soak: bool,
+    pub status: String,
+}
+
+impl OnlineSoakReadinessStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let local_smoke_ticks_configured = game.online_gameplay_ticks >= 60;
+        let long_soak_ticks_configured = game.online_gameplay_ticks >= 300;
+        let runtime_sync_evidence = !game.online_last_sync_loop_status.is_empty()
+            || !game.online_last_replication_status.is_empty()
+            || !game.online_last_gameplay_sync_evidence_status.is_empty();
+        let degraded_soak_evidence = game.online_last_failure_status.contains("Online failure:")
+            || game.online_diagnostic_last_tick.contains("degraded")
+            || game
+                .online_last_session_boundary_status
+                .contains("transport-closed")
+            || game.online_session_state == OnlineSessionUxState::Reconnecting;
+        let leave_end = OnlineLeaveEndSafetyStatus::from_game(game);
+        let shutdown_recovery_evidence = leave_end.force_kill_not_required
+            && (leave_end.shutdown_acknowledged
+                || leave_end.shutdown_pending
+                || leave_end.peer_notification_evidence
+                || game.online_session_state == OnlineSessionUxState::Connected);
+        let ready_for_local_soak =
+            local_smoke_ticks_configured && runtime_sync_evidence && shutdown_recovery_evidence;
+        let ready_for_degraded_soak =
+            ready_for_local_soak && long_soak_ticks_configured && degraded_soak_evidence;
+        let status = format!(
+            "Online soak readiness: local_soak={} degraded_soak={} smoke_ticks={} long_ticks={} degraded_evidence={} runtime_sync={} shutdown_recovery={} ticks={} state={:?}",
+            yes_no(ready_for_local_soak),
+            yes_no(ready_for_degraded_soak),
+            yes_no(local_smoke_ticks_configured),
+            yes_no(long_soak_ticks_configured),
+            yes_no(degraded_soak_evidence),
+            yes_no(runtime_sync_evidence),
+            yes_no(shutdown_recovery_evidence),
+            game.online_gameplay_ticks,
+            game.online_session_state
+        );
+        Self {
+            local_smoke_ticks_configured,
+            long_soak_ticks_configured,
+            degraded_soak_evidence,
+            runtime_sync_evidence,
+            shutdown_recovery_evidence,
+            ready_for_local_soak,
+            ready_for_degraded_soak,
+            status,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineReconnectPolicy {
     UnsupportedForFirstPlayableMvp,
@@ -7062,6 +7201,8 @@ impl GameState {
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
         lines.push(OnlineReconnectAttemptDecision::from_game(self).status);
+        lines.push(OnlineLanVpnQaReadinessStatus::from_game(self).status);
+        lines.push(OnlineSoakReadinessStatus::from_game(self).status);
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
             self.rig_part_inventory.len(),
@@ -14728,6 +14869,66 @@ mod tests {
             host.message
                 .contains("Host save/session remains local and safe")
         );
+    }
+
+    #[test]
+    fn lan_vpn_qa_readiness_distinguishes_loopback_smoke_from_shareable_lan_config() {
+        let mut same_machine = GameState::new();
+        same_machine.online_descriptor_path = PathBuf::from("/tmp/drillgame-host.json");
+        same_machine.online_host_bind_addr = "127.0.0.1:5000".parse().expect("bind");
+        same_machine.online_host_advertise_addr = "127.0.0.1:5000".parse().expect("advertise");
+        same_machine.online_client_bind_addr = "127.0.0.1:5001".parse().expect("client");
+
+        let same_machine_status = OnlineLanVpnQaReadinessStatus::from_game(&same_machine);
+        assert!(same_machine_status.ready_for_same_machine);
+        assert!(!same_machine_status.ready_for_lan_or_vpn);
+        assert!(same_machine_status.host_join_commands_visible);
+        assert!(same_machine_status.status.contains("same_machine=yes"));
+        assert!(same_machine_status.status.contains("lan_vpn=no"));
+
+        let mut lan = same_machine;
+        lan.online_host_bind_addr = "0.0.0.0:5252".parse().expect("lan bind");
+        lan.online_host_advertise_addr = "192.168.50.25:5252".parse().expect("lan advertise");
+        lan.online_client_bind_addr = "0.0.0.0:5253".parse().expect("lan client");
+        let lan_status = OnlineLanVpnQaReadinessStatus::from_game(&lan);
+        assert!(lan_status.ready_for_same_machine);
+        assert!(lan_status.ready_for_lan_or_vpn);
+        assert!(lan_status.lan_or_vpn_address_configured);
+        assert!(lan_status.status.contains("lan_vpn=yes"));
+        assert!(lan.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online LAN/VPN QA readiness") && line.contains("lan_vpn=yes")
+        }));
+    }
+
+    #[test]
+    fn soak_readiness_requires_runtime_shutdown_and_degraded_evidence_for_degraded_soak() {
+        let mut game = GameState::new();
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_remote_player_connected = true;
+        game.online_gameplay_ticks = 120;
+        game.online_last_sync_loop_status = "snapshot applied: players=2 cargo=yes".to_owned();
+        game.online_last_session_boundary_status =
+            OnlineSessionBoundaryStatus::client_left("prior leave check").status_line();
+
+        let local = OnlineSoakReadinessStatus::from_game(&game);
+        assert!(local.ready_for_local_soak);
+        assert!(!local.ready_for_degraded_soak);
+        assert!(local.runtime_sync_evidence);
+        assert!(local.shutdown_recovery_evidence);
+
+        game.online_gameplay_ticks = 300;
+        game.online_last_failure_status =
+            "Online failure: category=transport simulated degraded loss".to_owned();
+        let degraded = OnlineSoakReadinessStatus::from_game(&game);
+        assert!(degraded.ready_for_local_soak);
+        assert!(degraded.ready_for_degraded_soak);
+        assert!(degraded.degraded_soak_evidence);
+        assert!(degraded.status.contains("degraded_soak=yes"));
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online soak readiness") && line.contains("degraded_soak=yes")
+        }));
     }
 
     #[test]
