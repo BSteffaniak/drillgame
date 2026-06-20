@@ -171,7 +171,7 @@ impl GameRenderer {
         let scroll_delta = ui_scroll_delta(input, MODAL_SCROLL_STEP);
         if scroll_delta.abs() > f32::EPSILON {
             self.ui_state.borrow_mut().scroll_by(
-                layout::widgets::WidgetId("modal-content"),
+                layout::widgets::WidgetId::new("modal-content"),
                 scroll_delta,
                 MODAL_SCROLL_LIMIT,
             );
@@ -179,7 +179,7 @@ impl GameRenderer {
         if input.menu_up || input.menu_down || input.confirm {
             self.ui_state
                 .borrow_mut()
-                .set_focused(layout::widgets::WidgetId("modal-content"));
+                .set_focused(layout::widgets::WidgetId::new("modal-content"));
         }
     }
 

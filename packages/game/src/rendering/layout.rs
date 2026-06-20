@@ -368,7 +368,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         node.layout(body);
         if let widgets::UiNode::Scroll(scroll) = &node {
             set_current_scroll_limit(
-                widgets::WidgetId("modal-content"),
+                widgets::WidgetId::new("modal-content"),
                 (scroll.content_height - body.height).max(0.0),
             );
         }
@@ -637,7 +637,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
         }
     }
     widgets::UiNode::Scroll(widgets::ScrollNode::vertical(
-        current_scroll_offset(widgets::WidgetId("modal-content")),
+        current_scroll_offset(&widgets::WidgetId::new("modal-content")),
         widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, sections)),
     ))
 }
@@ -797,8 +797,14 @@ pub(super) mod widgets {
     use raylib::prelude::{Color, Rectangle};
     use std::collections::BTreeMap;
 
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-    pub(in crate::rendering) struct WidgetId(pub(in crate::rendering) &'static str);
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub(in crate::rendering) struct WidgetId(String);
+
+    impl WidgetId {
+        pub(in crate::rendering) fn new(id: impl Into<String>) -> Self {
+            Self(id.into())
+        }
+    }
 
     #[derive(Clone, Debug, Default)]
     pub(in crate::rendering) struct UiState {
@@ -808,33 +814,33 @@ pub(super) mod widgets {
     }
 
     impl UiState {
-        pub(super) const fn focused(&self) -> Option<WidgetId> {
-            self.focused
+        pub(super) fn focused(&self) -> Option<WidgetId> {
+            self.focused.clone()
         }
 
-        pub(in crate::rendering) const fn set_focused(&mut self, id: WidgetId) {
+        pub(in crate::rendering) fn set_focused(&mut self, id: WidgetId) {
             self.focused = Some(id);
         }
 
-        pub(super) fn scroll_offset(&self, id: WidgetId) -> f32 {
-            self.scroll_offsets.get(&id).copied().unwrap_or(0.0)
+        pub(super) fn scroll_offset(&self, id: &WidgetId) -> f32 {
+            self.scroll_offsets.get(id).copied().unwrap_or(0.0)
         }
 
         pub(super) fn set_scroll_offset(&mut self, id: WidgetId, offset: f32) {
-            let limit = self.scroll_limit(id);
+            let limit = self.scroll_limit(&id);
             self.scroll_offsets.insert(id, offset.clamp(0.0, limit));
         }
 
         pub(in crate::rendering) fn set_scroll_limit(&mut self, id: WidgetId, max_offset: f32) {
             let max_offset = max_offset.max(0.0);
-            self.scroll_limits.insert(id, max_offset);
-            let offset = self.scroll_offset(id).min(max_offset);
+            self.scroll_limits.insert(id.clone(), max_offset);
+            let offset = self.scroll_offset(&id).min(max_offset);
             self.scroll_offsets.insert(id, offset);
         }
 
-        pub(super) fn scroll_limit(&self, id: WidgetId) -> f32 {
+        pub(super) fn scroll_limit(&self, id: &WidgetId) -> f32 {
             self.scroll_limits
-                .get(&id)
+                .get(id)
                 .copied()
                 .unwrap_or(f32::MAX / 4.0)
         }
@@ -845,8 +851,8 @@ pub(super) mod widgets {
             delta: f32,
             max_offset: f32,
         ) {
-            let limit = self.scroll_limit(id).min(max_offset.max(0.0));
-            let next = (self.scroll_offset(id) + delta).clamp(0.0, limit);
+            let limit = self.scroll_limit(&id).min(max_offset.max(0.0));
+            let next = (self.scroll_offset(&id) + delta).clamp(0.0, limit);
             self.scroll_offsets.insert(id, next);
         }
     }
@@ -1579,7 +1585,7 @@ fn set_current_scroll_limit(id: widgets::WidgetId, max_offset: f32) {
     });
 }
 
-fn current_scroll_offset(id: widgets::WidgetId) -> f32 {
+fn current_scroll_offset(id: &widgets::WidgetId) -> f32 {
     CURRENT_UI_STATE.with(|current| {
         current
             .borrow()
@@ -1764,18 +1770,18 @@ mod tests {
     #[test]
     fn ui_state_tracks_focus_and_scroll_offsets() {
         use widgets::{UiState, WidgetId};
-        let inventory = WidgetId("inventory");
-        let depot = WidgetId("depot");
+        let inventory = WidgetId::new("inventory");
+        let depot = WidgetId::new("depot");
         let mut state = UiState::default();
         assert_eq!(state.focused(), None);
-        state.set_focused(inventory);
-        assert_eq!(state.focused(), Some(inventory));
-        state.set_scroll_offset(inventory, 12.0);
-        state.set_scroll_limit(inventory, 15.0);
-        state.scroll_by(inventory, 10.0, 18.0);
-        state.scroll_by(depot, -10.0, 100.0);
-        assert_near(state.scroll_offset(inventory), 15.0);
-        assert_near(state.scroll_offset(depot), 0.0);
+        state.set_focused(inventory.clone());
+        assert_eq!(state.focused(), Some(inventory.clone()));
+        state.set_scroll_offset(inventory.clone(), 12.0);
+        state.set_scroll_limit(inventory.clone(), 15.0);
+        state.scroll_by(inventory.clone(), 10.0, 18.0);
+        state.scroll_by(depot.clone(), -10.0, 100.0);
+        assert_near(state.scroll_offset(&inventory), 15.0);
+        assert_near(state.scroll_offset(&depot), 0.0);
     }
 
     #[test]
