@@ -1183,6 +1183,7 @@ pub struct OnlineGameplayHudPresentation {
     pub save_policy_label: String,
     pub session_label: String,
     pub gameplay_entry_label: String,
+    pub directional_sync_label: String,
     pub replication_label: String,
     pub terrain_label: String,
     pub authority_label: String,
@@ -1206,6 +1207,7 @@ impl OnlineGameplayHudPresentation {
             self.save_policy_label.clone(),
             self.session_label.clone(),
             self.gameplay_entry_label.clone(),
+            self.directional_sync_label.clone(),
             self.replication_label.clone(),
             self.terrain_label.clone(),
             self.authority_label.clone(),
@@ -2140,6 +2142,7 @@ impl OnlineManualWorkingGameGateStatus {
         let failures_triaged = game.online_last_failure_status.is_empty()
             || game.online_last_failure_status.contains("Online failure:")
             || game.online_last_failure_status.contains("category=");
+        let directional = OnlineDirectionalGameplaySyncStatus::from_game(game);
         let ready = two_instances_ready
             && ui_host_join_ready
             && ui_ready_start_ready
@@ -2147,9 +2150,10 @@ impl OnlineManualWorkingGameGateStatus {
             && mining_observable
             && survival_observable
             && shutdown_safe
-            && failures_triaged;
+            && failures_triaged
+            && directional.both_directions_visible;
         let status = format!(
-            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} role={} slot={}",
+            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} directional={} role={} slot={}",
             yes_no(ready),
             yes_no(two_instances_ready),
             yes_no(ui_host_join_ready),
@@ -2159,6 +2163,7 @@ impl OnlineManualWorkingGameGateStatus {
             yes_no(survival_observable),
             yes_no(shutdown_safe),
             yes_no(failures_triaged),
+            yes_no(directional.both_directions_visible),
             game.online_role_label(),
             game.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
@@ -2252,6 +2257,103 @@ impl OnlineSustainedMiningSessionStatus {
             save_boundary_safe,
             status,
         }
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "directional multiplayer status mirrors product validation rows for both peers"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineDirectionalGameplaySyncStatus {
+    pub gameplay_active: bool,
+    pub host_movement_visible: bool,
+    pub client_movement_visible: bool,
+    pub host_mining_visible: bool,
+    pub client_mining_visible: bool,
+    pub host_sees_client: bool,
+    pub client_sees_host: bool,
+    pub both_directions_visible: bool,
+    pub status: String,
+}
+
+impl OnlineDirectionalGameplaySyncStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let gameplay_active = game.run_mode == RunMode::Playing
+            && game.online_session_state == OnlineSessionUxState::Connected
+            && game.modal.is_none();
+        let is_host = game.online_host_owns_save && game.online_player_slot == Some(1);
+        let is_client = !game.online_host_owns_save && game.online_player_slot == Some(2);
+        let local_moving = game.player.velocity_x.abs() > f32::EPSILON
+            || game.player.velocity_y.abs() > f32::EPSILON
+            || game.online_last_replicated_player_status.contains("local")
+            || game.update_ticks > 0;
+        let remote_moving = game.online_remote_player_connected
+            && (!game.online_remote_player_snapshots.is_empty()
+                || game
+                    .online_last_replicated_player_status
+                    .contains("updated")
+                || game.online_last_sync_loop_status.contains("player_delta"));
+        let terrain_changed = game.online_last_terrain_status.contains("applied chunk")
+            || game.online_last_terrain_status.contains("visible tiles")
+            || game.online_last_terrain_status.contains("highlighted")
+            || game.online_last_sync_loop_status.contains("terrain")
+            || !game.online_terrain_sync_markers.is_empty();
+        let local_mining = terrain_changed
+            || game.online_last_terrain_status.contains("answered chunk")
+            || game.online_last_replication_status.contains("world delta")
+            || game.online_last_sync_loop_status.contains("delta");
+        let remote_mining = terrain_changed
+            || game.online_last_terrain_status.contains("applied chunk")
+            || game.online_last_terrain_status.contains("requested chunk");
+        let host_movement_visible = (is_host && local_moving) || (is_client && remote_moving);
+        let client_movement_visible = (is_client && local_moving) || (is_host && remote_moving);
+        let host_mining_visible = (is_host && local_mining) || (is_client && remote_mining);
+        let client_mining_visible = (is_client && local_mining) || (is_host && remote_mining);
+        let host_sees_client = is_host && (client_movement_visible || client_mining_visible);
+        let client_sees_host = is_client && (host_movement_visible || host_mining_visible);
+        let both_directions_visible = gameplay_active
+            && host_movement_visible
+            && client_movement_visible
+            && host_mining_visible
+            && client_mining_visible;
+        let status = format!(
+            "Online directional gameplay sync: active={} host_moves={} client_moves={} host_mines={} client_mines={} host_sees_client={} client_sees_host={} both_directions={} role={} slot={}",
+            yes_no(gameplay_active),
+            yes_no(host_movement_visible),
+            yes_no(client_movement_visible),
+            yes_no(host_mining_visible),
+            yes_no(client_mining_visible),
+            yes_no(host_sees_client),
+            yes_no(client_sees_host),
+            yes_no(both_directions_visible),
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        );
+        Self {
+            gameplay_active,
+            host_movement_visible,
+            client_movement_visible,
+            host_mining_visible,
+            client_mining_visible,
+            host_sees_client,
+            client_sees_host,
+            both_directions_visible,
+            status,
+        }
+    }
+
+    #[must_use]
+    pub fn hud_line(&self) -> String {
+        format!(
+            "Directional sync: host move={} mine={} | client move={} mine={}",
+            yes_no(self.host_movement_visible),
+            yes_no(self.host_mining_visible),
+            yes_no(self.client_movement_visible),
+            yes_no(self.client_mining_visible)
+        )
     }
 }
 
@@ -6558,6 +6660,7 @@ impl GameState {
         } else {
             self.online_last_gameplay_entry_status.clone()
         });
+        lines.push(OnlineDirectionalGameplaySyncStatus::from_game(self).status);
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
@@ -7033,6 +7136,8 @@ impl GameState {
             }
         );
         let gameplay_entry_label = OnlineGameplayEntryPresentation::from_game(self).hud_line();
+        let directional_sync_label =
+            OnlineDirectionalGameplaySyncStatus::from_game(self).hud_line();
         let replication_label = if self.online_last_replicated_player_status.is_empty() {
             "Player sync: waiting for replicated player state.".to_owned()
         } else {
@@ -7079,6 +7184,7 @@ impl GameState {
             save_policy_label,
             session_label,
             gameplay_entry_label,
+            directional_sync_label,
             replication_label,
             terrain_label,
             authority_label,
@@ -14251,7 +14357,8 @@ mod tests {
                 materials: BTreeMap::new(),
             });
         game.online_last_replicated_player_status = "updated remote player 2".to_owned();
-        game.online_last_terrain_status = "answered chunk (0,0) rev 2".to_owned();
+        game.player.velocity_x = 0.25;
+        game.online_last_terrain_status = "applied chunk (0,0) rev 2: 4 visible tiles".to_owned();
         game.online_last_replication_status = "host sent snapshot with cargo".to_owned();
         game.online_last_sync_loop_status =
             "snapshot applied: players=2 cargo=yes terrain=yes".to_owned();
@@ -14277,6 +14384,61 @@ mod tests {
         assert!(game.online_multiplayer_status_lines().iter().any(|line| {
             line.contains("Online manual working-game gate") && line.contains("ready=yes")
         }));
+    }
+
+    #[test]
+    fn directional_gameplay_sync_status_tracks_host_and_client_visibility_evidence() {
+        let mut host = GameState::new();
+        host.run_mode = RunMode::Playing;
+        host.modal = None;
+        host.online_session_state = OnlineSessionUxState::Connected;
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        host.online_remote_player_connected = true;
+        host.player.velocity_x = 1.0;
+        host.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 12.0,
+                y: 18.0,
+                velocity_x: -0.25,
+                velocity_y: 0.0,
+                fuel: 80.0,
+                hull: 90.0,
+                credits: 10,
+                cargo_used: 2,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+        host.apply_online_replicated_player_status("updated remote player 2 from command packet");
+        host.apply_online_terrain_status("applied chunk (0,0) rev 3: 6 visible tiles");
+
+        let host_status = OnlineDirectionalGameplaySyncStatus::from_game(&host);
+        assert!(host_status.gameplay_active);
+        assert!(host_status.host_movement_visible);
+        assert!(host_status.client_movement_visible);
+        assert!(host_status.host_mining_visible);
+        assert!(host_status.client_mining_visible);
+        assert!(host_status.host_sees_client);
+        assert!(host_status.both_directions_visible);
+        assert!(host_status.status.contains("both_directions=yes"));
+        assert!(
+            host.online_gameplay_hud_presentation()
+                .lines()
+                .iter()
+                .any(|line| line.contains("Directional sync") && line.contains("client move=yes"))
+        );
+
+        let mut client = host.clone();
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_remote_player_snapshots[0].player_id = crate::multiplayer::PlayerId::new(1);
+        let client_status = OnlineDirectionalGameplaySyncStatus::from_game(&client);
+        assert!(client_status.client_sees_host);
+        assert!(client_status.host_movement_visible);
+        assert!(client_status.client_movement_visible);
+        assert!(client_status.both_directions_visible);
     }
 
     #[test]
@@ -14316,6 +14478,7 @@ mod tests {
         client.online_remote_player_ready = true;
         client.online_remote_player_connected = true;
         client.save_dirty = true;
+        client.player.velocity_x = -0.5;
         client.player.fuel = 55.0;
         client.player.hull = 66.0;
         client
@@ -14335,7 +14498,7 @@ mod tests {
                 materials: BTreeMap::new(),
             });
         client.online_last_replicated_player_status = "updated host player".to_owned();
-        client.online_last_terrain_status = "applied chunk (0,0) rev 3".to_owned();
+        client.online_last_terrain_status = "applied chunk (0,0) rev 3: 5 visible tiles".to_owned();
         client.online_last_replication_status = "client received snapshot with cargo".to_owned();
         client.online_last_sync_loop_status =
             "snapshot applied: players=2 cargo=yes terrain=yes".to_owned();
