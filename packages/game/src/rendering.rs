@@ -96,8 +96,16 @@ fn load_ui_font(
     data: &[u8],
     font_size: i32,
 ) -> Option<Font> {
-    match raylib.load_font_from_memory(thread, ".ttf", data, font_size, None) {
-        Ok(font) => Some(font),
+    match raylib.load_font_from_memory(thread, ".ttf", data, font_size * 2, None) {
+        Ok(font) => {
+            unsafe {
+                ffi::SetTextureFilter(
+                    font.texture,
+                    ffi::TextureFilter::TEXTURE_FILTER_BILINEAR as i32,
+                );
+            }
+            Some(font)
+        }
         Err(error) => {
             eprintln!("Failed to load embedded UI font {name}: {error}");
             None

@@ -529,6 +529,7 @@ impl OnlineTaskDispatcher {
 pub fn run() {
     let (mut raylib, thread) = raylib::init()
         .size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .highdpi()
         .title("Drillgame")
         .build();
 
