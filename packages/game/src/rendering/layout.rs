@@ -618,6 +618,9 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
                     let id = widgets::WidgetId::new(format!("modal-option-{selectable_index}"));
                     selectable_index += 1;
                     let selected = stat.label.trim_start().starts_with('>');
+                    if selected {
+                        set_current_focused_id(id.clone());
+                    }
                     let focused =
                         selected || focused_id.as_ref().is_some_and(|focused| focused == &id);
                     sections.push(widgets::UiNode::Button(widgets::ButtonNode::identified(
@@ -1609,6 +1612,14 @@ fn set_current_scroll_limit(id: widgets::WidgetId, max_offset: f32) {
     });
 }
 
+fn set_current_focused_id(id: widgets::WidgetId) {
+    CURRENT_UI_STATE.with(|current| {
+        if let Some(state) = current.borrow_mut().as_mut() {
+            state.set_focused(id);
+        }
+    });
+}
+
 fn current_focused_id() -> Option<widgets::WidgetId> {
     CURRENT_UI_STATE.with(|current| {
         current
@@ -1838,6 +1849,47 @@ mod tests {
         assert!(matches!(plan.commands()[1], RenderCommand::Clip { .. }));
         assert!(matches!(plan.commands()[2], RenderCommand::Text { .. }));
         assert!(matches!(plan.commands()[3], RenderCommand::EndClip));
+    }
+
+    #[test]
+    fn modal_selectable_rows_emit_stable_button_ids_and_focus_selected_row() {
+        let content = ModalContent::new(vec![Section::new(
+            "Options",
+            Color::SKYBLUE,
+            vec![
+                SectionItem::stat("  First", "", Color::RAYWHITE),
+                SectionItem::stat("> Second", "", Color::GOLD),
+            ],
+        )]);
+        set_current_ui_state(widgets::UiState::default());
+        let mut node = modal_content_node(&content, 240.0);
+        node.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 100.0,
+        });
+        let plan = node.render_plan();
+        assert!(plan.commands().iter().any(|command| matches!(
+            command,
+            widgets::RenderCommand::Button {
+                id: Some(id),
+                focused: false,
+                ..
+            } if id == &widgets::WidgetId::new("modal-option-0")
+        )));
+        assert!(plan.commands().iter().any(|command| matches!(
+            command,
+            widgets::RenderCommand::Button {
+                id: Some(id),
+                focused: true,
+                ..
+            } if id == &widgets::WidgetId::new("modal-option-1")
+        )));
+        assert_eq!(
+            take_current_ui_state().and_then(|state| state.focused()),
+            Some(widgets::WidgetId::new("modal-option-1")),
+        );
     }
 
     #[test]
