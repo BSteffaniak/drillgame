@@ -1602,6 +1602,7 @@ thread_local! {
 
 pub(super) fn set_current_fonts(fonts: UiFonts) {
     CURRENT_UI_FONTS.with(|current| *current.borrow_mut() = Some(fonts));
+    TEXT_MEASURE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 pub(super) fn set_current_ui_state(state: widgets::UiState) {
@@ -1665,19 +1666,91 @@ fn wrap_text_with_measure(
     if text.is_empty() {
         return vec![String::new()];
     }
+
+    let width = width.max(0.0);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        if paragraph.trim().is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        wrap_paragraph(paragraph, width, &mut measure, &mut lines);
+    }
+    lines
+}
+
+fn wrap_paragraph(
+    paragraph: &str,
+    width: f32,
+    measure: &mut impl FnMut(&str) -> f32,
+    lines: &mut Vec<String>,
+) {
+    let mut current = String::new();
+    for word in paragraph.split_whitespace() {
+        if word_fits_or_width_is_unbounded(word, width, measure) {
+            append_word_or_flush_line(word, width, measure, lines, &mut current);
+        } else {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.extend(split_oversized_word(word, width, measure));
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+}
+
+fn append_word_or_flush_line(
+    word: &str,
+    width: f32,
+    measure: &mut impl FnMut(&str) -> f32,
+    lines: &mut Vec<String>,
+    current: &mut String,
+) {
+    let candidate = if current.is_empty() {
+        word.to_owned()
+    } else {
+        format!("{current} {word}")
+    };
+    if measure(&candidate) <= width || current.is_empty() {
+        current.clone_from(&candidate);
+    } else {
+        lines.push(std::mem::take(current));
+        current.push_str(word);
+    }
+}
+
+fn word_fits_or_width_is_unbounded(
+    word: &str,
+    width: f32,
+    measure: &mut impl FnMut(&str) -> f32,
+) -> bool {
+    measure(word) <= width
+}
+
+fn split_oversized_word(
+    word: &str,
+    width: f32,
+    measure: &mut impl FnMut(&str) -> f32,
+) -> Vec<String> {
+    if width <= f32::EPSILON {
+        return word
+            .chars()
+            .map(|character| character.to_string())
+            .collect();
+    }
+
     let mut lines = Vec::new();
     let mut current = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if current.is_empty() {
-            word.to_owned()
-        } else {
-            format!("{current} {word}")
-        };
-        if measure(&candidate) <= width || current.is_empty() {
-            current.clone_from(&candidate);
+    for character in word.chars() {
+        let mut candidate = current.clone();
+        candidate.push(character);
+        if current.is_empty() || measure(&candidate) <= width {
+            current = candidate;
         } else {
             lines.push(std::mem::take(&mut current));
-            current.clone_from(&word.to_owned());
+            current.push(character);
         }
     }
     if !current.is_empty() {
@@ -1714,6 +1787,18 @@ mod tests {
     fn text_wrap_respects_max_width_for_word_boundaries() {
         let lines = wrap_text_with_measure("alpha beta gamma", 10.0, |text| text.len() as f32);
         assert_eq!(lines, ["alpha beta", "gamma"]);
+    }
+
+    #[test]
+    fn text_wrap_preserves_explicit_newlines_and_splits_oversized_words() {
+        let lines = wrap_text_with_measure("superlong\nnext", 5.0, |text| text.len() as f32);
+        assert_eq!(lines, ["super", "long", "next"]);
+    }
+
+    #[test]
+    fn text_wrap_handles_blank_lines_and_zero_width() {
+        let lines = wrap_text_with_measure("a\n\nb", 0.0, |text| text.len() as f32);
+        assert_eq!(lines, ["a", "", "b"]);
     }
 
     #[test]
