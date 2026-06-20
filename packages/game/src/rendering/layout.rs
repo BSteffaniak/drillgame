@@ -740,6 +740,9 @@ mod widgets {
     pub(super) enum RenderCommand {
         Panel { rect: Rectangle },
         Text { rect: Rectangle },
+        Meter { rect: Rectangle, ratio: f32 },
+        Button { rect: Rectangle, focused: bool },
+        Canvas { rect: Rectangle },
         Clip { rect: Rectangle },
         EndClip,
     }
@@ -768,8 +771,12 @@ mod widgets {
     #[derive(Clone, Debug)]
     pub(super) enum UiNode {
         Text(TextNode),
+        Meter(MeterNode),
+        Button(ButtonNode),
+        Canvas(CanvasNode),
         Spacer(SpacerNode),
         Stack(StackNode),
+        Grid(GridNode),
         Panel(PanelNode),
         Scroll(ScrollNode),
     }
@@ -778,8 +785,12 @@ mod widgets {
         pub(super) fn measure(&self, constraints: LayoutConstraints) -> Size {
             match self {
                 Self::Text(node) => node.measure(constraints),
+                Self::Meter(node) => node.measure(constraints),
+                Self::Button(node) => node.measure(constraints),
+                Self::Canvas(node) => node.measure(constraints),
                 Self::Spacer(node) => node.measure(constraints),
                 Self::Stack(node) => node.measure(constraints),
+                Self::Grid(node) => node.measure(constraints),
                 Self::Panel(node) => node.measure(constraints),
                 Self::Scroll(node) => Self::measure_scroll(node, constraints),
             }
@@ -788,8 +799,12 @@ mod widgets {
         pub(super) fn layout(&mut self, rect: Rectangle) {
             match self {
                 Self::Text(node) => node.rect = rect,
+                Self::Meter(node) => node.rect = rect,
+                Self::Button(node) => node.rect = rect,
+                Self::Canvas(node) => node.rect = rect,
                 Self::Spacer(node) => node.rect = rect,
                 Self::Stack(node) => node.layout(rect),
+                Self::Grid(node) => node.layout(rect),
                 Self::Panel(node) => node.layout(rect),
                 Self::Scroll(node) => node.layout(rect),
             }
@@ -798,8 +813,12 @@ mod widgets {
         pub(super) const fn rect(&self) -> Rectangle {
             match self {
                 Self::Text(node) => node.rect,
+                Self::Meter(node) => node.rect,
+                Self::Button(node) => node.rect,
+                Self::Canvas(node) => node.rect,
                 Self::Spacer(node) => node.rect,
                 Self::Stack(node) => node.rect,
+                Self::Grid(node) => node.rect,
                 Self::Panel(node) => node.rect,
                 Self::Scroll(node) => node.rect,
             }
@@ -814,8 +833,22 @@ mod widgets {
         fn collect_render_commands(&self, plan: &mut RenderPlan) {
             match self {
                 Self::Text(node) => plan.push(RenderCommand::Text { rect: node.rect }),
+                Self::Meter(node) => plan.push(RenderCommand::Meter {
+                    rect: node.rect,
+                    ratio: node.ratio,
+                }),
+                Self::Button(node) => plan.push(RenderCommand::Button {
+                    rect: node.rect,
+                    focused: node.focused,
+                }),
+                Self::Canvas(node) => plan.push(RenderCommand::Canvas { rect: node.rect }),
                 Self::Spacer(_) => {}
                 Self::Stack(node) => {
+                    for child in &node.children {
+                        child.collect_render_commands(plan);
+                    }
+                }
+                Self::Grid(node) => {
                     for child in &node.children {
                         child.collect_render_commands(plan);
                     }
@@ -861,6 +894,94 @@ mod widgets {
                 width: self.width,
                 height: self.height,
             })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct MeterNode {
+        pub(super) ratio: f32,
+        pub(super) width: f32,
+        pub(super) height: f32,
+        pub(super) rect: Rectangle,
+    }
+
+    impl MeterNode {
+        pub(super) const fn new(ratio: f32, width: f32, height: f32) -> Self {
+            Self {
+                ratio,
+                width,
+                height,
+                rect: zero_rect(),
+            }
+        }
+
+        const fn measure(&self, constraints: LayoutConstraints) -> Size {
+            constraints.constrain(Size {
+                width: self.width,
+                height: self.height,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct ButtonNode {
+        pub(super) focused: bool,
+        pub(super) width: f32,
+        pub(super) height: f32,
+        pub(super) rect: Rectangle,
+    }
+
+    impl ButtonNode {
+        pub(super) const fn sized(width: f32, height: f32, focused: bool) -> Self {
+            Self {
+                focused,
+                width,
+                height,
+                rect: zero_rect(),
+            }
+        }
+
+        const fn measure(&self, constraints: LayoutConstraints) -> Size {
+            constraints.constrain(Size {
+                width: self.width,
+                height: self.height,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct CanvasNode {
+        pub(super) min_width: f32,
+        pub(super) min_height: f32,
+        pub(super) aspect_ratio: Option<f32>,
+        pub(super) rect: Rectangle,
+    }
+
+    impl CanvasNode {
+        pub(super) const fn new(min_width: f32, min_height: f32) -> Self {
+            Self {
+                min_width,
+                min_height,
+                aspect_ratio: None,
+                rect: zero_rect(),
+            }
+        }
+
+        pub(super) const fn with_aspect_ratio(mut self, aspect_ratio: f32) -> Self {
+            self.aspect_ratio = Some(aspect_ratio);
+            self
+        }
+
+        fn measure(&self, constraints: LayoutConstraints) -> Size {
+            let mut width = constraints.max_width.max(self.min_width);
+            let mut height = constraints.max_height.max(self.min_height);
+            if let Some(aspect_ratio) = self.aspect_ratio
+                && aspect_ratio > f32::EPSILON
+            {
+                height = (width / aspect_ratio).min(height);
+                width = height * aspect_ratio;
+            }
+            constraints.constrain(Size { width, height })
         }
     }
 
@@ -977,6 +1098,90 @@ mod widgets {
                     Axis::Horizontal => size.width + self.gap,
                     Axis::Vertical => size.height + self.gap,
                 };
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct GridNode {
+        pub(super) min_column_width: f32,
+        pub(super) gap: f32,
+        pub(super) children: Vec<UiNode>,
+        pub(super) rect: Rectangle,
+        pub(super) columns: usize,
+    }
+
+    impl GridNode {
+        pub(super) const fn responsive(
+            min_column_width: f32,
+            gap: f32,
+            children: Vec<UiNode>,
+        ) -> Self {
+            Self {
+                min_column_width,
+                gap,
+                children,
+                rect: zero_rect(),
+                columns: 1,
+            }
+        }
+
+        fn column_count(&self, width: f32) -> usize {
+            let span = (self.min_column_width + self.gap).max(1.0);
+            ((width + self.gap) / span).floor().max(1.0) as usize
+        }
+
+        fn measure(&self, constraints: LayoutConstraints) -> Size {
+            let columns = self.column_count(constraints.max_width);
+            let rows = self.children.len().div_ceil(columns).max(1);
+            let column_width = ((constraints.max_width
+                - self.gap * (columns.saturating_sub(1) as f32))
+                / columns as f32)
+                .max(0.0);
+            let mut row_heights = vec![0.0_f32; rows];
+            for (index, child) in self.children.iter().enumerate() {
+                let size = child.measure(LayoutConstraints::loose(
+                    column_width,
+                    constraints.max_height,
+                ));
+                row_heights[index / columns] = row_heights[index / columns].max(size.height);
+            }
+            let height =
+                row_heights.into_iter().sum::<f32>() + self.gap * rows.saturating_sub(1) as f32;
+            constraints.constrain(Size {
+                width: constraints.max_width,
+                height,
+            })
+        }
+
+        fn layout(&mut self, rect: Rectangle) {
+            self.rect = rect;
+            self.columns = self.column_count(rect.width);
+            let column_width = ((rect.width - self.gap * (self.columns.saturating_sub(1) as f32))
+                / self.columns as f32)
+                .max(0.0);
+            let rows = self.children.len().div_ceil(self.columns).max(1);
+            let mut row_heights = vec![0.0_f32; rows];
+            for (index, child) in self.children.iter().enumerate() {
+                let size = child.measure(LayoutConstraints::loose(column_width, rect.height));
+                row_heights[index / self.columns] =
+                    row_heights[index / self.columns].max(size.height);
+            }
+            let mut row_y = rect.y;
+            for (row, row_height) in row_heights.iter().copied().enumerate() {
+                for column in 0..self.columns {
+                    let index = row * self.columns + column;
+                    let Some(child) = self.children.get_mut(index) else {
+                        continue;
+                    };
+                    child.layout(Rectangle {
+                        x: rect.x + column as f32 * (column_width + self.gap),
+                        y: row_y,
+                        width: column_width,
+                        height: row_height,
+                    });
+                }
+                row_y += row_height + self.gap;
             }
         }
     }
@@ -1296,5 +1501,74 @@ mod tests {
         assert!(matches!(plan.commands()[1], RenderCommand::Clip { .. }));
         assert!(matches!(plan.commands()[2], RenderCommand::Text { .. }));
         assert!(matches!(plan.commands()[3], RenderCommand::EndClip));
+    }
+
+    #[test]
+    fn rich_nodes_emit_render_commands() {
+        use widgets::{ButtonNode, CanvasNode, MeterNode, RenderCommand, UiNode};
+        let mut meter = UiNode::Meter(MeterNode::new(0.5, 100.0, 10.0));
+        meter.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 10.0,
+        });
+        let meter_plan = meter.render_plan();
+        assert!(matches!(
+            meter_plan.commands()[0],
+            RenderCommand::Meter { ratio: 0.5, .. }
+        ));
+
+        let mut button = UiNode::Button(ButtonNode::sized(80.0, 24.0, true));
+        button.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 24.0,
+        });
+        let button_plan = button.render_plan();
+        assert!(matches!(
+            button_plan.commands()[0],
+            RenderCommand::Button { focused: true, .. }
+        ));
+
+        let mut canvas = UiNode::Canvas(CanvasNode::new(120.0, 80.0).with_aspect_ratio(2.0));
+        canvas.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 160.0,
+            height: 80.0,
+        });
+        let canvas_plan = canvas.render_plan();
+        assert!(matches!(
+            canvas_plan.commands()[0],
+            RenderCommand::Canvas { .. }
+        ));
+    }
+
+    #[test]
+    fn responsive_grid_assigns_columns_and_cells() {
+        use widgets::{GridNode, TextNode, UiNode};
+        let mut node = UiNode::Grid(GridNode::responsive(
+            50.0,
+            10.0,
+            vec![
+                UiNode::Text(TextNode::sized(20.0, 10.0)),
+                UiNode::Text(TextNode::sized(20.0, 20.0)),
+                UiNode::Text(TextNode::sized(20.0, 12.0)),
+            ],
+        ));
+        node.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 100.0,
+        });
+        let UiNode::Grid(grid) = node else {
+            panic!("expected grid")
+        };
+        assert_eq!(grid.columns, 2);
+        assert_near(grid.children[0].rect().width, 55.0);
+        assert_near(grid.children[2].rect().y, 30.0);
     }
 }
