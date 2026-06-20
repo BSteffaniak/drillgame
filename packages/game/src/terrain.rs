@@ -1,4 +1,5 @@
 #![allow(
+    dead_code,
     clippy::cast_sign_loss,
     reason = "terrain bounds are validated before indexing"
 )]

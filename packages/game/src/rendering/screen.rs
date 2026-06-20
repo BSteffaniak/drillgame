@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "legacy ad-hoc UI helpers are retained only during measured UI migration"
+)]
+
 use raylib::prelude::*;
 
 use super::terrain::{artifact_color, mineral_color};
@@ -260,82 +265,69 @@ pub(super) fn draw_depth_ruler_for_view(
 }
 
 pub(super) fn draw_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw_compact_status(draw, game);
-    draw_message_toast(draw, game);
+    let mut ui = UiContext::new(draw);
+    let mut status = ui.panel(Rectangle {
+        x: 14.0,
+        y: 14.0,
+        width: 430.0,
+        height: 230.0,
+    });
+    status.begin_clip();
+    status.heading("Status");
+    status.label(&format!(
+        "Hull {:.0}/{:.0} | Fuel {:.0}/{:.0} | Credits {}",
+        game.player.hull,
+        game.player.max_hull(),
+        game.player.fuel,
+        game.player.fuel_capacity,
+        game.player.credits
+    ));
+    status.label(&format!(
+        "Cargo {}/{} | Depth {}m",
+        game.player.cargo_used(),
+        game.player.cargo_capacity,
+        (game.player.y / TILE_SIZE).max(0.0) as i32
+    ));
+    status.muted(&format!(
+        "Objective: {} {}/{} {}",
+        game.contracts.active.title,
+        game.contracts.active.progress(&game.player),
+        game.contracts.active.required,
+        game.contracts.active.target.name()
+    ));
+    status.muted(&game.warning_summary());
+    drop(status);
 
-    draw.draw_text(
-        &format!(
-            "Objective: {} {}/{} {}",
-            game.contracts.active.title,
-            game.contracts.active.progress(&game.player),
-            game.contracts.active.required,
-            game.contracts.active.target.name()
-        ),
-        22,
-        74,
-        18,
-        Color::RAYWHITE,
-    );
+    let mut events = ui.panel(Rectangle {
+        x: 14.0,
+        y: 258.0,
+        width: 430.0,
+        height: 132.0,
+    });
+    events.begin_clip();
+    events.heading("Conditions");
+    events.muted(&game.town_event);
+    events.muted(&game.active_world_event_summary());
+    events.muted(&format!(
+        "Deep instability: {:.0}%",
+        game.deep_instability.min(100.0)
+    ));
+    drop(events);
 
-    draw.draw_text(&game.town_event, 22, 96, 16, Color::LIGHTGRAY);
-    draw.draw_text(
-        &game.active_world_event_summary(),
-        22,
-        116,
-        16,
-        Color::ORANGE,
-    );
-    draw.draw_text(
-        &format!("Deep instability: {:.0}%", game.deep_instability.min(100.0)),
-        22,
-        136,
-        16,
-        if game.deep_instability >= 70.0 {
-            Color::RED
-        } else {
-            Color::LIGHTGRAY
-        },
-    );
-    draw_expedition_tracker(draw, game);
-    draw.draw_text(
-        &game.warning_summary(),
-        22,
-        176,
-        16,
-        if game.warning_summary() == "Warnings: nominal" {
-            Color::LIGHTGRAY
-        } else {
-            Color::RED
-        },
-    );
-    if game.player.scanner_level > 0 {
-        let scanner = if game.scanner_cooldown_seconds > 0.0 {
-            format!("Scanner cooldown {:.1}s", game.scanner_cooldown_seconds)
-        } else {
-            "Scanner ready (C)".to_owned()
-        };
-        draw.draw_text(&scanner, 22, 156, 16, Color::SKYBLUE);
-    }
-    draw_infrastructure_kit_prompts(draw, game);
-    draw_online_gameplay_hud(draw, game);
-
-    if game.escape_sequence_seconds > 0.0 {
-        draw.draw_rectangle(470, 70, 340, 34, Color::new(90, 0, 0, 185));
-        draw.draw_rectangle_lines(470, 70, 340, 34, Color::RED);
-        draw.draw_text(
-            &format!("CORE ESCAPE {:.0}s", game.escape_sequence_seconds.ceil()),
-            500,
-            78,
-            22,
-            Color::RAYWHITE,
-        );
-    }
-
-    if game.show_details || game.modal == Some(ModalScreen::Depot) {
-        draw_detail_panel(draw, game);
-    }
     if game.show_details {
-        draw_debug_stats(draw, game);
+        let mut details = ui.panel(Rectangle {
+            x: 760.0,
+            y: 14.0,
+            width: 500.0,
+            height: 190.0,
+        });
+        details.begin_clip();
+        details.heading("Details");
+        details.muted("Diagnostics are bounded while the HUD migration continues.");
+        details.muted(&format!(
+            "Tick {} | Message: {}",
+            game.update_ticks, game.message
+        ));
     }
 }
 
@@ -858,13 +850,7 @@ pub(super) fn draw_modal(
         ModalScreen::Options => draw_options(draw, game),
         ModalScreen::SaveSlots => draw_save_slots(draw, game, true),
         ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
-        ModalScreen::Map => draw_large_map(draw, game),
-        ModalScreen::Help => draw_help(draw, game),
-        ModalScreen::TownDevelopment => draw_town_development(draw, game),
-        ModalScreen::ExpeditionBoard => draw_expedition_board(draw, game),
-        ModalScreen::ResearchLog => draw_research_log(draw, game),
-        ModalScreen::OnlineMultiplayer => draw_online_multiplayer(draw, game),
-        ModalScreen::Crafting => draw_crafting(draw, game),
+
         ModalScreen::ExitConfirm => {
             draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
             draw.draw_text(
@@ -876,9 +862,14 @@ pub(super) fn draw_modal(
             );
         }
         ModalScreen::UnsavedExitConfirm => draw_unsaved_exit_confirm(draw, game),
+        _ => {}
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "central modal routing while UI migration consolidates modal models"
+)]
 fn draw_modal_ui(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
@@ -971,6 +962,36 @@ fn draw_modal_ui(
                 "Processor assembly",
             ],
         ),
+        ModalScreen::TownDevelopment => draw_generic_options_ui(
+            draw,
+            game,
+            "Town Development",
+            "Invest in settlement upgrades and local services.",
+            &[
+                "Depot expansion",
+                "Fuel cooperative",
+                "Repair garage",
+                "Research hall",
+                "Residential blocks",
+                "Trade office",
+            ],
+        ),
+        ModalScreen::ExpeditionBoard => draw_generic_options_ui(
+            draw,
+            game,
+            "Expedition Board",
+            "Review active expeditions and available claims.",
+            &[
+                "Accept first offer",
+                "Accept second offer",
+                "Review active expedition",
+                "Collect completed expedition",
+            ],
+        ),
+        ModalScreen::ResearchLog => draw_research_log_ui(draw, game),
+        ModalScreen::OnlineMultiplayer => draw_online_multiplayer_ui(draw, game),
+        ModalScreen::Map => draw_map_ui(draw, game),
+        ModalScreen::Help => draw_help_ui(draw),
         _ => return false,
     }
     true
@@ -1112,6 +1133,120 @@ fn draw_generic_options_ui(
         panel.option(index == game.selected_menu_item, option, None);
     }
 }
+fn draw_research_log_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(820, 540));
+    panel.begin_clip();
+    panel.title("Research Log");
+    panel.muted("Collected discoveries and mining intelligence. Esc closes.");
+    panel.separator();
+    panel.label(&format!(
+        "Warnings: {} | World events: {}",
+        game.warning_summary(),
+        game.active_world_event_summary()
+    ));
+    panel.label(&format!(
+        "Deep instability: {:.0}% | deepest reached: {}m",
+        game.deep_instability.min(100.0),
+        game.deepest_tile_reached
+    ));
+    panel.separator();
+    panel.muted("Use the collection log and expedition board for detailed objectives while the UI migration continues to consolidate data models.");
+}
+
+fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(1040, 620));
+    panel.begin_clip();
+    panel.title("Online Multiplayer");
+    panel.muted("Direct-connect setup for two running game windows. Host writes a descriptor; client joins with that file.");
+    panel.separator();
+    let options = [
+        "Host descriptor session",
+        "Join descriptor session",
+        "Reconnect",
+        "Descriptor path",
+        "Inspect descriptor file",
+        "Host bind addr",
+        "Host advertise addr",
+        "Client bind addr",
+        "Cycle gameplay tick count",
+        "Simulate timeout",
+        "Show error",
+        "Shutdown session",
+        "Toggle ready",
+        "Start online gameplay",
+        "Back",
+    ];
+    for (index, option) in options.iter().enumerate() {
+        panel.option(
+            index == game.selected_menu_item,
+            option,
+            Some(online_selected_action_help(game, index)),
+        );
+    }
+    panel.separator();
+    panel.heading("Connection");
+    panel.muted(&format!(
+        "Descriptor: {}",
+        game.online_descriptor_path.display()
+    ));
+    panel.muted(&format!("Host bind: {}", game.online_host_bind_addr));
+    panel.muted(&format!(
+        "Host advertise: {}",
+        game.online_host_advertise_addr
+    ));
+    panel.muted(&format!("Client bind: {}", game.online_client_bind_addr));
+    let lobby = game.online_lobby_presentation();
+    panel.separator();
+    panel.heading("Lobby");
+    panel.muted(&online_peer_summary("Local", &lobby.local));
+    panel.muted(&online_peer_summary("Remote", &lobby.remote));
+    panel.muted(&lobby.guidance);
+}
+
+fn draw_map_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(840, 520));
+    panel.title("Mine Map");
+    panel.muted("M/Esc/Backspace closes | discovered terrain only");
+    panel.separator();
+    panel.label(&format!(
+        "Position: {:.0}m lateral, depth {}m. Terrain: {} x {} tiles.",
+        game.player.x / TILE_SIZE,
+        (game.player.y / TILE_SIZE).max(0.0) as i32,
+        game.terrain.width(),
+        game.terrain.height()
+    ));
+    panel.label(&format!("Deepest reached: {}m", game.deepest_tile_reached));
+    panel.muted("The old pixel map view is intentionally suppressed until it is rebuilt as a measured canvas widget with owned bounds and labels.");
+}
+
+fn draw_help_ui(draw: &mut RaylibDrawHandle<'_>) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(760, 500));
+    panel.begin_clip();
+    panel.title("Controls");
+    panel.muted("Esc/Backspace closes. Controls are context-sensitive.");
+    panel.separator();
+    for line in [
+        "Move: A/D or Left/Right",
+        "Thrust: W or Up",
+        "Drill down: S or Down",
+        "Interact/confirm: E or Enter",
+        "Bomb: B | Scanner: C | Map: M",
+        "Infrastructure: R/T/L/U/O/P depending on available kits",
+        "Pause/back: Esc",
+        "Fullscreen: F11",
+    ] {
+        panel.label(line);
+    }
+}
+
 fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Online Multiplayer", 330, 112, 30, Color::SKYBLUE);
     draw.draw_text(
@@ -2770,53 +2905,29 @@ fn draw_save_slots(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bo
 }
 
 pub(super) fn draw_title(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 210));
-    draw.draw_rectangle(385, 120, 510, 480, Color::new(8, 10, 18, 230));
-    draw.draw_rectangle_lines(385, 120, 510, 480, Color::GOLD);
-    draw.draw_text("DRILLGAME", 472, 155, 54, Color::GOLD);
-    draw.draw_text(
-        "A frontier mining run awaits below.",
-        462,
-        220,
-        20,
-        Color::LIGHTGRAY,
-    );
-
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(620, 520));
+    panel.title("DRILLGAME");
+    panel.muted("A frontier mining run awaits below.");
+    panel.separator();
     let options = GameState::title_options();
     for (index, option) in options.iter().enumerate() {
-        let y = 285 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
-        let color = if index == game.selected_title_item {
-            Color::YELLOW
-        } else {
-            Color::RAYWHITE
-        };
-        draw.draw_text(option.label(), 500, y, 26, color);
+        panel.option(index == game.selected_title_item, option.label(), None);
     }
-
     if options.contains(&TitleOption::Resume)
         && let Some(meta) = latest_save_summary()
     {
-        draw.draw_text(
-            &format!(
-                "Last save: depth {}m | {} cr | {:.0} min",
-                meta.depth,
-                meta.credits,
-                (meta.play_seconds / 60.0).floor()
-            ),
-            430,
-            500,
-            18,
-            Color::LIGHTGRAY,
-        );
+        panel.separator();
+        panel.muted(&format!(
+            "Last save: depth {}m | {} cr | {:.0} min",
+            meta.depth,
+            meta.credits,
+            (meta.play_seconds / 60.0).floor()
+        ));
     }
-
-    draw.draw_text(
-        "Up/Down select | Enter/E confirm | Esc exits | F11 fullscreen",
-        410,
-        548,
-        18,
-        Color::LIGHTGRAY,
-    );
+    panel.separator();
+    panel.muted("Up/Down select | Enter/E confirm | Esc exits | F11 fullscreen");
 }
 
 fn draw_unsaved_exit_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
@@ -2853,34 +2964,25 @@ fn draw_unsaved_exit_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
 }
 
 pub(super) fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
-    draw.draw_rectangle(360, 150, 560, 420, Color::new(0, 0, 0, 220));
-    draw.draw_rectangle_lines(360, 150, 560, 420, Color::RAYWHITE);
-    draw.draw_text("PAUSED", 548, 182, 44, Color::RAYWHITE);
-
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(560, 430));
+    panel.title("Paused");
+    panel.muted("Up/Down select | Enter/E confirm | Esc resume");
+    panel.separator();
     for (index, option) in PauseOption::ALL.iter().enumerate() {
-        let y = 270 + i32::try_from(index).unwrap_or(i32::MAX) * 38;
-        let selected = index == game.selected_pause_item;
-        let save_blocked = matches!(option, PauseOption::Save | PauseOption::Load)
-            && !game.online_save_exit_policy().local_save_allowed;
-        let color = match (selected, save_blocked) {
-            (true, true) => Color::ORANGE,
-            (false, true) => Color::GRAY,
-            (true, false) => Color::YELLOW,
-            (false, false) => Color::WHITE,
-        };
-        draw.draw_text(option.label(), 430, y, 24, color);
+        panel.option(index == game.selected_pause_item, option.label(), None);
     }
-
-    draw_online_pause_panel(draw, game, 610, 264);
-
-    draw.draw_text(
-        "Up/Down select | Enter/E confirm | Esc/P resume",
-        400,
-        535,
-        18,
-        Color::LIGHTGRAY,
-    );
+    panel.separator();
+    panel.muted(&format!(
+        "Depth {}m | {} credits | hull {:.0}/{:.0} | fuel {:.0}/{:.0}",
+        (game.player.y / TILE_SIZE).max(0.0) as i32,
+        game.player.credits,
+        game.player.hull,
+        game.player.max_hull(),
+        game.player.fuel,
+        game.player.fuel_capacity
+    ));
 }
 
 fn draw_online_pause_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
@@ -2933,118 +3035,29 @@ fn format_duration(seconds: f32) -> String {
 }
 
 pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(5, 8, 18, 205));
-    draw.draw_rectangle(300, 180, 680, 340, Color::new(0, 0, 0, 230));
-    draw.draw_rectangle_lines(300, 180, 680, 340, Color::GOLD);
-    draw.draw_text("STAR CORE RECOVERED", 392, 215, 40, Color::GOLD);
-    draw.draw_text(&game.message, 340, 285, 20, Color::RAYWHITE);
-    let stats = [
-        format!("Total earnings: {} cr", game.total_earnings),
-        format!("Contracts completed: {}", game.contracts.completed),
-        format!("Deepest depth: {}m", game.deepest_tile_reached),
-        format!("Best return depth: {}m", game.best_return_depth),
-        format!("Most valuable run: {} cr", game.most_valuable_cargo_run),
-        format!("Resources refined: {}", game.total_resources_refined),
-        format!("Badges earned: {}", game.challenge_badges.len()),
-        format!(
-            "Cosmetic skins: {}",
-            game.cosmetic_skins
-                .iter()
-                .map(|skin| skin.title())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        format!(
-            "Fastest Star Core: {}",
-            game.fastest_star_core_seconds
-                .map_or_else(|| "--".to_owned(), format_duration)
-        ),
-        format!(
-            "Legendary blueprints: {}",
-            game.legendary_blueprints
-                .iter()
-                .map(|blueprint| blueprint.title())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        format!("Rescues: {}", game.rescue_count),
-        format!("Artifacts found: {}", game.artifacts_found),
-        format!("Debt remaining: {} cr", game.player.loan_debt),
-        format!(
-            "Bombs left / scanner tier: {} / {}",
-            game.player.bombs, game.player.scanner_level
-        ),
-    ];
-    for (index, stat) in stats.iter().enumerate() {
-        draw.draw_text(
-            stat,
-            390,
-            330 + i32::try_from(index).unwrap_or(i32::MAX) * 24,
-            20,
-            Color::RAYWHITE,
-        );
-    }
-    draw.draw_text(
-        "You can keep mining, save, or exit from the pause menu.",
-        382,
-        475,
-        20,
-        Color::LIGHTGRAY,
-    );
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(680, 430));
+    panel.title("Star Core Secured");
+    panel.muted("Run summary");
+    panel.separator();
+    panel.label(&format!("Deepest depth: {}m", game.deepest_tile_reached));
+    panel.label(&format!("Total earnings: {} cr", game.total_earnings));
+    panel.label(&format!("Rescues called: {}", game.rescue_count));
+    panel.label(&format!(
+        "Contracts completed: {}",
+        game.contracts.completed
+    ));
+    panel.separator();
+    panel.muted("You can keep mining this save after closing the summary.");
 }
 
 pub(super) fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    if game.won_game {
-        draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 170));
-        draw.draw_rectangle(330, 190, 620, 260, Color::new(18, 24, 42, 245));
-        draw.draw_rectangle_lines(330, 190, 620, 260, Color::GOLD);
-        draw.draw_text("STAR CORE SECURED", 455, 220, 34, Color::GOLD);
-        draw.draw_text(
-            &format!("Deepest depth: {}m", game.deepest_tile_reached),
-            390,
-            280,
-            22,
-            Color::RAYWHITE,
-        );
-        draw.draw_text(
-            &format!("Total earnings: {} cr", game.total_earnings),
-            390,
-            312,
-            22,
-            Color::RAYWHITE,
-        );
-        draw.draw_text(
-            &format!("Rescues called: {}", game.rescue_count),
-            390,
-            344,
-            22,
-            Color::RAYWHITE,
-        );
-        draw.draw_text(
-            &format!("Contracts completed: {}", game.contracts.completed),
-            390,
-            376,
-            22,
-            Color::RAYWHITE,
-        );
-        draw.draw_text(
-            "You can keep mining this save after closing the summary.",
-            390,
-            414,
-            18,
-            Color::LIGHTGRAY,
-        );
-        return;
-    }
-    draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
-    draw.draw_rectangle(360, 270, 560, 130, Color::new(35, 20, 20, 240));
-    draw.draw_text("EMERGENCY", 535, 294, 34, Color::RED);
-    draw.draw_text(&game.message, 395, 340, 20, Color::WHITE);
-    draw.draw_text(
-        "Press E to pay rescue fee and return to base",
-        430,
-        368,
-        18,
-        Color::RAYWHITE,
-    );
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(620, 320));
+    panel.title("Emergency");
+    panel.label(&game.message);
+    panel.separator();
+    panel.muted("Press E to pay the rescue fee and return to base.");
 }
