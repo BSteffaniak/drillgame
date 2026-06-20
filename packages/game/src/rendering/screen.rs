@@ -780,107 +780,19 @@ pub(super) fn draw_modal(
     modal: ModalScreen,
     hud: Option<PerPlayerHudSnapshot>,
 ) {
-    if draw_modal_ui(draw, game, modal, hud) {
-        return;
-    }
-
-    draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
-    draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
-
-    match modal {
-        ModalScreen::Fuel => {
-            draw.draw_text("Fuel Station", 330, 150, 30, Color::GOLD);
-            draw.draw_text(
-                "Up/Down: small/half/full | Enter/E buy selected",
-                330,
-                210,
-                22,
-                Color::WHITE,
-            );
-            draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
-            let fuel = hud.map_or(game.player.fuel, |hud| hud.fuel);
-            let fuel_capacity = hud.map_or(game.player.fuel_capacity, |hud| hud.fuel_capacity);
-            let credits = hud.map_or(game.player.credits, |hud| hud.credits);
-            let missing = (fuel_capacity - fuel).ceil().max(0.0) as u32;
-            let affordable = missing.min(credits);
-            draw.draw_text(
-                &format!(
-                    "Tank: {fuel:.0}/{fuel_capacity:.0} | Fill cost: {missing} cr | Buying now: {affordable} units"
-                ),
-                330,
-                290,
-                18,
-                Color::RAYWHITE,
-            );
-            draw_service_options(draw, game.selected_menu_item, 330, 330);
-        }
-        ModalScreen::FuelConfirm => draw_service_confirm(draw, game, "fuel"),
-        ModalScreen::Repair => {
-            draw.draw_text("Repair Garage", 330, 150, 30, Color::LIME);
-            draw.draw_text(
-                "Up/Down: small/half/full | Enter/E repair selected",
-                330,
-                210,
-                22,
-                Color::WHITE,
-            );
-            draw.draw_text("Backspace/Esc: close", 330, 244, 20, Color::LIGHTGRAY);
-            let hull = hud.map_or(game.player.hull, |hud| hud.hull);
-            let max_hull = hud.map_or_else(|| game.player.max_hull(), |hud| hud.max_hull);
-            let credits = hud.map_or(game.player.credits, |hud| hud.credits);
-            let missing = (max_hull - hull).ceil().max(0.0) as u32;
-            let affordable_units = missing.min(credits / 2);
-            draw.draw_text(
-                &format!(
-                    "Hull: {hull:.0}/{max_hull:.0} | Full repair: {} cr | Repairing now: {} hull",
-                    missing * 2,
-                    affordable_units
-                ),
-                330,
-                290,
-                18,
-                Color::RAYWHITE,
-            );
-            draw_service_options(draw, game.selected_menu_item, 330, 330);
-        }
-        ModalScreen::RepairConfirm => draw_service_confirm(draw, game, "repair"),
-        ModalScreen::Depot => draw_modal_depot(draw, game),
-        ModalScreen::Headquarters => draw_headquarters(draw, game),
-        ModalScreen::DepotReceiptHistory => draw_depot_receipt_history(draw, game),
-        ModalScreen::Shop => draw_modal_shop(draw, game),
-        ModalScreen::ShopConfirm => draw_shop_confirm(draw, game),
-        ModalScreen::Bank => draw_bank(draw, game),
-        ModalScreen::Explosives => draw_explosives(draw, game),
-        ModalScreen::Salvage => draw_salvage(draw, game),
-        ModalScreen::Options => draw_options(draw, game),
-        ModalScreen::SaveSlots => draw_save_slots(draw, game, true),
-        ModalScreen::LoadSlots => draw_save_slots(draw, game, false),
-
-        ModalScreen::ExitConfirm => {
-            draw.draw_text("Exit to Desktop?", 330, 150, 30, Color::RED);
-            draw.draw_text(
-                "Enter/E confirms. Backspace/Esc cancels.",
-                330,
-                210,
-                22,
-                Color::WHITE,
-            );
-        }
-        ModalScreen::UnsavedExitConfirm => draw_unsaved_exit_confirm(draw, game),
-        _ => {}
-    }
+    draw_modal_ui(draw, game, modal, hud);
 }
 
 #[allow(
     clippy::too_many_lines,
-    reason = "central modal routing while UI migration consolidates modal models"
+    reason = "exhaustive modal dispatch is intentionally centralized during UI migration"
 )]
 fn draw_modal_ui(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
     modal: ModalScreen,
     hud: Option<PerPlayerHudSnapshot>,
-) -> bool {
+) {
     match modal {
         ModalScreen::Depot => draw_modal_depot_ui(draw, game),
         ModalScreen::DepotReceiptHistory => draw_depot_receipt_history_ui(draw, game),
@@ -1004,7 +916,6 @@ fn draw_modal_ui(
         ModalScreen::Map => draw_map_ui(draw, game),
         ModalScreen::Help => draw_help_ui(draw),
     }
-    true
 }
 
 fn draw_service_modal_ui(
