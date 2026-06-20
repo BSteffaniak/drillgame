@@ -2,6 +2,10 @@ use std::ffi::CString;
 
 use raylib::{ffi, prelude::*};
 
+#[allow(
+    dead_code,
+    reason = "legacy panel renderer remains for interior UI until final interior layout migration"
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TextStyle {
     Title,
@@ -54,6 +58,10 @@ impl<'draw, 'handle> UiContext<'draw, 'handle> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy backdrop retained during interior UI migration"
+    )]
     pub(super) fn draw_dimmed_backdrop(&mut self) {
         self.draw
             .draw_rectangle(0, 0, 1280, 720, Color::new(0, 0, 0, 120));
@@ -141,6 +149,10 @@ impl UiPanel<'_, '_> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy panel title retained during interior UI migration"
+    )]
     pub(super) fn title(&mut self, text: &str) {
         self.text(text, TextStyle::Title, self.theme.accent);
     }
@@ -149,6 +161,10 @@ impl UiPanel<'_, '_> {
         self.text(text, TextStyle::Heading, self.theme.text);
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy panel label retained during interior UI migration"
+    )]
     pub(super) fn label(&mut self, text: &str) {
         self.wrapped_text(text, TextStyle::Body, self.theme.text);
     }
@@ -223,6 +239,10 @@ impl UiPanel<'_, '_> {
         self.cursor_y += 10.0 + self.theme.gap as f32;
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy panel separator retained during interior UI migration"
+    )]
     pub(super) fn separator(&mut self) {
         let y = self.cursor_y as i32 + 2;
         self.draw.draw_line(
@@ -282,6 +302,10 @@ impl Drop for UiPanel<'_, '_> {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy modal sizing helper retained during interior UI migration"
+)]
 pub(super) const fn modal_rect(width: i32, height: i32) -> Rectangle {
     Rectangle {
         x: ((1280 - width) / 2) as f32,

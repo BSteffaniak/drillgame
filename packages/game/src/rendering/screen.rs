@@ -1,9 +1,6 @@
 use raylib::prelude::*;
 
-use super::{
-    layout::{HudCard, ModalContent, Section, SectionItem, StatItem, UiLayout},
-    ui::{UiContext, modal_rect},
-};
+use super::layout::{HudCard, ModalContent, Section, SectionItem, StatItem, UiLayout};
 use crate::{
     economy::{upgrade_offers, upgrade_tier_name},
     game_state::{GameState, ModalScreen, PauseOption, TILE_SIZE, TitleOption},
@@ -880,24 +877,20 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
 }
 
 fn draw_map_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    let mut ui = UiContext::new(draw);
-    ui.draw_dimmed_backdrop();
-    let mut panel = ui.panel(modal_rect(980, 610));
-    panel.title("Mine Map");
-    panel.muted("M/Esc/Backspace closes | discovered terrain only");
-    panel.separator();
-    panel.label(&format!(
-        "Position: {:.0}m lateral, depth {}m | Deepest reached: {}m",
-        game.player.x / TILE_SIZE,
-        (game.player.y / TILE_SIZE).max(0.0) as i32,
-        game.deepest_tile_reached
-    ));
-    drop(panel);
-
-    let map_x = 210;
-    let map_y = 245;
-    let map_w = 860;
-    let map_h = 300;
+    let map_rect = UiLayout::screen(draw).canvas_modal(
+        "Mine Map",
+        "M/Esc/Backspace closes | discovered terrain only",
+        &format!(
+            "Position: {:.0}m lateral, depth {}m | Deepest reached: {}m",
+            game.player.x / TILE_SIZE,
+            (game.player.y / TILE_SIZE).max(0.0) as i32,
+            game.deepest_tile_reached
+        ),
+    );
+    let map_x = map_rect.x as i32;
+    let map_y = map_rect.y as i32;
+    let map_w = map_rect.width as i32;
+    let map_h = map_rect.height as i32;
     draw.draw_rectangle(map_x, map_y, map_w, map_h, Color::new(12, 10, 14, 255));
     draw.draw_rectangle_lines(map_x, map_y, map_w, map_h, Color::new(190, 205, 220, 230));
     let terrain_width = game.terrain.width().max(1);

@@ -177,8 +177,13 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
     }
 
     pub(super) fn modal(&mut self, title: &str, subtitle: &str, content: &ModalContent) {
-        self.draw
-            .draw_rectangle(0, 0, 1280, 720, Color::new(0, 0, 0, 120));
+        self.draw.draw_rectangle(
+            self.viewport.x as i32,
+            self.viewport.y as i32,
+            self.viewport.width as i32,
+            self.viewport.height as i32,
+            Color::new(0, 0, 0, 120),
+        );
         let max_width = (self.viewport.width * 0.78).clamp(620.0, 980.0);
         let max_height = (self.viewport.height * 0.82).clamp(420.0, 620.0);
         let rect = Rectangle {
@@ -218,6 +223,60 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             height: content_rect.height - 72.0,
         };
         self.draw_modal_content(body, content);
+    }
+
+    pub(super) fn canvas_modal(&mut self, title: &str, subtitle: &str, summary: &str) -> Rectangle {
+        self.draw.draw_rectangle(
+            self.viewport.x as i32,
+            self.viewport.y as i32,
+            self.viewport.width as i32,
+            self.viewport.height as i32,
+            Color::new(0, 0, 0, 120),
+        );
+        let max_width = (self.viewport.width * 0.78).clamp(620.0, 980.0);
+        let max_height = (self.viewport.height * 0.82).clamp(420.0, 620.0);
+        let rect = Rectangle {
+            x: self.viewport.x + (self.viewport.width - max_width) * 0.5,
+            y: self.viewport.y + (self.viewport.height - max_height) * 0.5,
+            width: max_width,
+            height: max_height,
+        };
+        self.draw_panel(rect, PanelKind::Modal);
+        let content_rect = inset(rect, Insets::all(18.0));
+        Self::draw_text(
+            title,
+            content_rect.x,
+            content_rect.y,
+            TextKind::Title,
+            Color::GOLD,
+        );
+        Self::draw_text(
+            subtitle,
+            content_rect.x,
+            content_rect.y + 35.0,
+            TextKind::Small,
+            Color::LIGHTGRAY,
+        );
+        Self::draw_text(
+            summary,
+            content_rect.x,
+            content_rect.y + 58.0,
+            TextKind::Small,
+            Color::RAYWHITE,
+        );
+        self.draw.draw_line(
+            content_rect.x as i32,
+            (content_rect.y + 84.0) as i32,
+            (content_rect.x + content_rect.width) as i32,
+            (content_rect.y + 84.0) as i32,
+            Color::new(110, 120, 130, 180),
+        );
+        Rectangle {
+            x: content_rect.x,
+            y: content_rect.y + 98.0,
+            width: content_rect.width,
+            height: (content_rect.height - 98.0).max(0.0),
+        }
     }
 
     fn draw_modal_content(&mut self, rect: Rectangle, content: &ModalContent) {
