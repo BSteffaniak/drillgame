@@ -3464,6 +3464,22 @@ impl RealOnlineSessionMode {
     }
 }
 
+fn write_online_descriptor_file(
+    path: &Path,
+    json: &str,
+) -> Result<(), crate::multiplayer::QuinnOnlineSessionError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
+        })?;
+    }
+    std::fs::write(path, json)
+        .map_err(|error| crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string()))
+}
+
 pub struct RealOnlineSessionController {
     mode: RealOnlineSessionMode,
     player_slot: Option<u8>,
@@ -3519,9 +3535,7 @@ impl RealOnlineSessionController {
         let json = serde_json::to_string(&descriptor).map_err(|error| {
             crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
         })?;
-        std::fs::write(path, json).map_err(|error| {
-            crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
-        })?;
+        write_online_descriptor_file(path, &json)?;
         let controller = Self {
             mode: RealOnlineSessionMode::DescriptorHostPending {
                 listener,
@@ -5107,15 +5121,11 @@ fn default_online_player_name() -> String {
 }
 
 fn default_online_descriptor_path() -> PathBuf {
-    PathBuf::from("drillgame-online-host.json")
-}
-
-fn alternate_online_descriptor_path() -> PathBuf {
-    PathBuf::from("/tmp/drillgame-online-host.json")
+    crate::save::online_host_descriptor_path()
 }
 
 fn join_online_descriptor_path() -> PathBuf {
-    PathBuf::from("/tmp/drillgame-online-join.json")
+    crate::save::online_join_descriptor_path()
 }
 
 fn default_online_host_bind_addr() -> SocketAddr {
@@ -7971,8 +7981,6 @@ impl GameState {
     fn cycle_online_descriptor_path(&mut self) {
         self.online_descriptor_path =
             if self.online_descriptor_path == default_online_descriptor_path() {
-                alternate_online_descriptor_path()
-            } else if self.online_descriptor_path == alternate_online_descriptor_path() {
                 join_online_descriptor_path()
             } else {
                 default_online_descriptor_path()
@@ -12425,6 +12433,48 @@ mod tests {
         assert!(!game.block_joined_client_save());
     }
 
+    #[test]
+    fn default_online_descriptor_path_uses_drillgame_state_dir() {
+        let path = default_online_descriptor_path();
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("drillgame-online-host.json")
+        );
+        assert!(
+            path.parent()
+                .is_some_and(|parent| !parent.as_os_str().is_empty())
+        );
+    }
+
+    #[test]
+    fn online_join_descriptor_path_uses_drillgame_state_dir() {
+        let path = join_online_descriptor_path();
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("drillgame-online-join.json")
+        );
+        assert!(
+            path.parent()
+                .is_some_and(|parent| !parent.as_os_str().is_empty())
+        );
+    }
+
+    #[test]
+    fn descriptor_writer_creates_parent_directory_before_writing_descriptor() {
+        let unique_root = std::env::temp_dir().join(format!(
+            "drillgame-descriptor-parent-{}",
+            std::process::id()
+        ));
+        let unique_path = unique_root.join("nested").join("host.json");
+        let _ignored = std::fs::remove_dir_all(&unique_root);
+
+        write_online_descriptor_file(&unique_path, "{\"host_addr\":\"127.0.0.1:4242\"}")
+            .expect("descriptor writes into newly created parent directory");
+
+        assert!(unique_path.exists());
+        let _ignored = std::fs::remove_dir_all(unique_root);
+    }
+
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn descriptor_host_and_client_complete_join_handshake() {
@@ -16098,20 +16148,8 @@ mod tests {
             },
             0.0,
         );
-        assert_eq!(
-            game.online_descriptor_path,
-            alternate_online_descriptor_path()
-        );
-        assert!(game.message.contains("Descriptor path selected"));
-
-        game.update(
-            PlayerInput {
-                menu_right: true,
-                ..PlayerInput::default()
-            },
-            0.0,
-        );
         assert_eq!(game.online_descriptor_path, join_online_descriptor_path());
+        assert!(game.message.contains("Descriptor path selected"));
 
         game.update(
             PlayerInput {

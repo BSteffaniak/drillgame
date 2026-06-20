@@ -830,6 +830,14 @@ fn write_state_file(path: impl AsRef<Path>, contents: String) -> Result<(), Save
     fs::write(path, contents).map_err(SaveError::Io)
 }
 
+pub fn online_host_descriptor_path() -> PathBuf {
+    default_state_dir().join("drillgame-online-host.json")
+}
+
+pub fn online_join_descriptor_path() -> PathBuf {
+    default_state_dir().join("drillgame-online-join.json")
+}
+
 fn settings_path() -> PathBuf {
     default_state_dir().join(SETTINGS_FILE_NAME)
 }
