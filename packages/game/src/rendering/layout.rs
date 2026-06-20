@@ -280,6 +280,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 widgets::RenderCommand::Button {
                     rect,
                     focused,
+                    id: _,
                     text,
                     color,
                 } => {
@@ -582,6 +583,8 @@ impl SectionItem {
 
 fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
     let mut sections = Vec::new();
+    let focused_id = current_focused_id();
+    let mut selectable_index = 0_usize;
     for section in &content.sections {
         sections.push(widgets::UiNode::Text(widgets::TextNode::colored(
             &section.title,
@@ -612,13 +615,19 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
                     )));
                 }
                 SectionItem::Stat(stat) if is_selectable_stat(stat) => {
-                    sections.push(widgets::UiNode::Button(widgets::ButtonNode::label(
+                    let id = widgets::WidgetId::new(format!("modal-option-{selectable_index}"));
+                    selectable_index += 1;
+                    let selected = stat.label.trim_start().starts_with('>');
+                    let focused =
+                        selected || focused_id.as_ref().is_some_and(|focused| focused == &id);
+                    sections.push(widgets::UiNode::Button(widgets::ButtonNode::identified(
+                        Some(id),
                         format!("{} {}", stat.label, stat.value)
                             .trim_end()
                             .to_owned(),
                         width,
                         26.0,
-                        stat.label.trim_start().starts_with('>'),
+                        focused,
                         stat.color,
                     )));
                 }
@@ -913,6 +922,7 @@ pub(super) mod widgets {
         Button {
             rect: Rectangle,
             focused: bool,
+            id: Option<WidgetId>,
             text: String,
             color: Color,
         },
@@ -1025,6 +1035,7 @@ pub(super) mod widgets {
                 Self::Button(node) => plan.push(RenderCommand::Button {
                     rect: node.rect,
                     focused: node.focused,
+                    id: node.id.clone(),
                     text: node.text.clone(),
                     color: node.color,
                 }),
@@ -1158,6 +1169,7 @@ pub(super) mod widgets {
     #[derive(Clone, Debug)]
     pub(super) struct ButtonNode {
         pub(super) focused: bool,
+        pub(super) id: Option<WidgetId>,
         pub(super) text: String,
         pub(super) color: Color,
         pub(super) width: f32,
@@ -1173,8 +1185,20 @@ pub(super) mod widgets {
             focused: bool,
             color: Color,
         ) -> Self {
+            Self::identified(None, text, width, height, focused, color)
+        }
+
+        pub(super) fn identified(
+            id: Option<WidgetId>,
+            text: impl Into<String>,
+            width: f32,
+            height: f32,
+            focused: bool,
+            color: Color,
+        ) -> Self {
             Self {
                 focused,
+                id,
                 text: text.into(),
                 color,
                 width,
@@ -1583,6 +1607,15 @@ fn set_current_scroll_limit(id: widgets::WidgetId, max_offset: f32) {
             state.set_scroll_limit(id, max_offset);
         }
     });
+}
+
+fn current_focused_id() -> Option<widgets::WidgetId> {
+    CURRENT_UI_STATE.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .and_then(widgets::UiState::focused)
+    })
 }
 
 fn current_scroll_offset(id: &widgets::WidgetId) -> f32 {
