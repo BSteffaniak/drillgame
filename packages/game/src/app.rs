@@ -328,13 +328,12 @@ impl OnlineTaskDispatcher {
                     false,
                 );
             }
-            OnlineNetworkTaskRequest::HostLanGame { path } => {
-                game.online_session_status_message = format!(
-                    "Hosting LAN game through mDNS at {}; waiting for remote miner.",
-                    game.online_host_advertise_addr
-                );
+            OnlineNetworkTaskRequest::HostLanGame => {
+                "Starting LAN host: binding server, opening descriptor endpoint, publishing mDNS."
+                    .clone_into(&mut game.online_session_status_message);
                 self.spawn_host_descriptor(
-                    path,
+                    std::env::temp_dir()
+                        .join(format!("drillgame-lan-host-{}.json", std::process::id())),
                     game.online_host_bind_addr,
                     game.online_host_advertise_addr,
                     true,

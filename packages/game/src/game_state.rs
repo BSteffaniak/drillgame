@@ -1993,11 +1993,20 @@ pub enum OnlineNetworkTaskRequest {
     HostDirectConnect,
     JoinDirectConnect,
     HostDescriptorFile { path: PathBuf },
-    HostLanGame { path: PathBuf },
+    HostLanGame,
     JoinLanGame,
     JoinDescriptorFile { path: PathBuf },
     ReconnectDirectConnect,
     Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OnlineMultiplayerView {
+    #[default]
+    MainMenu,
+    HostLan,
+    JoinLan,
+    AdvancedDirectConnect,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5790,6 +5799,8 @@ pub struct GameState {
     #[serde(default = "default_online_session_state")]
     pub online_session_state: OnlineSessionUxState,
     #[serde(default)]
+    pub online_multiplayer_view: OnlineMultiplayerView,
+    #[serde(default)]
     pub online_session_status_message: String,
     #[serde(default)]
     pub online_host_owns_save: bool,
@@ -6124,6 +6135,7 @@ impl GameState {
             message: "Mine ore, sell cargo, and buy upgrades. Press E at surface buildings."
                 .to_owned(),
             online_session_state: OnlineSessionUxState::Idle,
+            online_multiplayer_view: OnlineMultiplayerView::MainMenu,
             online_session_status_message: String::new(),
             online_host_owns_save: false,
             online_player_slot: None,
@@ -8402,9 +8414,9 @@ impl GameState {
 
     fn adjust_online_multiplayer_selection(&mut self) {
         match self.selected_menu_item {
-            3 => self.cycle_online_descriptor_path(),
-            5 => self.cycle_online_host_address_preset(),
-            8 => self.cycle_online_gameplay_ticks(),
+            2 => self.cycle_online_descriptor_path(),
+            4 => self.cycle_online_host_address_preset(),
+            7 => self.cycle_online_gameplay_ticks(),
             _ => {
                 "Select descriptor path, host address, or gameplay ticks to adjust with left/right."
                     .clone_into(&mut self.online_session_status_message);
@@ -8419,114 +8431,186 @@ impl GameState {
         reason = "online modal reducer keeps adjacent menu action state transitions together for now"
     )]
     fn confirm_online_multiplayer(&mut self) {
-        match self.selected_menu_item {
-            0 => {
-                let descriptor_status = OnlineDescriptorInputStatus::validate(
-                    OnlineDescriptorInputMode::HostWrite,
-                    &self.online_descriptor_path,
-                );
-                if !descriptor_status.can_attempt_task {
-                    self.apply_online_descriptor_input_status(&descriptor_status);
+        match self.online_multiplayer_view {
+            OnlineMultiplayerView::MainMenu => match self.selected_menu_item {
+                0 => self.start_lan_host_flow(),
+                1 => self.start_lan_join_flow(),
+                2 => {
+                    self.online_multiplayer_view = OnlineMultiplayerView::AdvancedDirectConnect;
+                    self.selected_menu_item = 0;
+                    "Advanced direct-connect tools selected."
+                        .clone_into(&mut self.online_session_status_message);
+                }
+                _ => {
+                    self.close_online_multiplayer_menu();
                     self.sound_cues.push(SoundCue::Ui);
                     return;
                 }
-                self.apply_online_descriptor_input_status(&descriptor_status);
-                self.online_session_state = OnlineSessionUxState::Hosting;
-                self.online_network_task_request = Some(OnlineNetworkTaskRequest::HostLanGame {
-                    path: self.online_descriptor_path.clone(),
-                });
-                self.online_host_owns_save = true;
-                self.online_player_slot = Some(1);
-                self.online_local_ready = false;
-                self.online_remote_player_name = None;
-                self.online_remote_player_ready = false;
-                self.online_remote_player_connected = false;
-                self.online_session_status_message = format!(
-                    "Hosting LAN game as {}. Host owns save/session authority.",
-                    crate::lan_discovery::local_machine_name()
-                );
-            }
-            1 => {
-                self.online_session_state = OnlineSessionUxState::Joining;
-                self.online_network_task_request = Some(OnlineNetworkTaskRequest::JoinLanGame);
-                self.online_host_owns_save = false;
-                self.online_player_slot = Some(2);
-                self.online_local_ready = false;
-                self.online_remote_player_name = Some("Host miner".to_owned());
-                self.online_remote_player_ready = false;
-                self.online_remote_player_connected = false;
-                "Scanning LAN for Drillgame hosts via mDNS."
+            },
+            OnlineMultiplayerView::HostLan => match self.selected_menu_item {
+                0 => {
+                    self.online_local_ready = !self.online_local_ready;
+                    if self.online_local_ready {
+                        "Local host ready; waiting for client readiness."
+                    } else {
+                        "Local host not ready."
+                    }
                     .clone_into(&mut self.online_session_status_message);
-            }
-            2 => {
-                let decision = OnlineReconnectAttemptDecision::from_game(self);
-                if decision.can_attempt {
-                    self.online_session_state = OnlineSessionUxState::Reconnecting;
+                    self.refresh_online_lobby_status();
+                }
+                1 => self.request_online_gameplay_start(),
+                2 => {
+                    self.online_session_state = OnlineSessionUxState::Shutdown;
+                    self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
+                    self.online_local_ready = false;
+                    self.online_multiplayer_view = OnlineMultiplayerView::MainMenu;
+                    self.selected_menu_item = 0;
+                    self.apply_online_session_boundary_status(
+                        &OnlineSessionBoundaryStatus::local_shutdown_requested(),
+                    );
+                }
+                _ => {
+                    self.online_multiplayer_view = OnlineMultiplayerView::MainMenu;
+                    self.selected_menu_item = 0;
+                    "Returned to Online Multiplayer."
+                        .clone_into(&mut self.online_session_status_message);
+                }
+            },
+            OnlineMultiplayerView::JoinLan => match self.selected_menu_item {
+                0 => self.start_lan_join_flow(),
+                1 => {
+                    self.online_local_ready = !self.online_local_ready;
+                    if self.online_local_ready {
+                        "Local client ready; waiting for host to start."
+                    } else {
+                        "Local client not ready."
+                    }
+                    .clone_into(&mut self.online_session_status_message);
+                    self.refresh_online_lobby_status();
+                }
+                2 => {
+                    self.online_session_state = OnlineSessionUxState::Shutdown;
+                    self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
+                    self.online_local_ready = false;
+                    self.online_multiplayer_view = OnlineMultiplayerView::MainMenu;
+                    self.selected_menu_item = 0;
+                    self.apply_online_session_boundary_status(
+                        &OnlineSessionBoundaryStatus::local_shutdown_requested(),
+                    );
+                }
+                _ => {
+                    self.online_multiplayer_view = OnlineMultiplayerView::MainMenu;
+                    self.selected_menu_item = 0;
+                    "Returned to Online Multiplayer."
+                        .clone_into(&mut self.online_session_status_message);
+                }
+            },
+            OnlineMultiplayerView::AdvancedDirectConnect => match self.selected_menu_item {
+                0 => {
+                    let descriptor_status = OnlineDescriptorInputStatus::validate(
+                        OnlineDescriptorInputMode::HostWrite,
+                        &self.online_descriptor_path,
+                    );
+                    if !descriptor_status.can_attempt_task {
+                        self.apply_online_descriptor_input_status(&descriptor_status);
+                        self.sound_cues.push(SoundCue::Ui);
+                        return;
+                    }
+                    self.apply_online_descriptor_input_status(&descriptor_status);
+                    self.online_session_state = OnlineSessionUxState::Hosting;
                     self.online_network_task_request =
-                        Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
+                        Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+                            path: self.online_descriptor_path.clone(),
+                        });
+                    self.online_host_owns_save = true;
+                    self.online_player_slot = Some(1);
+                    self.online_session_status_message = format!(
+                        "Hosting direct-connect descriptor at {}.",
+                        self.online_descriptor_path.display()
+                    );
                 }
-                decision
-                    .player_message
-                    .clone_into(&mut self.online_session_status_message);
-            }
-            3 => {
-                self.start_online_descriptor_path_edit();
-            }
-            4 => {
-                self.inspect_online_descriptor_path();
-            }
-            5 => {
-                self.start_online_address_edit(OnlineAddressEditTarget::HostBind);
-            }
-            6 => {
-                self.start_online_address_edit(OnlineAddressEditTarget::HostAdvertise);
-            }
-            7 => {
-                self.start_online_address_edit(OnlineAddressEditTarget::ClientBind);
-            }
-            8 => {
-                self.cycle_online_gameplay_ticks();
-            }
-            9 => {
-                self.online_session_state = OnlineSessionUxState::Timeout;
-                "Connection timed out; retry or go back."
-                    .clone_into(&mut self.online_session_status_message);
-            }
-            10 => {
-                self.online_session_state = OnlineSessionUxState::Error;
-                "Connection error: direct Quinn connection task failed."
-                    .clone_into(&mut self.online_session_status_message);
-            }
-            11 => {
-                self.online_session_state = OnlineSessionUxState::Shutdown;
-                self.online_network_task_request = Some(OnlineNetworkTaskRequest::Shutdown);
-                self.online_local_ready = false;
-                self.modal = None;
-                self.apply_online_session_boundary_status(
-                    &OnlineSessionBoundaryStatus::local_shutdown_requested(),
-                );
-            }
-            12 => {
-                self.online_local_ready = !self.online_local_ready;
-                if self.online_local_ready {
-                    "Local player ready for online session start."
-                } else {
-                    "Local player not ready."
+                1 => {
+                    let descriptor_status = OnlineDescriptorInputStatus::validate(
+                        OnlineDescriptorInputMode::JoinRead,
+                        &self.online_descriptor_path,
+                    );
+                    if !descriptor_status.can_attempt_task {
+                        self.apply_online_descriptor_input_status(&descriptor_status);
+                        self.sound_cues.push(SoundCue::Ui);
+                        return;
+                    }
+                    self.apply_online_descriptor_input_status(&descriptor_status);
+                    self.online_session_state = OnlineSessionUxState::Joining;
+                    self.online_network_task_request =
+                        Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
+                            path: self.online_descriptor_path.clone(),
+                        });
+                    self.online_host_owns_save = false;
+                    self.online_player_slot = Some(2);
+                    self.online_session_status_message = format!(
+                        "Joining with descriptor {}.",
+                        self.online_descriptor_path.display()
+                    );
                 }
-                .clone_into(&mut self.online_session_status_message);
-                self.refresh_online_lobby_status();
-            }
-            13 => {
-                self.request_online_gameplay_start();
-            }
-            _ => {
-                self.close_online_multiplayer_menu();
-                self.sound_cues.push(SoundCue::Ui);
-                return;
-            }
+                2 => self.start_online_descriptor_path_edit(),
+                3 => self.inspect_online_descriptor_path(),
+                4 => self.start_online_address_edit(OnlineAddressEditTarget::HostBind),
+                5 => self.start_online_address_edit(OnlineAddressEditTarget::HostAdvertise),
+                6 => self.start_online_address_edit(OnlineAddressEditTarget::ClientBind),
+                7 => self.cycle_online_gameplay_ticks(),
+                8 => {
+                    let decision = OnlineReconnectAttemptDecision::from_game(self);
+                    if decision.can_attempt {
+                        self.online_session_state = OnlineSessionUxState::Reconnecting;
+                        self.online_network_task_request =
+                            Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
+                    }
+                    decision
+                        .player_message
+                        .clone_into(&mut self.online_session_status_message);
+                }
+                _ => {
+                    self.online_multiplayer_view = OnlineMultiplayerView::MainMenu;
+                    self.selected_menu_item = 0;
+                    "Returned to Online Multiplayer."
+                        .clone_into(&mut self.online_session_status_message);
+                }
+            },
         }
         self.message = self.online_session_status_message.clone();
         self.sound_cues.push(SoundCue::Ui);
+    }
+
+    fn start_lan_host_flow(&mut self) {
+        self.online_multiplayer_view = OnlineMultiplayerView::HostLan;
+        self.selected_menu_item = 0;
+        self.online_session_state = OnlineSessionUxState::Hosting;
+        self.online_network_task_request = Some(OnlineNetworkTaskRequest::HostLanGame);
+        self.online_host_owns_save = true;
+        self.online_player_slot = Some(1);
+        self.online_local_ready = false;
+        self.online_remote_player_name = None;
+        self.online_remote_player_ready = false;
+        self.online_remote_player_connected = false;
+        self.online_session_status_message = format!(
+            "Starting LAN host as {}; opening server, descriptor endpoint, and mDNS advertisement.",
+            crate::lan_discovery::local_machine_name()
+        );
+    }
+
+    fn start_lan_join_flow(&mut self) {
+        self.online_multiplayer_view = OnlineMultiplayerView::JoinLan;
+        self.selected_menu_item = 0;
+        self.online_session_state = OnlineSessionUxState::Joining;
+        self.online_network_task_request = Some(OnlineNetworkTaskRequest::JoinLanGame);
+        self.online_host_owns_save = false;
+        self.online_player_slot = Some(2);
+        self.online_local_ready = false;
+        self.online_remote_player_name = Some("Host miner".to_owned());
+        self.online_remote_player_ready = false;
+        self.online_remote_player_connected = false;
+        "Scanning LAN for Drillgame hosts via mDNS."
+            .clone_into(&mut self.online_session_status_message);
     }
 
     fn start_new_game(&mut self) {
@@ -9380,7 +9464,12 @@ impl GameState {
                     .saturating_add(self.active_expeditions.len())
                     .saturating_sub(1),
                 ModalScreen::SaveSlots | ModalScreen::LoadSlots => save_slot_count() - 1,
-                ModalScreen::OnlineMultiplayer => 15,
+                ModalScreen::OnlineMultiplayer => match self.online_multiplayer_view {
+                    OnlineMultiplayerView::MainMenu
+                    | OnlineMultiplayerView::HostLan
+                    | OnlineMultiplayerView::JoinLan => 3,
+                    OnlineMultiplayerView::AdvancedDirectConnect => 9,
+                },
                 _ => 0,
             };
             self.selected_menu_item = (self.selected_menu_item + 1).min(max_item);
@@ -12811,9 +12900,7 @@ mod tests {
         );
         assert_eq!(
             game.take_online_network_task_request(),
-            Some(OnlineNetworkTaskRequest::HostLanGame {
-                path: default_online_descriptor_path()
-            })
+            Some(OnlineNetworkTaskRequest::HostLanGame)
         );
 
         game.selected_menu_item = 1;
@@ -13616,9 +13703,7 @@ mod tests {
         );
         assert_eq!(
             game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::HostLanGame {
-                path: default_online_descriptor_path()
-            })
+            Some(OnlineNetworkTaskRequest::HostLanGame)
         );
 
         game.modal = Some(ModalScreen::OnlineMultiplayer);
@@ -14373,7 +14458,7 @@ mod tests {
         host_game.confirm_online_multiplayer();
         assert!(matches!(
             host_game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::HostLanGame { .. })
+            Some(OnlineNetworkTaskRequest::HostLanGame)
         ));
         assert!(
             host_game

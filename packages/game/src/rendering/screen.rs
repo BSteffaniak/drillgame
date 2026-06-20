@@ -3,7 +3,9 @@ use raylib::prelude::*;
 use super::layout::{HudCard, ModalContent, Section, SectionItem, StatItem, UiLayout};
 use crate::{
     economy::{upgrade_offers, upgrade_tier_name},
-    game_state::{GameState, ModalScreen, PauseOption, TILE_SIZE, TitleOption},
+    game_state::{
+        GameState, ModalScreen, OnlineMultiplayerView, PauseOption, TILE_SIZE, TitleOption,
+    },
     save::{latest_save_summary, save_slot_count, save_slot_metadata},
     session::{ClientView, PerPlayerHudSnapshot},
     terrain::{MineralKind, TileKind, TilePosition},
@@ -620,26 +622,6 @@ fn selected_label(selected: bool, label: &str) -> String {
     }
 }
 
-const fn online_selected_action_help(_game: &GameState, index: usize) -> &'static str {
-    match index {
-        0 => "Publish a LAN game over mDNS and wait for a client.",
-        1 => "Find a LAN host with mDNS and join automatically.",
-        2 => "Reconnect the current online session.",
-        3 => "Edit the descriptor path.",
-        4 => "Inspect the descriptor currently on disk.",
-        5 => "Edit host bind address.",
-        6 => "Edit advertised host address.",
-        7 => "Edit client bind address.",
-        8 => "Cycle simulated gameplay tick count.",
-        9 => "Simulate timeout behavior.",
-        10 => "Show the latest online error.",
-        11 => "Shutdown the online session.",
-        12 => "Toggle local lobby readiness.",
-        13 => "Start online gameplay when ready.",
-        _ => "Return to the previous menu.",
-    }
-}
-
 fn online_peer_summary<T: std::fmt::Debug>(label: &str, peer: &T) -> String {
     format!("{label}: {peer:?}")
 }
@@ -815,21 +797,21 @@ fn draw_inventory_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 }
 
 fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    match game.online_multiplayer_view {
+        OnlineMultiplayerView::MainMenu => draw_online_multiplayer_main_menu(draw, game),
+        OnlineMultiplayerView::HostLan => draw_online_multiplayer_host_lan(draw, game),
+        OnlineMultiplayerView::JoinLan => draw_online_multiplayer_join_lan(draw, game),
+        OnlineMultiplayerView::AdvancedDirectConnect => {
+            draw_online_multiplayer_advanced_direct_connect(draw, game);
+        }
+    }
+}
+
+fn draw_online_multiplayer_main_menu(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let options = [
-        "Host LAN game (mDNS)",
-        "Join LAN game (auto-discover)",
-        "Reconnect",
-        "Advanced descriptor path",
-        "Inspect descriptor file",
-        "Host bind addr",
-        "Host advertise addr",
-        "Client bind addr",
-        "Cycle gameplay tick count",
-        "Simulate timeout",
-        "Show error",
-        "Shutdown session",
-        "Toggle ready",
-        "Start online gameplay",
+        "Host LAN Game",
+        "Join LAN Game",
+        "Advanced Direct Connect",
         "Back",
     ];
     let option_items = options
@@ -838,7 +820,97 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
         .map(|(index, option)| {
             SectionItem::stat(
                 selected_label(index == game.selected_menu_item, option),
-                online_selected_action_help(game, index),
+                match index {
+                    0 => "Start a LAN host and show live hosting status.",
+                    1 => "Scan LAN for games and show join status.",
+                    2 => "Descriptor files, bind addresses, reconnect, and diagnostics.",
+                    _ => "Return to the previous screen.",
+                },
+                if index == game.selected_menu_item {
+                    Color::GOLD
+                } else {
+                    Color::RAYWHITE
+                },
+            )
+        })
+        .collect();
+    UiLayout::screen(draw).modal_with_render_plan(
+        "Online Multiplayer",
+        "Choose a LAN flow. Hosting and joining open dedicated status screens.",
+        &ModalContent::new(vec![
+            Section::new("Actions", Color::SKYBLUE, option_items),
+            Section::new(
+                "Current Status",
+                Color::ORANGE,
+                vec![SectionItem::text(
+                    game.online_session_status_message.clone(),
+                )],
+            ),
+        ]),
+    );
+}
+
+fn draw_online_multiplayer_host_lan(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let options = ["Toggle Ready", "Start Game", "Stop Hosting", "Back"];
+    draw_online_flow_screen(
+        draw,
+        game,
+        "Hosting LAN Game",
+        "Live LAN host status. Leave this screen open while the other player joins.",
+        &options,
+    );
+}
+
+fn draw_online_multiplayer_join_lan(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let options = ["Refresh Scan", "Toggle Ready", "Leave", "Back"];
+    draw_online_flow_screen(
+        draw,
+        game,
+        "Join LAN Game",
+        "Live LAN join status. The game scans mDNS and connects automatically.",
+        &options,
+    );
+}
+
+fn draw_online_multiplayer_advanced_direct_connect(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+) {
+    let options = [
+        "Host descriptor session",
+        "Join descriptor session",
+        "Descriptor path",
+        "Inspect descriptor file",
+        "Host bind addr",
+        "Host advertise addr",
+        "Client bind addr",
+        "Cycle gameplay tick count",
+        "Reconnect",
+        "Back",
+    ];
+    draw_online_flow_screen(
+        draw,
+        game,
+        "Advanced Direct Connect",
+        "Manual descriptor-file and address tools for debugging/direct connection.",
+        &options,
+    );
+}
+
+fn draw_online_flow_screen(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    title: &str,
+    subtitle: &str,
+    options: &[&str],
+) {
+    let option_items = options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            SectionItem::stat(
+                selected_label(index == game.selected_menu_item, option),
+                "",
                 if index == game.selected_menu_item {
                     Color::GOLD
                 } else {
@@ -849,26 +921,15 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
         .collect();
     let lobby = game.online_lobby_presentation();
     UiLayout::screen(draw).modal_with_render_plan(
-        "Online Multiplayer",
-        "LAN setup for two computers. Host publishes via mDNS; client auto-discovers and fetches the descriptor internally.",
+        title,
+        subtitle,
         &ModalContent::new(vec![
-            Section::new("Actions", Color::SKYBLUE, option_items),
-            Section::new(
-                "Connection",
-                Color::LIME,
-                vec![
-                    SectionItem::stat("Descriptor", game.online_descriptor_path.display().to_string(), Color::LIGHTGRAY),
-                    SectionItem::stat("Host bind", game.online_host_bind_addr.to_string(), Color::LIGHTGRAY),
-                    SectionItem::stat("Host advertise", game.online_host_advertise_addr.to_string(), Color::LIGHTGRAY),
-                    SectionItem::stat("Client bind", game.online_client_bind_addr.to_string(), Color::LIGHTGRAY),
-                ],
-            ),
             Section::new(
                 "Status",
                 Color::ORANGE,
                 game.online_multiplayer_status_lines()
                     .into_iter()
-                    .take(8)
+                    .take(12)
                     .map(SectionItem::text)
                     .collect(),
             ),
@@ -881,6 +942,7 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
                     SectionItem::text(lobby.guidance),
                 ],
             ),
+            Section::new("Actions", Color::SKYBLUE, option_items),
         ]),
     );
 }
