@@ -176,19 +176,27 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         body: Option<&str>,
         accent: Color,
     ) {
-        self.draw_panel(rect, PanelKind::Overlay);
-        let inner = inset(rect, Insets::symmetric(10.0, 8.0));
-        Self::draw_text(heading, inner.x, inner.y, TextKind::Heading, accent);
+        let mut children = vec![widgets::UiNode::Text(widgets::TextNode::colored(
+            heading,
+            TextKind::Heading,
+            (rect.width - 20.0).max(0.0),
+            accent,
+        ))];
         if let Some(body) = body {
-            Self::draw_wrapped(
+            children.push(widgets::UiNode::Text(widgets::TextNode::colored(
                 body,
-                inner.x,
-                inner.y + 26.0,
-                inner.width,
                 TextKind::Small,
+                (rect.width - 20.0).max(0.0),
                 Color::LIGHTGRAY,
-            );
+            )));
         }
+        let mut node = widgets::UiNode::Panel(widgets::PanelNode::new(
+            Insets::symmetric(10.0, 8.0),
+            widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, children)),
+        ));
+        node.layout(rect);
+        let plan = node.render_plan();
+        self.render_plan(&plan);
     }
 
     pub(super) fn canvas_modal(&mut self, title: &str, subtitle: &str, summary: &str) -> Rectangle {
@@ -400,14 +408,6 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             height as i32,
             Color::new(220, 225, 230, 180),
         );
-    }
-
-    fn draw_wrapped(text: &str, x: f32, y: f32, width: f32, kind: TextKind, color: Color) -> f32 {
-        let layout = layout_text(text, width, kind);
-        for line in &layout.lines {
-            Self::draw_text(&line.text, x + line.x, y + line.y, kind, color);
-        }
-        y + layout.size.height + 4.0
     }
 
     fn draw_text(text: &str, x: f32, y: f32, kind: TextKind, color: Color) {
