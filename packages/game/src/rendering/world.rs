@@ -20,13 +20,13 @@ pub fn render_camera(game: &GameState) -> Vector2 {
     camera
 }
 
-pub(super) fn world_camera(camera: Vector2) -> Camera2D {
+pub(super) fn world_camera(camera: Vector2, zoom: f32) -> Camera2D {
     let snapped_camera = Vector2::new(camera.x.round(), camera.y.round());
     Camera2D {
         offset: Vector2::zero(),
         target: snapped_camera,
         rotation: 0.0,
-        zoom: 1.0,
+        zoom,
     }
 }
 

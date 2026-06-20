@@ -40,6 +40,16 @@ use crate::{
 const SCREEN_WIDTH: i32 = 1280;
 const SCREEN_HEIGHT: i32 = 720;
 
+fn render_viewport_for_draw(draw: &RaylibDrawHandle<'_>) -> crate::session::Viewport {
+    crate::session::Viewport::new(0, 0, draw.get_screen_width(), draw.get_screen_height())
+}
+
+fn render_scale_for_draw(draw: &RaylibDrawHandle<'_>) -> f32 {
+    let scale_x = draw.get_render_width() as f32 / draw.get_screen_width().max(1) as f32;
+    let scale_y = draw.get_render_height() as f32 / draw.get_screen_height().max(1) as f32;
+    scale_x.min(scale_y).max(1.0)
+}
+
 pub struct GameRenderer {
     terrain: TerrainRenderer,
     ui_font_assets: UiFontAssets,
@@ -284,6 +294,7 @@ impl GameRenderer {
         game: &GameState,
         output: &LiveRenderFrameOutput,
     ) {
+        draw.clear_background(Color::new(105, 190, 235, 255));
         for plan in &output.viewport_plans {
             let world_players = output
                 .world_players_by_view
@@ -312,8 +323,12 @@ impl GameRenderer {
         world_players: &[crate::session::RenderWorldPlayerPresentation],
         hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
+        let viewport = if plan.clip_enabled {
+            plan.viewport
+        } else {
+            render_viewport_for_draw(draw)
+        };
         if plan.clip_enabled {
-            let viewport = plan.viewport;
             unsafe {
                 ffi::BeginScissorMode(viewport.x, viewport.y, viewport.width, viewport.height);
             }
@@ -327,9 +342,9 @@ impl GameRenderer {
                 }),
             camera: plan.local_player.map_or_else(
                 || world::render_camera(game),
-                |player| centered_camera_for_player(game, player.x, player.y, plan.viewport),
+                |player| centered_camera_for_player(game, player.x, player.y, viewport),
             ),
-            viewport: plan.viewport,
+            viewport,
             run_mode: game.run_mode,
         };
         self.render_client_view(draw, game, &view, world_players, hud);
@@ -350,14 +365,14 @@ impl GameRenderer {
     ) {
         layout::set_current_fonts(self.ui_font_assets.fonts());
         layout::set_current_ui_state(self.ui_state.borrow().clone());
-        draw.clear_background(Color::new(105, 190, 235, 255));
 
         let camera = view.camera;
+        let world_zoom = render_scale_for_draw(draw);
 
         if view.run_mode == RunMode::Interior {
             draw_interior(draw, game);
         } else {
-            let mut world_draw = draw.begin_mode2D(world_camera(camera));
+            let mut world_draw = draw.begin_mode2D(world_camera(camera, world_zoom));
             draw_world(&mut world_draw, game, camera, &self.terrain);
             draw_particles(&mut world_draw, game);
             draw_placed_bombs(&mut world_draw, game);
