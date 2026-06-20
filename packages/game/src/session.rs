@@ -5416,125 +5416,20 @@ impl GameSession {
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::SellScanData => {
-                if self.game.town_development.scanner_lab_level == 0
-                    || self.game.scan_markers.is_empty()
-                {
-                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
-                }
-                let marker_count = u32::try_from(self.game.scan_markers.len()).unwrap_or(u32::MAX);
-                let payout = marker_count.saturating_mul(
-                    6 + u32::from(self.game.town_development.scanner_lab_level) * 4,
-                );
-                self.game.scan_markers.clear();
-                player.credits = player.credits.saturating_add(payout);
-                self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
-                PlayerScopedCommandOutcome::Applied
+                let _ = player;
+                self.sell_scan_data_for_player(player_id)
             }
             crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {
-                if self.game.town_development.depot_level < 3 {
-                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
-                }
-                let low_grade = [
-                    crate::terrain::MineralKind::Copper,
-                    crate::terrain::MineralKind::Iron,
-                    crate::terrain::MineralKind::Silver,
-                ];
-                let mut units = 0;
-                let mut payout: u32 = 0;
-                for mineral in low_grade {
-                    let Some(count) = player.cargo.remove(&mineral) else {
-                        continue;
-                    };
-                    units += count;
-                    payout = payout.saturating_add(mineral.value().saturating_mul(count));
-                }
-                if payout == 0 {
-                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
-                }
-                player.credits = player.credits.saturating_add(payout);
-                self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
-                self.game.last_depot_receipt = format!(
-                    "AUTO-SORT sold {units} low-grade unit(s) for {payout} cr. Rare minerals and artifacts preserved."
-                );
-                self.game
-                    .depot_receipts
-                    .push(self.game.last_depot_receipt.clone());
-                if self.game.depot_receipts.len() > 5 {
-                    self.game.depot_receipts.remove(0);
-                }
-                PlayerScopedCommandOutcome::Applied
+                let _ = player;
+                self.auto_sort_low_grade_cargo_for_player(player_id)
             }
             crate::game_state::SessionServiceRequest::CompleteDepotWork => {
                 let _ = player;
                 self.complete_depot_work_for_player(player_id)
             }
             crate::game_state::SessionServiceRequest::StartSideContract => {
-                if self.game.active_side_contracts.len() >= 3 {
-                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
-                }
-                self.game.side_contract_active = true;
-                self.game.side_contract_kind = match self.game.town_event_day % 4 {
-                    0 => crate::game_state::SideContractKind::Cargo,
-                    1 => crate::game_state::SideContractKind::DepthSurvey,
-                    2 => crate::game_state::SideContractKind::HazardScan,
-                    _ => crate::game_state::SideContractKind::Rush,
-                };
-                self.game.side_contract_target = Some(match self.game.side_contract_kind {
-                    crate::game_state::SideContractKind::Cargo => {
-                        TileKind::Ore(crate::terrain::MineralKind::Gold)
-                    }
-                    crate::game_state::SideContractKind::DepthSurvey => {
-                        TileKind::Ore(crate::terrain::MineralKind::Platinum)
-                    }
-                    crate::game_state::SideContractKind::HazardScan => TileKind::Gas,
-                    crate::game_state::SideContractKind::Rush => {
-                        TileKind::Ore(crate::terrain::MineralKind::Ruby)
-                    }
-                });
-                self.game.side_contract_required = match self.game.side_contract_kind {
-                    crate::game_state::SideContractKind::Cargo => 2,
-                    crate::game_state::SideContractKind::DepthSurvey => 65,
-                    crate::game_state::SideContractKind::HazardScan => 3,
-                    crate::game_state::SideContractKind::Rush => 1,
-                };
-                self.game.message = match self.game.side_contract_kind {
-                    crate::game_state::SideContractKind::Cargo => format!(
-                        "Side contract posted: deliver {} x{} for bonus pay.",
-                        self.game
-                            .side_contract_target
-                            .map_or("sample", TileKind::name),
-                        self.game.side_contract_required
-                    ),
-                    crate::game_state::SideContractKind::DepthSurvey => format!(
-                        "Side contract posted: reach {}m and report to depot.",
-                        self.game.side_contract_required
-                    ),
-                    crate::game_state::SideContractKind::HazardScan => format!(
-                        "Side contract posted: scan {} hazards and report to depot.",
-                        self.game.side_contract_required
-                    ),
-                    crate::game_state::SideContractKind::Rush => format!(
-                        "Rush contract posted: deliver {} x{} before day {}.",
-                        self.game
-                            .side_contract_target
-                            .map_or("sample", TileKind::name),
-                        self.game.side_contract_required,
-                        self.game.town_event_day + 2
-                    ),
-                };
-                if let Some(target) = self.game.side_contract_target {
-                    self.game
-                        .active_side_contracts
-                        .push(crate::game_state::SideContract {
-                            kind: self.game.side_contract_kind,
-                            target,
-                            required: self.game.side_contract_required,
-                            expires_day: (self.game.side_contract_kind
-                                == crate::game_state::SideContractKind::Rush)
-                                .then_some(self.game.town_event_day + 2),
-                        });
-                }
-                PlayerScopedCommandOutcome::Applied
+                let _ = player;
+                self.start_side_contract_for_session()
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }
             | crate::game_state::SessionServiceRequest::Repair { .. }
@@ -5542,6 +5437,136 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::BuyUpgrade { .. } => {
                 PlayerScopedCommandOutcome::IgnoredUnavailable
             }
+        }
+    }
+
+    fn sell_scan_data_for_player(&mut self, player_id: PlayerId) -> PlayerScopedCommandOutcome {
+        if self.game.town_development.scanner_lab_level == 0 || self.game.scan_markers.is_empty() {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        }
+        let Some(player) = self.world.player_mut(player_id) else {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        };
+        let marker_count = u32::try_from(self.game.scan_markers.len()).unwrap_or(u32::MAX);
+        let payout = marker_count
+            .saturating_mul(6 + u32::from(self.game.town_development.scanner_lab_level) * 4);
+        self.game.scan_markers.clear();
+        player.credits = player.credits.saturating_add(payout);
+        self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
+        PlayerScopedCommandOutcome::Applied
+    }
+
+    fn auto_sort_low_grade_cargo_for_player(
+        &mut self,
+        player_id: PlayerId,
+    ) -> PlayerScopedCommandOutcome {
+        if self.game.town_development.depot_level < 3 {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        }
+        let Some(player) = self.world.player_mut(player_id) else {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        };
+        let low_grade = [
+            crate::terrain::MineralKind::Copper,
+            crate::terrain::MineralKind::Iron,
+            crate::terrain::MineralKind::Silver,
+        ];
+        let mut units = 0;
+        let mut payout: u32 = 0;
+        for mineral in low_grade {
+            let Some(count) = player.cargo.remove(&mineral) else {
+                continue;
+            };
+            units += count;
+            payout = payout.saturating_add(mineral.value().saturating_mul(count));
+        }
+        if payout == 0 {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        }
+        player.credits = player.credits.saturating_add(payout);
+        self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
+        self.game.last_depot_receipt = format!(
+            "AUTO-SORT sold {units} low-grade unit(s) for {payout} cr. Rare minerals and artifacts preserved."
+        );
+        self.game
+            .depot_receipts
+            .push(self.game.last_depot_receipt.clone());
+        if self.game.depot_receipts.len() > 5 {
+            self.game.depot_receipts.remove(0);
+        }
+        PlayerScopedCommandOutcome::Applied
+    }
+
+    fn start_side_contract_for_session(&mut self) -> PlayerScopedCommandOutcome {
+        if self.game.active_side_contracts.len() >= 3 {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        }
+        self.game.side_contract_active = true;
+        self.game.side_contract_kind = match self.game.town_event_day % 4 {
+            0 => crate::game_state::SideContractKind::Cargo,
+            1 => crate::game_state::SideContractKind::DepthSurvey,
+            2 => crate::game_state::SideContractKind::HazardScan,
+            _ => crate::game_state::SideContractKind::Rush,
+        };
+        self.game.side_contract_target = Some(match self.game.side_contract_kind {
+            crate::game_state::SideContractKind::Cargo => {
+                TileKind::Ore(crate::terrain::MineralKind::Gold)
+            }
+            crate::game_state::SideContractKind::DepthSurvey => {
+                TileKind::Ore(crate::terrain::MineralKind::Platinum)
+            }
+            crate::game_state::SideContractKind::HazardScan => TileKind::Gas,
+            crate::game_state::SideContractKind::Rush => {
+                TileKind::Ore(crate::terrain::MineralKind::Ruby)
+            }
+        });
+        self.game.side_contract_required = match self.game.side_contract_kind {
+            crate::game_state::SideContractKind::Cargo => 2,
+            crate::game_state::SideContractKind::DepthSurvey => 65,
+            crate::game_state::SideContractKind::HazardScan => 3,
+            crate::game_state::SideContractKind::Rush => 1,
+        };
+        self.game.message = self.side_contract_posted_message();
+        if let Some(target) = self.game.side_contract_target {
+            self.game
+                .active_side_contracts
+                .push(crate::game_state::SideContract {
+                    kind: self.game.side_contract_kind,
+                    target,
+                    required: self.game.side_contract_required,
+                    expires_day: (self.game.side_contract_kind
+                        == crate::game_state::SideContractKind::Rush)
+                        .then_some(self.game.town_event_day + 2),
+                });
+        }
+        PlayerScopedCommandOutcome::Applied
+    }
+
+    fn side_contract_posted_message(&self) -> String {
+        match self.game.side_contract_kind {
+            crate::game_state::SideContractKind::Cargo => format!(
+                "Side contract posted: deliver {} x{} for bonus pay.",
+                self.game
+                    .side_contract_target
+                    .map_or("sample", TileKind::name),
+                self.game.side_contract_required
+            ),
+            crate::game_state::SideContractKind::DepthSurvey => format!(
+                "Side contract posted: reach {}m and report to depot.",
+                self.game.side_contract_required
+            ),
+            crate::game_state::SideContractKind::HazardScan => format!(
+                "Side contract posted: scan {} hazards and report to depot.",
+                self.game.side_contract_required
+            ),
+            crate::game_state::SideContractKind::Rush => format!(
+                "Rush contract posted: deliver {} x{} before day {}.",
+                self.game
+                    .side_contract_target
+                    .map_or("sample", TileKind::name),
+                self.game.side_contract_required,
+                self.game.town_event_day + 2
+            ),
         }
     }
 
