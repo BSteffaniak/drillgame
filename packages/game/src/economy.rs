@@ -328,6 +328,7 @@ pub fn upgrade_tier_name(kind: UpgradeKind, level: u8) -> &'static str {
     }
 }
 
+#[allow(dead_code, reason = "retained for upcoming richer upgrade UI details")]
 pub const fn upgrade_effect(kind: UpgradeKind) -> &'static str {
     match kind {
         UpgradeKind::Drill => "+1 drill tier; unlocks harder strata",
