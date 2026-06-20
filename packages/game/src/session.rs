@@ -11515,6 +11515,109 @@ mod tests {
     }
 
     #[test]
+    fn session_complete_depot_work_handles_expeditions_and_side_contracts_authoritatively() {
+        let mut expedition_session = GameSession::new();
+        expedition_session.game.run_mode = RunMode::Playing;
+        expedition_session.game.modal = Some(crate::game_state::ModalScreen::Depot);
+        expedition_session.game.selected_menu_item = 0;
+        expedition_session.game.town_event_day = 1;
+        expedition_session.game.deepest_tile_reached = 100;
+        expedition_session
+            .game
+            .active_expeditions
+            .push(crate::game_state::Expedition {
+                kind: crate::game_state::ExpeditionObjectiveKind::ReachDepth,
+                target: TileKind::Stone,
+                required: 80,
+                reward: 777,
+                expires_day: 3,
+            });
+        {
+            let player = expedition_session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 10;
+        }
+        expedition_session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = expedition_session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(expedition_session.game().active_expeditions.is_empty());
+        assert_eq!(expedition_session.game().expeditions_completed, 1);
+        assert_eq!(expedition_session.game().player.credits, 787);
+        assert_eq!(
+            expedition_session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .credits,
+            787
+        );
+
+        let mut side_contract_session = GameSession::new();
+        side_contract_session.game.run_mode = RunMode::Playing;
+        side_contract_session.game.modal = Some(crate::game_state::ModalScreen::Depot);
+        side_contract_session.game.selected_menu_item = 0;
+        side_contract_session.game.side_contract_active = true;
+        side_contract_session.game.side_contract_kind = crate::game_state::SideContractKind::Cargo;
+        side_contract_session.game.side_contract_target =
+            Some(TileKind::Ore(crate::terrain::MineralKind::Gold));
+        side_contract_session.game.side_contract_required = 2;
+        side_contract_session
+            .game
+            .active_side_contracts
+            .push(crate::game_state::SideContract {
+                kind: crate::game_state::SideContractKind::Cargo,
+                target: TileKind::Ore(crate::terrain::MineralKind::Gold),
+                required: 2,
+                expires_day: None,
+            });
+        {
+            let player = side_contract_session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 5;
+            *player
+                .cargo
+                .entry(crate::terrain::MineralKind::Gold)
+                .or_default() = 2;
+        }
+        side_contract_session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = side_contract_session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(
+            side_contract_session
+                .game()
+                .active_side_contracts
+                .is_empty()
+        );
+        assert!(!side_contract_session.game().side_contract_active);
+        assert_eq!(side_contract_session.game().player.credits, 585);
+        assert_eq!(side_contract_session.game().player.cargo_used(), 0);
+        let player = side_contract_session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert_eq!(player.credits, 585);
+        assert_eq!(player.cargo_used(), 0);
+    }
+
+    #[test]
     fn session_town_development_and_salvage_recovery_mutate_authoritative_state() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
