@@ -1965,6 +1965,9 @@ pub enum SessionServiceRequest {
     UpgradeTownBuilding { building: TownBuilding },
     SalvageRecoverLostCargo,
     SalvageLaunchDrone,
+    SalvageRecoverWreckedPart,
+    SalvageClearCollapseZones,
+    SalvageSellScrapTip,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9629,9 +9632,9 @@ impl GameState {
             0 => self.queue_salvage_recover_lost_cargo(),
             1 => self.queue_salvage_patch_hull(),
             2 => self.queue_salvage_launch_drone(),
-            3 => self.salvage_recover_wrecked_part(),
-            4 => self.salvage_clear_collapse_zone(),
-            _ => self.salvage_sell_scrap_tip(),
+            3 => self.queue_salvage_recover_wrecked_part(),
+            4 => self.queue_salvage_clear_collapse_zones(),
+            _ => self.queue_salvage_sell_scrap_tip(),
         }
     }
 
@@ -9664,6 +9667,21 @@ impl GameState {
     fn queue_salvage_launch_drone(&mut self) {
         self.session_service_request = Some(SessionServiceRequest::SalvageLaunchDrone);
         "Salvage drone queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_recover_wrecked_part(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvageRecoverWreckedPart);
+        "Wrecked rig recovery queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_clear_collapse_zones(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvageClearCollapseZones);
+        "Collapse-zone cleanup queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_sell_scrap_tip(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvageSellScrapTip);
+        "Scrap telemetry sale queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn queue_finance(&mut self) {
@@ -9730,45 +9748,6 @@ impl GameState {
                     .then_some(self.town_event_day + 2),
             });
         }
-    }
-
-    fn salvage_recover_wrecked_part(&mut self) {
-        if self.town_development.salvage_yard_level < 3 {
-            "Wrecked rig part recovery unlocks at Salvage Yard level 3."
-                .clone_into(&mut self.message);
-            return;
-        }
-        let part = match self.rescue_count % 4 {
-            0 => RigPartKind::ImpactHull,
-            1 => RigPartKind::ArmoredCargoBay,
-            2 => RigPartKind::HazardScanner,
-            _ => RigPartKind::NeedleDrill,
-        };
-        self.rig_part_inventory.insert(part);
-        self.sound_cues.push(SoundCue::Upgrade);
-        self.message = format!("Mara recovered a wrecked {} rig part.", part.title());
-    }
-
-    fn salvage_clear_collapse_zone(&mut self) {
-        if self.town_development.salvage_yard_level < 4 {
-            "Collapse-zone contracts unlock at Salvage Yard level 4.".clone_into(&mut self.message);
-            return;
-        }
-        let cleared = self.collapse_warnings.len();
-        self.collapse_warnings.clear();
-        let payout = u32::try_from(cleared)
-            .unwrap_or(u32::MAX)
-            .saturating_mul(45);
-        self.player.credits = self.player.credits.saturating_add(payout);
-        self.total_earnings = self.total_earnings.saturating_add(payout);
-        self.sound_cues.push(SoundCue::Milestone);
-        self.message = format!("Cleared {cleared} collapse-zone warning(s) for {payout} credits.");
-    }
-
-    fn salvage_sell_scrap_tip(&mut self) {
-        self.player.credits = self.player.credits.saturating_add(35);
-        "Mara bought scrap telemetry for 35 credits.".clone_into(&mut self.message);
-        self.sound_cues.push(SoundCue::Sell);
     }
 
     fn try_complete_side_contract(&mut self) {
@@ -16864,14 +16843,36 @@ mod tests {
         assert_eq!(game.player.cargo_used(), 0);
 
         game.modal = Some(ModalScreen::Salvage);
-        game.selected_menu_item = 2;
+        game.selected_menu_item = 3;
         game.handle_modal(PlayerInput {
             confirm: true,
             ..PlayerInput::default()
         });
         assert_eq!(
             game.take_session_service_request(),
-            Some(SessionServiceRequest::SalvageLaunchDrone)
+            Some(SessionServiceRequest::SalvageRecoverWreckedPart)
+        );
+
+        game.modal = Some(ModalScreen::Salvage);
+        game.selected_menu_item = 4;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SalvageClearCollapseZones)
+        );
+
+        game.modal = Some(ModalScreen::Salvage);
+        game.selected_menu_item = 5;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SalvageSellScrapTip)
         );
     }
 

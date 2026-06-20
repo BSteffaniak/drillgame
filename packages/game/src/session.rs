@@ -4987,7 +4987,10 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::CraftRecipe { .. }
             | crate::game_state::SessionServiceRequest::UpgradeTownBuilding { .. }
             | crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo
-            | crate::game_state::SessionServiceRequest::SalvageLaunchDrone => None,
+            | crate::game_state::SessionServiceRequest::SalvageLaunchDrone
+            | crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart
+            | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
+            | crate::game_state::SessionServiceRequest::SalvageSellScrapTip => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5016,7 +5019,10 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::CraftRecipe { .. }
                 | crate::game_state::SessionServiceRequest::UpgradeTownBuilding { .. }
                 | crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo
-                | crate::game_state::SessionServiceRequest::SalvageLaunchDrone => {}
+                | crate::game_state::SessionServiceRequest::SalvageLaunchDrone
+                | crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart
+                | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
+                | crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5125,6 +5131,18 @@ impl GameSession {
                     self.game.sound_cues.push(SoundCue::Upgrade);
                     "Salvage drone deployed to the rescue beacon and recovered marked cargo."
                         .to_owned()
+                }
+                crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    "Mara recovered a wrecked rig part.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::SalvageClearCollapseZones => {
+                    self.game.sound_cues.push(SoundCue::Milestone);
+                    "Collapse-zone warnings cleared for salvage payout.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {
+                    self.game.sound_cues.push(SoundCue::Sell);
+                    "Mara bought scrap telemetry for 35 credits.".to_owned()
                 }
             };
         } else {
@@ -5341,6 +5359,36 @@ impl GameSession {
                 self.game.lost_cargo_count = 0;
                 self.game.lost_cargo_x = None;
                 self.game.lost_cargo_y = None;
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart => {
+                if self.game.town_development.salvage_yard_level < 3 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let part = match self.game.rescue_count % 4 {
+                    0 => crate::game_state::RigPartKind::ImpactHull,
+                    1 => crate::game_state::RigPartKind::ArmoredCargoBay,
+                    2 => crate::game_state::RigPartKind::HazardScanner,
+                    _ => crate::game_state::RigPartKind::NeedleDrill,
+                };
+                self.game.rig_part_inventory.insert(part);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvageClearCollapseZones => {
+                if self.game.town_development.salvage_yard_level < 4 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let cleared = self.game.collapse_warnings.len();
+                self.game.collapse_warnings.clear();
+                let payout = u32::try_from(cleared)
+                    .unwrap_or(u32::MAX)
+                    .saturating_mul(45);
+                player.credits = player.credits.saturating_add(payout);
+                self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {
+                player.credits = player.credits.saturating_add(35);
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }
@@ -11242,6 +11290,19 @@ mod tests {
                 .cargo_used(),
             1
         );
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Salvage);
+        session.game.selected_menu_item = 5;
+        let credits_before = session.game().player.credits;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().player.credits, credits_before + 35);
     }
 
     #[test]
