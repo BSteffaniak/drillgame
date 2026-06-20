@@ -76,11 +76,11 @@ fn draw_view_hud_panel(
     hud: Option<PerPlayerHudSnapshot>,
 ) {
     let mut ui = UiContext::new(draw);
-    let panel_width = view.viewport.width.clamp(260, 430) as f32;
+    let panel_width = view.viewport.width.clamp(300, 460) as f32;
     let panel_height = if view.viewport.height < 420 {
-        150.0
+        205.0
     } else {
-        210.0
+        270.0
     };
     let mut panel = ui.panel(Rectangle {
         x: view.viewport.x as f32 + 12.0,
@@ -90,28 +90,47 @@ fn draw_view_hud_panel(
     });
     panel.begin_clip();
     panel.heading(&format!("Pilot {}", view.controlled_player_id.get()));
-    if let Some(hud) = hud {
-        panel.label(&format!(
-            "Hull {:.0}/{:.0} | Fuel {:.0}/{:.0} | Credits {}",
-            hud.hull, hud.max_hull, hud.fuel, hud.fuel_capacity, hud.credits
-        ));
-        panel.muted(&format!("Cargo {}", hud.cargo_used));
-    } else {
-        panel.label(&format!(
-            "Hull {:.0}/{:.0} | Fuel {:.0}/{:.0} | Credits {}",
-            game.player.hull,
-            game.player.max_hull(),
-            game.player.fuel,
-            game.player.fuel_capacity,
-            game.player.credits
-        ));
-        panel.muted(&format!(
-            "Cargo {}/{} | Depth {}m",
-            game.player.cargo_used(),
-            game.player.cargo_capacity,
-            (game.player.y / TILE_SIZE).max(0.0) as i32
-        ));
-    }
+
+    let (hull, max_hull, fuel, fuel_capacity, credits, cargo_used, cargo_capacity) = hud
+        .map_or_else(
+            || {
+                (
+                    game.player.hull,
+                    game.player.max_hull(),
+                    game.player.fuel,
+                    game.player.fuel_capacity,
+                    game.player.credits,
+                    game.player.cargo_used(),
+                    game.player.cargo_capacity,
+                )
+            },
+            |hud| {
+                (
+                    hud.hull,
+                    hud.max_hull,
+                    hud.fuel,
+                    hud.fuel_capacity,
+                    hud.credits,
+                    hud.cargo_used,
+                    game.player.cargo_capacity,
+                )
+            },
+        );
+
+    panel.progress_bar("Hull", hull, max_hull, Color::SKYBLUE, Color::RED);
+    panel.progress_bar("Fuel", fuel, fuel_capacity, Color::LIME, Color::ORANGE);
+    panel.stat_line("Credits", &format!("{credits} cr"), Color::GOLD);
+    panel.stat_line(
+        "Cargo",
+        &format!("{cargo_used}/{cargo_capacity} slots"),
+        Color::LIGHTGRAY,
+    );
+    panel.stat_line(
+        "Depth",
+        &format!("{}m", (game.player.y / TILE_SIZE).max(0.0) as i32),
+        Color::LIGHTGRAY,
+    );
+    panel.separator();
     panel.muted(&format!(
         "Objective: {} {}/{} {}",
         game.contracts.active.title,
@@ -119,6 +138,7 @@ fn draw_view_hud_panel(
         game.contracts.active.required,
         game.contracts.active.target.name()
     ));
+    panel.muted(&game.warning_summary());
 }
 
 pub(super) fn draw_minimap_for_view(
@@ -628,19 +648,57 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
 fn draw_map_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let mut ui = UiContext::new(draw);
     ui.draw_dimmed_backdrop();
-    let mut panel = ui.panel(modal_rect(840, 520));
+    let mut panel = ui.panel(modal_rect(980, 610));
     panel.title("Mine Map");
     panel.muted("M/Esc/Backspace closes | discovered terrain only");
     panel.separator();
     panel.label(&format!(
-        "Position: {:.0}m lateral, depth {}m. Terrain: {} x {} tiles.",
+        "Position: {:.0}m lateral, depth {}m | Deepest reached: {}m",
         game.player.x / TILE_SIZE,
         (game.player.y / TILE_SIZE).max(0.0) as i32,
-        game.terrain.width(),
-        game.terrain.height()
+        game.deepest_tile_reached
     ));
-    panel.label(&format!("Deepest reached: {}m", game.deepest_tile_reached));
-    panel.muted("The old pixel map view is intentionally suppressed until it is rebuilt as a measured canvas widget with owned bounds and labels.");
+    drop(panel);
+
+    let map_x = 210;
+    let map_y = 245;
+    let map_w = 860;
+    let map_h = 300;
+    draw.draw_rectangle(map_x, map_y, map_w, map_h, Color::new(12, 10, 14, 255));
+    draw.draw_rectangle_lines(map_x, map_y, map_w, map_h, Color::new(190, 205, 220, 230));
+    let terrain_width = game.terrain.width().max(1);
+    let terrain_height = game.terrain.height().max(1);
+    for ty in 0..terrain_height {
+        for tx in 0..terrain_width {
+            let position = TilePosition { x: tx, y: ty };
+            if !game.is_explored(position) {
+                continue;
+            }
+            let Some(tile) = game.terrain.tile(position) else {
+                continue;
+            };
+            let color = match tile.kind {
+                TileKind::Air => Color::new(40, 42, 55, 255),
+                TileKind::Foundation => Color::new(135, 125, 105, 255),
+                TileKind::Lava | TileKind::MagmaVent => Color::RED,
+                TileKind::Gas => Color::GREEN,
+                TileKind::ExplosivePocket => Color::ORANGE,
+                TileKind::PressurePocket => Color::SKYBLUE,
+                TileKind::Ore(_) => Color::GOLD,
+                TileKind::Artifact(_) => Color::MAGENTA,
+                _ => Color::new(115, 82, 58, 255),
+            };
+            let px = map_x + tx * map_w / terrain_width;
+            let py = map_y + ty * map_h / terrain_height;
+            let pw = ((tx + 1) * map_w / terrain_width - tx * map_w / terrain_width).max(1);
+            let ph = ((ty + 1) * map_h / terrain_height - ty * map_h / terrain_height).max(1);
+            draw.draw_rectangle(px, py, pw, ph, color);
+        }
+    }
+    let player_map_x = map_x + ((game.player.x / TILE_SIZE) as i32) * map_w / terrain_width;
+    let player_map_y = map_y + ((game.player.y / TILE_SIZE) as i32) * map_h / terrain_height;
+    draw.draw_circle(player_map_x, player_map_y, 5.0, Color::SKYBLUE);
+    draw.draw_circle_lines(player_map_x, player_map_y, 8.0, Color::RAYWHITE);
 }
 
 fn draw_help_ui(draw: &mut RaylibDrawHandle<'_>) {

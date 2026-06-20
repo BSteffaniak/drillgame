@@ -145,6 +145,46 @@ impl UiPanel<'_, '_> {
         }
     }
 
+    pub(super) fn stat_line(&mut self, label: &str, value: &str, color: Color) {
+        let text = format!("{label}: {value}");
+        self.wrapped_text(&text, TextStyle::Small, color);
+    }
+
+    pub(super) fn progress_bar(
+        &mut self,
+        label: &str,
+        value: f32,
+        max_value: f32,
+        fill: Color,
+        danger: Color,
+    ) {
+        let ratio = if max_value <= f32::EPSILON {
+            0.0
+        } else {
+            (value / max_value).clamp(0.0, 1.0)
+        };
+        let label_line = format!("{label} {value:.0}/{max_value:.0}");
+        Self::draw_text_at(
+            self.content.x,
+            self.cursor_y,
+            &label_line,
+            TextStyle::Small,
+            self.theme.text,
+        );
+        self.cursor_y += line_height(TextStyle::Small) as f32;
+        let x = self.content.x as i32;
+        let y = self.cursor_y as i32;
+        let width = self.content.width as i32;
+        let color = if ratio < 0.25 { danger } else { fill };
+        self.draw
+            .draw_rectangle(x, y, width, 10, Color::new(24, 28, 36, 230));
+        self.draw
+            .draw_rectangle(x, y, (self.content.width * ratio) as i32, 10, color);
+        self.draw
+            .draw_rectangle_lines(x, y, width, 10, self.theme.border);
+        self.cursor_y += 10.0 + self.theme.gap as f32;
+    }
+
     pub(super) fn separator(&mut self) {
         let y = self.cursor_y as i32 + 2;
         self.draw.draw_line(
