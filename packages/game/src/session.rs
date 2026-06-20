@@ -4952,6 +4952,10 @@ impl GameSession {
         })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "session-owned service dispatcher is being expanded while legacy GameState mutations are deleted"
+    )]
     fn handle_session_service_request(&mut self) -> Option<SessionSaveLoadSummary> {
         let request = self.game.take_session_service_request()?;
         let player_id = self.local_client().controlled_player_id;
@@ -4968,14 +4972,22 @@ impl GameSession {
                 None
             };
         let command = match request {
-            crate::game_state::SessionServiceRequest::Refuel { .. } => PlayerCommand::Refuel,
-            crate::game_state::SessionServiceRequest::Repair { .. } => PlayerCommand::Repair,
-            crate::game_state::SessionServiceRequest::SellCargo => PlayerCommand::SellCargo,
+            crate::game_state::SessionServiceRequest::Refuel { .. } => Some(PlayerCommand::Refuel),
+            crate::game_state::SessionServiceRequest::Repair { .. } => Some(PlayerCommand::Repair),
+            crate::game_state::SessionServiceRequest::SellCargo => Some(PlayerCommand::SellCargo),
             crate::game_state::SessionServiceRequest::BuyUpgrade { index } => {
-                PlayerCommand::BuyUpgrade { index }
+                Some(PlayerCommand::BuyUpgrade { index })
             }
+            crate::game_state::SessionServiceRequest::BuyBombBundle { .. }
+            | crate::game_state::SessionServiceRequest::BuyMiningRockets
+            | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
+            | crate::game_state::SessionServiceRequest::SalvagePatchHull => None,
         };
-        let outcome = self.world.apply_player_command(player_id, &command);
+        let outcome = if let Some(command) = command {
+            self.world.apply_player_command(player_id, &command)
+        } else {
+            self.apply_direct_session_service_request(player_id, request)
+        };
         if matches!(outcome, PlayerScopedCommandOutcome::Applied) {
             self.sync_legacy_player_from_world(player_id);
             match request {
@@ -4988,7 +5000,11 @@ impl GameSession {
                     self.game.service_animation_seconds = 1.4;
                 }
                 crate::game_state::SessionServiceRequest::SellCargo
-                | crate::game_state::SessionServiceRequest::BuyUpgrade { .. } => {}
+                | crate::game_state::SessionServiceRequest::BuyUpgrade { .. }
+                | crate::game_state::SessionServiceRequest::BuyBombBundle { .. }
+                | crate::game_state::SessionServiceRequest::BuyMiningRockets
+                | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
+                | crate::game_state::SessionServiceRequest::SalvagePatchHull => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5030,11 +5046,76 @@ impl GameSession {
                         "Upgrade purchase unavailable.".to_owned()
                     }
                 }
+                crate::game_state::SessionServiceRequest::BuyBombBundle { count, cost } => {
+                    let bonus = u32::from(self.game.town_development.explosives_shack_level / 2);
+                    let delivered = count + bonus;
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    format!(
+                        "Nix sold you {delivered} timed charges for {cost} credits. Don't hug them."
+                    )
+                }
+                crate::game_state::SessionServiceRequest::BuyMiningRockets => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    "Nix packed 4 mining rockets as high-yield shaped charges.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::ClaimFreeTestCharge => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    "Nix comped one test charge. Try not to test it indoors.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::SalvagePatchHull => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    let restored = after.2 - before.2;
+                    format!("Salvage Yard patch job restored {restored:.0} hull.")
+                }
             };
         } else {
             "Service unavailable for current player.".clone_into(&mut self.game.message);
         }
         Some(SessionSaveLoadSummary::saved(self.game.message.clone()))
+    }
+
+    fn apply_direct_session_service_request(
+        &mut self,
+        player_id: PlayerId,
+        request: crate::game_state::SessionServiceRequest,
+    ) -> PlayerScopedCommandOutcome {
+        let Some(player) = self.world.player_mut(player_id) else {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        };
+        match request {
+            crate::game_state::SessionServiceRequest::BuyBombBundle { count, cost } => {
+                if player.credits < cost {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                player.credits -= cost;
+                let bonus = u32::from(self.game.town_development.explosives_shack_level / 2);
+                player.bombs = player.bombs.saturating_add(count + bonus);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::BuyMiningRockets => {
+                if self.game.town_development.explosives_shack_level < 4 || player.credits < 180 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                player.credits -= 180;
+                player.bombs = player.bombs.saturating_add(4);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::ClaimFreeTestCharge => {
+                player.bombs = player.bombs.saturating_add(1);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvagePatchHull => {
+                let patch = (player.max_hull() * 0.12).ceil();
+                player.hull = (player.hull + patch).min(player.max_hull());
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::Refuel { .. }
+            | crate::game_state::SessionServiceRequest::Repair { .. }
+            | crate::game_state::SessionServiceRequest::SellCargo
+            | crate::game_state::SessionServiceRequest::BuyUpgrade { .. } => {
+                PlayerScopedCommandOutcome::IgnoredUnavailable
+            }
+        }
     }
 
     fn save_slot_from_session_request(&mut self, slot: usize) -> SessionSaveLoadSummary {
@@ -10873,6 +10954,76 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_explosives_and_salvage_services_mutate_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.town_development.explosives_shack_level = 4;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 500;
+            player.bombs = 0;
+            player.hull = 10.0;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Explosives);
+        session.game.selected_menu_item = 0;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().message.contains("timed charges"));
+        assert_eq!(session.game().player.bombs, 5);
+        assert_eq!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .bombs,
+            5
+        );
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Explosives);
+        session.game.selected_menu_item = 2;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().player.bombs, 9);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Salvage);
+        session.game.selected_menu_item = 1;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().player.hull > 10.0);
+        assert!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .hull
+                > 10.0
+        );
     }
 
     #[test]

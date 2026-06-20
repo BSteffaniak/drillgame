@@ -1955,6 +1955,10 @@ pub enum SessionServiceRequest {
     Repair { menu_item: usize },
     SellCargo,
     BuyUpgrade { index: usize },
+    BuyBombBundle { count: u32, cost: u32 },
+    BuyMiningRockets,
+    ClaimFreeTestCharge,
+    SalvagePatchHull,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9684,26 +9688,43 @@ impl GameState {
 
     fn confirm_explosives_menu(&mut self) {
         match self.selected_menu_item {
-            0 => self.buy_explosive_shack_pack(3, 55),
-            1 => self.buy_explosive_shack_pack(7, 120),
-            2 => self.buy_mining_rocket_pack(),
-            _ => {
-                self.player.bombs = self.player.bombs.saturating_add(1);
-                "Nix comped one test charge. Try not to test it indoors."
-                    .clone_into(&mut self.message);
-            }
+            0 => self.queue_bomb_bundle(3, 55),
+            1 => self.queue_bomb_bundle(7, 120),
+            2 => self.queue_mining_rockets(),
+            _ => self.queue_free_test_charge(),
         }
     }
 
     fn confirm_salvage_menu(&mut self) {
         match self.selected_menu_item {
             0 => self.salvage_recover_lost_cargo(),
-            1 => self.salvage_patch_hull(),
+            1 => self.queue_salvage_patch_hull(),
             2 => self.salvage_launch_drone(),
             3 => self.salvage_recover_wrecked_part(),
             4 => self.salvage_clear_collapse_zone(),
             _ => self.salvage_sell_scrap_tip(),
         }
+    }
+
+    fn queue_bomb_bundle(&mut self, count: u32, cost: u32) {
+        self.session_service_request = Some(SessionServiceRequest::BuyBombBundle { count, cost });
+        self.message =
+            format!("Bomb bundle queued for authoritative session ({count} for {cost} cr).");
+    }
+
+    fn queue_mining_rockets(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::BuyMiningRockets);
+        "Mining rockets queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_free_test_charge(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::ClaimFreeTestCharge);
+        "Test charge queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_patch_hull(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvagePatchHull);
+        "Salvage patch queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn buy_insurance(&mut self) {
@@ -9813,34 +9834,6 @@ impl GameState {
         self.sound_cues.push(SoundCue::Sell);
     }
 
-    fn buy_explosive_shack_pack(&mut self, count: u32, cost: u32) {
-        if self.player.credits < cost {
-            self.message = format!("Explosive Shack: bomb bundle costs {cost} credits.");
-            return;
-        }
-        self.player.credits -= cost;
-        let bonus = u32::from(self.town_development.explosives_shack_level / 2);
-        let delivered = count + bonus;
-        self.player.bombs += delivered;
-        self.sound_cues.push(SoundCue::Upgrade);
-        self.message = format!("Nix sold you {delivered} timed charges. Don't hug them.");
-    }
-
-    fn buy_mining_rocket_pack(&mut self) {
-        if self.town_development.explosives_shack_level < 4 {
-            "Mining rockets unlock at Explosives Shack level 4.".clone_into(&mut self.message);
-            return;
-        }
-        if self.player.credits < 180 {
-            "Mining rocket bundle costs 180 credits.".clone_into(&mut self.message);
-            return;
-        }
-        self.player.credits -= 180;
-        self.player.bombs = self.player.bombs.saturating_add(4);
-        self.sound_cues.push(SoundCue::Upgrade);
-        "Nix packed 4 mining rockets as high-yield shaped charges.".clone_into(&mut self.message);
-    }
-
     fn salvage_recover_lost_cargo(&mut self) {
         let recovered = self.lost_cargo_count;
         if recovered == 0 {
@@ -9862,13 +9855,6 @@ impl GameState {
         self.lost_cargo_x = None;
         self.lost_cargo_y = None;
         self.message = format!("Mara recovered {recovered} lost cargo markers for {fee} credits.");
-        self.sound_cues.push(SoundCue::Upgrade);
-    }
-
-    fn salvage_patch_hull(&mut self) {
-        let patch = (self.player.max_hull() * 0.12).ceil();
-        self.player.hull = (self.player.hull + patch).min(self.player.max_hull());
-        self.message = format!("Salvage Yard patch job restored {patch:.0} hull.");
         self.sound_cues.push(SoundCue::Upgrade);
     }
 
@@ -16986,6 +16972,52 @@ mod tests {
             Some(TileKind::Air)
         ));
         assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn explosives_and_salvage_menus_queue_authoritative_session_services() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = Some(ModalScreen::Explosives);
+        game.selected_menu_item = 0;
+        game.player.credits = 500;
+        let credits_before = game.player.credits;
+        let bombs_before = game.player.bombs;
+
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::BuyBombBundle { count: 3, cost: 55 })
+        );
+        assert_eq!(game.player.credits, credits_before);
+        assert_eq!(game.player.bombs, bombs_before);
+
+        game.modal = Some(ModalScreen::Explosives);
+        game.selected_menu_item = 2;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::BuyMiningRockets)
+        );
+
+        game.modal = Some(ModalScreen::Salvage);
+        game.selected_menu_item = 1;
+        game.player.hull = 5.0;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SalvagePatchHull)
+        );
+        assert!((game.player.hull - 5.0).abs() < f32::EPSILON);
     }
 
     #[test]
