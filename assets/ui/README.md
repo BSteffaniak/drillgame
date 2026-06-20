@@ -2,12 +2,12 @@
 
 Drillgame embeds its UI fonts at compile time, so the game uses the intended fonts no matter which directory it is launched from.
 
-Current font family:
+Current font family: Barlow Semi Condensed
 
-- `title.ttf`: Atkinson Hyperlegible Bold
-- `heading.ttf`: Atkinson Hyperlegible Bold
-- `body.ttf`: Atkinson Hyperlegible Regular
+- `title.ttf`: Barlow Semi Condensed Bold
+- `heading.ttf`: Barlow Semi Condensed SemiBold
+- `body.ttf`: Barlow Semi Condensed Medium
 
-Atkinson Hyperlegible was chosen because the HUD uses small, dense text over a busy game scene. It is less stylized than a sci-fi display font, but it is much easier to read in gameplay and still has a sturdy, utilitarian feel that fits a mining/drilling UI.
+Barlow Semi Condensed keeps the HUD compact and readable, has a utilitarian/industrial feel that fits a mining game, and uses an unslashed zero to avoid distracting numeric readouts.
 
-License: SIL Open Font License 1.1. See `OFL-atkinson-hyperlegible.txt`.
+License: SIL Open Font License 1.1. See `OFL-barlow-semi-condensed.txt`.
