@@ -2089,6 +2089,110 @@ impl OnlineTaskResultTransition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineReconnectBlocker {
+    NoPlayerSlot,
+    NoReconnectableSession,
+    PendingNetworkTask,
+    HostOwnedCleanSession,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineReconnectAttemptDecision {
+    pub can_attempt: bool,
+    pub blocker: Option<OnlineReconnectBlocker>,
+    pub preserves_dirty_save_state: bool,
+    pub preserves_role_slot: bool,
+    pub player_message: String,
+    pub status: String,
+}
+
+impl OnlineReconnectAttemptDecision {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let has_slot = game.online_player_slot.is_some();
+        let reconnectable_session = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Disconnected
+                | OnlineSessionUxState::Timeout
+                | OnlineSessionUxState::Error
+                | OnlineSessionUxState::Shutdown
+                | OnlineSessionUxState::Reconnecting
+        );
+        let no_pending_task = game.online_network_task_request.is_none();
+        let blocker = if !has_slot {
+            Some(OnlineReconnectBlocker::NoPlayerSlot)
+        } else if !reconnectable_session {
+            Some(OnlineReconnectBlocker::NoReconnectableSession)
+        } else if !no_pending_task {
+            Some(OnlineReconnectBlocker::PendingNetworkTask)
+        } else if game.online_host_owns_save
+            && !game.save_dirty
+            && matches!(game.online_session_state, OnlineSessionUxState::Shutdown)
+        {
+            Some(OnlineReconnectBlocker::HostOwnedCleanSession)
+        } else {
+            None
+        };
+        let can_attempt = blocker.is_none();
+        let preserves_dirty_save_state = game.save_dirty
+            || !game.online_host_owns_save
+            || matches!(
+                game.online_session_state,
+                OnlineSessionUxState::Reconnecting
+            );
+        let preserves_role_slot = has_slot
+            && ((game.online_host_owns_save && game.online_player_slot == Some(1))
+                || (!game.online_host_owns_save && game.online_player_slot == Some(2))
+                || matches!(
+                    game.online_session_state,
+                    OnlineSessionUxState::Reconnecting
+                ));
+        let player_message = match blocker {
+            None => {
+                "Reconnect can be attempted with the preserved role, slot, descriptor path, and save boundary."
+                    .to_owned()
+            }
+            Some(OnlineReconnectBlocker::NoPlayerSlot) => {
+                "Reconnect blocked: no previous online player slot is available; join from the current host descriptor instead."
+                    .to_owned()
+            }
+            Some(OnlineReconnectBlocker::NoReconnectableSession) => {
+                "Reconnect blocked: the current session is still active; leave/end first or continue playing."
+                    .to_owned()
+            }
+            Some(OnlineReconnectBlocker::PendingNetworkTask) => {
+                "Reconnect blocked: another online network task is already pending.".to_owned()
+            }
+            Some(OnlineReconnectBlocker::HostOwnedCleanSession) => {
+                "Reconnect blocked: this clean host-owned session has already shut down; host a new descriptor instead."
+                    .to_owned()
+            }
+        };
+        let status = format!(
+            "Online reconnect attempt: can_attempt={} blocker={:?} dirty_preserved={} role_slot_preserved={} state={:?} role={} slot={} pending_task={} | {}",
+            yes_no(can_attempt),
+            blocker,
+            yes_no(preserves_dirty_save_state),
+            yes_no(preserves_role_slot),
+            game.online_session_state,
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            yes_no(game.online_network_task_request.is_some()),
+            player_message
+        );
+        Self {
+            can_attempt,
+            blocker,
+            preserves_dirty_save_state,
+            preserves_role_slot,
+            player_message,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineReconnectPolicy {
     UnsupportedForFirstPlayableMvp,
     SessionContextAvailable,
@@ -2105,19 +2209,15 @@ pub struct OnlineReconnectPolicyStatus {
 impl OnlineReconnectPolicyStatus {
     #[must_use]
     pub fn from_game(game: &GameState) -> Self {
-        let can_attempt_rejoin = matches!(
-            game.online_session_state,
-            OnlineSessionUxState::Reconnecting | OnlineSessionUxState::Shutdown
-        ) && game.online_player_slot.is_some();
+        let decision = OnlineReconnectAttemptDecision::from_game(game);
+        let can_attempt_rejoin = decision.can_attempt;
         let policy = if can_attempt_rejoin {
             OnlineReconnectPolicy::SessionContextAvailable
         } else {
             OnlineReconnectPolicy::UnsupportedForFirstPlayableMvp
         };
         let player_message = match policy {
-            OnlineReconnectPolicy::SessionContextAvailable => {
-                "Reconnect context is preserved for this session; retry uses the previous online identity and save boundary.".to_owned()
-            }
+            OnlineReconnectPolicy::SessionContextAvailable => decision.player_message,
             OnlineReconnectPolicy::UnsupportedForFirstPlayableMvp => {
                 "Reconnect is not automatic for the first playable MVP; return to Online Multiplayer and rejoin from the current host descriptor.".to_owned()
             }
@@ -6961,6 +7061,7 @@ impl GameState {
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
+        lines.push(OnlineReconnectAttemptDecision::from_game(self).status);
         lines.push(format!(
             "Online inventory/upgrades: rig parts={} equipped={} cosmetics={} badges={}",
             self.rig_part_inventory.len(),
@@ -8055,10 +8156,14 @@ impl GameState {
                 );
             }
             2 => {
-                self.online_session_state = OnlineSessionUxState::Reconnecting;
-                self.online_network_task_request =
-                    Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
-                "Reconnect requested with previous session token."
+                let decision = OnlineReconnectAttemptDecision::from_game(self);
+                if decision.can_attempt {
+                    self.online_session_state = OnlineSessionUxState::Reconnecting;
+                    self.online_network_task_request =
+                        Some(OnlineNetworkTaskRequest::ReconnectDirectConnect);
+                }
+                decision
+                    .player_message
                     .clone_into(&mut self.online_session_status_message);
             }
             3 => {
@@ -12884,6 +12989,10 @@ mod tests {
             })
         );
 
+        game.online_session_state = OnlineSessionUxState::Timeout;
+        game.online_host_owns_save = false;
+        game.online_player_slot = Some(2);
+        game.online_network_task_request = None;
         game.selected_menu_item = 2;
         game.update(
             PlayerInput {
@@ -13591,6 +13700,18 @@ mod tests {
         assert_eq!(game.online_player_slot, Some(2));
 
         game.selected_menu_item = 2;
+        game.update(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            0.0,
+        );
+        assert_eq!(game.online_session_state, OnlineSessionUxState::Joining);
+        assert!(game.online_session_status_message.contains("still active"));
+
+        game.online_session_state = OnlineSessionUxState::Timeout;
+        game.online_network_task_request = None;
         game.update(
             PlayerInput {
                 confirm: true,
@@ -14606,6 +14727,88 @@ mod tests {
         assert!(
             host.message
                 .contains("Host save/session remains local and safe")
+        );
+    }
+
+    #[test]
+    fn reconnect_attempt_decision_blocks_active_or_unknown_sessions_and_allows_preserved_context() {
+        let mut active = GameState::new();
+        active.online_session_state = OnlineSessionUxState::Connected;
+        active.online_host_owns_save = false;
+        active.online_player_slot = Some(2);
+        active.save_dirty = true;
+
+        let active_decision = OnlineReconnectAttemptDecision::from_game(&active);
+        assert!(!active_decision.can_attempt);
+        assert_eq!(
+            active_decision.blocker,
+            Some(OnlineReconnectBlocker::NoReconnectableSession)
+        );
+        assert!(active_decision.preserves_dirty_save_state);
+        assert!(active_decision.preserves_role_slot);
+
+        let mut unknown = GameState::new();
+        unknown.online_session_state = OnlineSessionUxState::Disconnected;
+        unknown.online_player_slot = None;
+        let unknown_decision = OnlineReconnectAttemptDecision::from_game(&unknown);
+        assert!(!unknown_decision.can_attempt);
+        assert_eq!(
+            unknown_decision.blocker,
+            Some(OnlineReconnectBlocker::NoPlayerSlot)
+        );
+        assert!(unknown_decision.status.contains("can_attempt=no"));
+
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Timeout;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.save_dirty = true;
+        let client_decision = OnlineReconnectAttemptDecision::from_game(&client);
+        assert!(client_decision.can_attempt);
+        assert_eq!(client_decision.blocker, None);
+        assert!(client_decision.preserves_dirty_save_state);
+        assert!(client_decision.preserves_role_slot);
+        assert!(client_decision.player_message.contains("preserved role"));
+    }
+
+    #[test]
+    fn reconnect_menu_only_queues_network_task_when_decision_allows_attempt() {
+        let mut active = GameState::new();
+        active.modal = Some(ModalScreen::OnlineMultiplayer);
+        active.online_session_state = OnlineSessionUxState::Connected;
+        active.online_host_owns_save = false;
+        active.online_player_slot = Some(2);
+        active.selected_menu_item = 2;
+        active.confirm_online_multiplayer();
+
+        assert_eq!(active.online_session_state, OnlineSessionUxState::Connected);
+        assert_eq!(active.online_network_task_request, None);
+        assert!(
+            active
+                .online_session_status_message
+                .contains("still active")
+        );
+
+        let mut timeout = GameState::new();
+        timeout.modal = Some(ModalScreen::OnlineMultiplayer);
+        timeout.online_session_state = OnlineSessionUxState::Timeout;
+        timeout.online_host_owns_save = false;
+        timeout.online_player_slot = Some(2);
+        timeout.selected_menu_item = 2;
+        timeout.confirm_online_multiplayer();
+
+        assert_eq!(
+            timeout.online_session_state,
+            OnlineSessionUxState::Reconnecting
+        );
+        assert_eq!(
+            timeout.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::ReconnectDirectConnect)
+        );
+        assert!(
+            timeout
+                .online_session_status_message
+                .contains("Reconnect can be attempted")
         );
     }
 
