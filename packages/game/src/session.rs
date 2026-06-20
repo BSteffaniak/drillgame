@@ -6380,6 +6380,11 @@ impl GameSession {
     ) -> SessionAuthorityUpdateSummary {
         let save_load = self.handle_session_save_load_input(input);
         let input = Self::input_without_session_save_load(input);
+        let gameplay_commands = crate::game_state::session_gameplay_commands_from_input(input);
+        if !gameplay_commands.is_empty() {
+            self.route_local_player_commands(gameplay_commands);
+        }
+        let shell_input = crate::game_state::input_without_session_gameplay_commands(input);
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         let _advance = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
@@ -6388,7 +6393,7 @@ impl GameSession {
         self.sync_legacy_terrain_from_world();
         let shell_update = self
             .game
-            .update_shell_after_session_authority(input, delta_seconds);
+            .update_shell_after_session_authority(shell_input, delta_seconds);
         if matches!(
             shell_update,
             crate::game_state::SessionShellUpdateSummary::ExitRequested
@@ -10660,6 +10665,63 @@ mod tests {
     }
 
     #[test]
+    fn production_session_authority_update_maps_real_local_input_into_world_commands() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = None;
+        let start_x = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .x;
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                horizontal: 1.0,
+                thrust: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(!summary.legacy_bridge_active());
+        assert!(summary.local_movement_authority);
+        assert_eq!(summary.command_adapter_count, 1);
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert!(player.x > start_x);
+        assert!(player.velocity_x > 0.0);
+        assert!(session.game().player.x > start_x);
+    }
+
+    #[test]
+    fn production_session_authority_strips_gameplay_input_before_shell_update() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = None;
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                cancel: true,
+                horizontal: 1.0,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().run_mode, RunMode::Playing);
+        assert_eq!(session.game().modal, None);
+        assert_eq!(session.latest_local_authoritative_commands.len(), 2);
+        assert!(
+            session
+                .latest_local_authoritative_commands
+                .contains(&PlayerCommand::Cancel)
+        );
+    }
+
+    #[test]
     fn production_session_authority_update_routes_action_commands_without_public_legacy_adapter() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
@@ -10673,6 +10735,8 @@ mod tests {
             player.credits = 10_000;
         }
         session.route_local_player_commands(vec![PlayerCommand::Refuel, PlayerCommand::Repair]);
+        let tick = session.current_tick();
+        assert_eq!(session.process_authoritative_commands_for_tick(tick), 2);
 
         let summary = session
             .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);

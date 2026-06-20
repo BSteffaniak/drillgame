@@ -23,7 +23,7 @@ use crate::{
         refuel_amount, repair_amount, sell_cargo, upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
-    multiplayer::{QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
+    multiplayer::{PlayerCommand, QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
     player::Player,
     save::{
         load_game, load_game_slot, load_latest_game, save_exists, save_game_slot,
@@ -12499,10 +12499,122 @@ fn input_changes_game(input: PlayerInput) -> bool {
         || input.place_pump
         || input.place_processor
 }
+
+pub fn session_gameplay_commands_from_input(input: PlayerInput) -> Vec<PlayerCommand> {
+    let mut commands = Vec::new();
+    if input.horizontal.abs() > f32::EPSILON || input.thrust || input.drill_down {
+        commands.push(PlayerCommand::Movement {
+            horizontal: input.horizontal.clamp(-1.0, 1.0),
+            thrust: input.thrust,
+            drill_down: input.drill_down,
+        });
+    }
+    if input.interact {
+        commands.push(PlayerCommand::Interact);
+    }
+    if input.confirm {
+        commands.push(PlayerCommand::Confirm);
+    }
+    if input.cancel {
+        commands.push(PlayerCommand::Cancel);
+    }
+    if input.scan {
+        commands.push(PlayerCommand::UseScanner);
+    }
+    if input.bomb {
+        commands.push(PlayerCommand::PlaceBomb);
+    }
+    for (enabled, slot) in [
+        (input.place_relay, 0),
+        (input.place_drone, 1),
+        (input.place_lift, 2),
+        (input.place_support, 3),
+        (input.place_pump, 4),
+        (input.place_processor, 5),
+    ] {
+        if enabled {
+            commands.push(PlayerCommand::PlaceInfrastructure { slot });
+        }
+    }
+    if let Some(index) = input.selected_upgrade {
+        commands.push(PlayerCommand::SelectUpgrade { index });
+    }
+    commands
+}
+
+pub const fn input_without_session_gameplay_commands(mut input: PlayerInput) -> PlayerInput {
+    input.horizontal = 0.0;
+    input.thrust = false;
+    input.drill_down = false;
+    input.interact = false;
+    input.confirm = false;
+    input.cancel = false;
+    input.bomb = false;
+    input.scan = false;
+    input.place_relay = false;
+    input.place_drone = false;
+    input.place_lift = false;
+    input.place_support = false;
+    input.place_pump = false;
+    input.place_processor = false;
+    input.selected_upgrade = None;
+    input
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn session_gameplay_commands_map_local_input_to_authoritative_commands_and_strip_shell_input() {
+        let input = PlayerInput {
+            horizontal: 2.0,
+            thrust: true,
+            drill_down: true,
+            interact: true,
+            confirm: true,
+            cancel: true,
+            scan: true,
+            bomb: true,
+            place_relay: true,
+            place_processor: true,
+            selected_upgrade: Some(3),
+            map: true,
+            ..PlayerInput::default()
+        };
+
+        let commands = session_gameplay_commands_from_input(input);
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::Movement {
+                horizontal,
+                thrust: true,
+                drill_down: true,
+            } if (*horizontal - 1.0).abs() < f32::EPSILON
+        )));
+        assert!(commands.contains(&PlayerCommand::Interact));
+        assert!(commands.contains(&PlayerCommand::Confirm));
+        assert!(commands.contains(&PlayerCommand::Cancel));
+        assert!(commands.contains(&PlayerCommand::UseScanner));
+        assert!(commands.contains(&PlayerCommand::PlaceBomb));
+        assert!(commands.contains(&PlayerCommand::PlaceInfrastructure { slot: 0 }));
+        assert!(commands.contains(&PlayerCommand::PlaceInfrastructure { slot: 5 }));
+        assert!(commands.contains(&PlayerCommand::SelectUpgrade { index: 3 }));
+
+        let shell_input = input_without_session_gameplay_commands(input);
+        assert!(shell_input.horizontal.abs() < f32::EPSILON);
+        assert!(!shell_input.thrust);
+        assert!(!shell_input.drill_down);
+        assert!(!shell_input.interact);
+        assert!(!shell_input.confirm);
+        assert!(!shell_input.cancel);
+        assert!(!shell_input.scan);
+        assert!(!shell_input.bomb);
+        assert!(!shell_input.place_relay);
+        assert!(!shell_input.place_processor);
+        assert_eq!(shell_input.selected_upgrade, None);
+        assert!(shell_input.map);
+    }
 
     #[test]
     fn title_menu_exposes_local_split_screen_entrypoint() {
