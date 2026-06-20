@@ -468,7 +468,7 @@ fn draw_service_modal_ui(
 }
 
 fn draw_confirm_modal_ui(draw: &mut RaylibDrawHandle<'_>, title: &str, body: &str) {
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         title,
         "Enter/E confirms | Esc closes",
         &ModalContent::new(vec![Section::new(
@@ -512,7 +512,7 @@ fn draw_shop_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             )
         })
         .collect();
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Upgrade Shop",
         "Up/Down select | Enter/E buy | Esc close",
         &ModalContent::new(vec![Section::new(
@@ -605,7 +605,7 @@ fn draw_owned_option_modal(
             )
         })
         .collect();
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         title,
         help,
         &ModalContent::new(vec![Section::new("Options", Color::SKYBLUE, items)]),
@@ -668,7 +668,7 @@ fn draw_depot_receipt_history_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameSta
             })
             .collect()
     };
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Depot Receipts",
         "Recent sales and contract payouts. Esc closes.",
         &ModalContent::new(vec![Section::new("History", Color::GOLD, items)]),
@@ -676,7 +676,7 @@ fn draw_depot_receipt_history_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameSta
 }
 
 fn draw_research_log_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Research Log",
         "Collected discoveries and mining intelligence. Esc closes.",
         &ModalContent::new(vec![Section::new(
@@ -807,7 +807,7 @@ fn draw_inventory_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         .map(|(label, tier)| SectionItem::stat(label, format!("tier {tier}"), Color::LIGHTGRAY))
         .collect(),
     ));
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Inventory",
         "Tab/Esc/Backspace closes | cargo, artifacts, consumables, and field kits",
         &ModalContent::new(sections),
@@ -848,7 +848,7 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
         })
         .collect();
     let lobby = game.online_lobby_presentation();
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Online Multiplayer",
         "Direct-connect setup for two running game windows. Host writes a descriptor; client joins with that file.",
         &ModalContent::new(vec![
@@ -929,7 +929,7 @@ fn draw_map_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 }
 
 fn draw_help_ui(draw: &mut RaylibDrawHandle<'_>) {
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Controls",
         "Esc/Backspace closes. Controls are context-sensitive.",
         &ModalContent::new(vec![
@@ -1080,7 +1080,7 @@ fn draw_modal_depot_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             )
         })
         .collect();
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Ore Depot",
         "Up/Down select | Enter/E confirm | Esc/Backspace close",
         &ModalContent::new(vec![
@@ -1117,7 +1117,7 @@ pub(super) fn draw_title(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             (meta.play_seconds / 60.0).floor()
         )));
     }
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "DRILLGAME",
         "A frontier mining run awaits below. Up/Down select | Enter/E confirm | Esc exits | F11 fullscreen",
         &ModalContent::new(vec![Section::new("Menu", Color::SKYBLUE, items)]),
@@ -1149,7 +1149,7 @@ pub(super) fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         game.player.fuel,
         game.player.fuel_capacity
     )));
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Paused",
         "Up/Down select | Enter/E confirm | Esc resume",
         &ModalContent::new(vec![Section::new("Menu", Color::SKYBLUE, items)]),
@@ -1157,7 +1157,7 @@ pub(super) fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 }
 
 pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Star Core Secured",
         "Run summary",
         &ModalContent::new(vec![Section::new(
@@ -1191,7 +1191,7 @@ pub(super) fn draw_ending(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 }
 
 pub(super) fn draw_game_over(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         "Emergency",
         "Press E to pay the rescue fee and return to base.",
         &ModalContent::new(vec![Section::new(

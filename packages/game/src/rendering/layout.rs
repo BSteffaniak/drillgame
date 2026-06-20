@@ -37,11 +37,19 @@ impl Insets {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "legacy immediate modal measurement retained until render-plan modal parity is verified"
+)]
 pub(super) struct Constraints {
     max_width: f32,
     max_height: f32,
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy immediate modal measurement retained until render-plan modal parity is verified"
+)]
 impl Constraints {
     const fn new(max_width: f32, max_height: f32) -> Self {
         Self {
@@ -184,6 +192,10 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy immediate modal retained until all render-plan modal visual parity is verified"
+    )]
     pub(super) fn modal(&mut self, title: &str, subtitle: &str, content: &ModalContent) {
         self.draw.draw_rectangle(
             self.viewport.x as i32,
@@ -313,15 +325,14 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 } => {
                     Self::draw_text(text, rect.x, rect.y, *kind, *color);
                 }
-                widgets::RenderCommand::Meter { rect, ratio } => {
-                    self.draw_bar(
-                        rect.x,
-                        rect.y,
-                        rect.width,
-                        rect.height,
-                        *ratio,
-                        Color::SKYBLUE,
-                    );
+                widgets::RenderCommand::Meter {
+                    rect,
+                    ratio,
+                    fill,
+                    danger,
+                } => {
+                    let color = if *ratio < 0.25 { *danger } else { *fill };
+                    self.draw_bar(rect.x, rect.y, rect.width, rect.height, *ratio, color);
                 }
                 widgets::RenderCommand::Button { rect, focused } => {
                     self.draw_panel(*rect, PanelKind::Overlay);
@@ -408,6 +419,10 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         self.render_plan(&plan);
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
+    )]
     fn draw_modal_content(&mut self, rect: Rectangle, content: &ModalContent) {
         unsafe {
             ffi::BeginScissorMode(
@@ -441,6 +456,10 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
+    )]
     fn measure_section(section: &Section, constraints: Constraints) -> Size {
         let mut height = 34.0;
         for item in &section.items {
@@ -458,6 +477,10 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy immediate modal renderer retained until render-plan modal parity is verified"
+    )]
     fn draw_section(&mut self, rect: Rectangle, section: &Section) {
         self.draw_panel(rect, PanelKind::Overlay);
         let inner = inset(rect, Insets::symmetric(10.0, 8.0));
@@ -739,17 +762,23 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
         for item in &section.items {
             match item {
                 SectionItem::Meter {
-                    label, value, max, ..
+                    label,
+                    value,
+                    max,
+                    fill,
+                    danger,
                 } => {
                     sections.push(widgets::UiNode::Text(widgets::TextNode::label(
                         label,
                         TextKind::Small,
                         width,
                     )));
-                    sections.push(widgets::UiNode::Meter(widgets::MeterNode::new(
+                    sections.push(widgets::UiNode::Meter(widgets::MeterNode::colored(
                         ratio(*value, *max),
                         width,
                         10.0,
+                        *fill,
+                        *danger,
                     )));
                 }
                 SectionItem::Stat(stat) => {
@@ -1003,6 +1032,8 @@ mod widgets {
         Meter {
             rect: Rectangle,
             ratio: f32,
+            fill: Color,
+            danger: Color,
         },
         Button {
             rect: Rectangle,
@@ -1111,6 +1142,8 @@ mod widgets {
                 Self::Meter(node) => plan.push(RenderCommand::Meter {
                     rect: node.rect,
                     ratio: node.ratio,
+                    fill: node.fill,
+                    danger: node.danger,
                 }),
                 Self::Button(node) => plan.push(RenderCommand::Button {
                     rect: node.rect,
@@ -1203,6 +1236,8 @@ mod widgets {
     #[derive(Clone, Debug)]
     pub(super) struct MeterNode {
         pub(super) ratio: f32,
+        pub(super) fill: Color,
+        pub(super) danger: Color,
         pub(super) width: f32,
         pub(super) height: f32,
         pub(super) rect: Rectangle,
@@ -1210,8 +1245,20 @@ mod widgets {
 
     impl MeterNode {
         pub(super) const fn new(ratio: f32, width: f32, height: f32) -> Self {
+            Self::colored(ratio, width, height, Color::SKYBLUE, Color::RED)
+        }
+
+        pub(super) const fn colored(
+            ratio: f32,
+            width: f32,
+            height: f32,
+            fill: Color,
+            danger: Color,
+        ) -> Self {
             Self {
                 ratio,
+                fill,
+                danger,
                 width,
                 height,
                 rect: zero_rect(),
