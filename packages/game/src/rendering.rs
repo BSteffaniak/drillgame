@@ -89,6 +89,11 @@ fn draw_local_player_override(
     }
 }
 
+fn ui_scroll_delta(input: PlayerInput, step: f32) -> f32 {
+    -input.ui_scroll * step + if input.menu_down { step } else { 0.0 }
+        - if input.menu_up { step } else { 0.0 }
+}
+
 impl GameRenderer {
     #[must_use]
     #[allow(
@@ -163,10 +168,11 @@ impl GameRenderer {
     pub fn apply_ui_input(&self, input: PlayerInput) {
         const MODAL_SCROLL_STEP: f32 = 48.0;
         const MODAL_SCROLL_LIMIT: f32 = 10_000.0;
-        if input.ui_scroll.abs() > f32::EPSILON {
+        let scroll_delta = ui_scroll_delta(input, MODAL_SCROLL_STEP);
+        if scroll_delta.abs() > f32::EPSILON {
             self.ui_state.borrow_mut().scroll_by(
                 layout::widgets::WidgetId("modal-content"),
-                -input.ui_scroll * MODAL_SCROLL_STEP,
+                scroll_delta,
                 MODAL_SCROLL_LIMIT,
             );
         }
@@ -353,5 +359,51 @@ impl GameRenderer {
         if game.won_game {
             draw_ending(draw, game);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < f32::EPSILON,
+            "{actual} != {expected}"
+        );
+    }
+
+    #[test]
+    fn ui_scroll_delta_combines_mouse_wheel_and_keyboard_navigation() {
+        assert_near(
+            ui_scroll_delta(
+                PlayerInput {
+                    ui_scroll: 1.0,
+                    ..PlayerInput::default()
+                },
+                48.0,
+            ),
+            -48.0,
+        );
+        assert_near(
+            ui_scroll_delta(
+                PlayerInput {
+                    menu_down: true,
+                    ..PlayerInput::default()
+                },
+                48.0,
+            ),
+            48.0,
+        );
+        assert_near(
+            ui_scroll_delta(
+                PlayerInput {
+                    menu_up: true,
+                    ..PlayerInput::default()
+                },
+                48.0,
+            ),
+            -48.0,
+        );
     }
 }
