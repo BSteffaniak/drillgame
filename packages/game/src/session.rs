@@ -12376,6 +12376,25 @@ mod tests {
     }
 
     #[test]
+    fn session_authority_preserves_cancel_for_depot_modal_escape() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = Some(ModalScreen::Depot);
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                cancel: true,
+                pause: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().run_mode, RunMode::Playing);
+        assert_eq!(session.game().modal, None);
+    }
+
+    #[test]
     fn production_session_authority_update_maps_real_local_input_into_world_commands() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
