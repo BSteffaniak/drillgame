@@ -1,9 +1,10 @@
-use std::ffi::CString;
+use std::{cell::RefCell, collections::BTreeMap, ffi::CString};
 
 use raylib::{ffi, prelude::*};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Size {
+    width: f32,
     height: f32,
 }
 
@@ -50,7 +51,7 @@ impl Constraints {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum TextKind {
     Title,
     Heading,
@@ -184,14 +185,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             self.viewport.height as i32,
             Color::new(0, 0, 0, 120),
         );
-        let max_width = (self.viewport.width * 0.78).clamp(620.0, 980.0);
-        let max_height = (self.viewport.height * 0.82).clamp(420.0, 620.0);
-        let rect = Rectangle {
-            x: self.viewport.x + (self.viewport.width - max_width) * 0.5,
-            y: self.viewport.y + (self.viewport.height - max_height) * 0.5,
-            width: max_width,
-            height: max_height,
-        };
+        let rect = modal_rect_for_viewport(self.viewport);
         self.draw_panel(rect, PanelKind::Modal);
         let padding = Insets::all(18.0);
         let content_rect = inset(rect, padding);
@@ -255,14 +249,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             self.viewport.height as i32,
             Color::new(0, 0, 0, 120),
         );
-        let max_width = (self.viewport.width * 0.78).clamp(620.0, 980.0);
-        let max_height = (self.viewport.height * 0.82).clamp(420.0, 620.0);
-        let rect = Rectangle {
-            x: self.viewport.x + (self.viewport.width - max_width) * 0.5,
-            y: self.viewport.y + (self.viewport.height - max_height) * 0.5,
-            width: max_width,
-            height: max_height,
-        };
+        let rect = modal_rect_for_viewport(self.viewport);
         self.draw_panel(rect, PanelKind::Modal);
         let content_rect = inset(rect, Insets::all(18.0));
         Self::draw_text(
@@ -346,6 +333,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             };
         }
         Size {
+            width: constraints.max_width,
             height: height.min(constraints.max_height),
         }
     }
@@ -463,7 +451,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
     ) -> f32 {
         for line in wrap_text(text, width, kind) {
             Self::draw_text(&line, x, y, kind, color);
-            y += line_height(kind);
+            y += font_metrics(kind).line_height;
         }
         y + 4.0
     }
@@ -472,7 +460,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         let Ok(cstring) = CString::new(text) else {
             return;
         };
-        let size = font_size(kind);
+        let size = font_metrics(kind).font_size;
         unsafe {
             let font = ffi::GetFontDefault();
             ffi::DrawTextEx(
@@ -635,10 +623,104 @@ fn ratio(value: f32, max: f32) -> f32 {
 }
 
 fn wrapped_height(text: &str, width: f32, kind: TextKind) -> f32 {
-    wrap_text(text, width, kind).len() as f32 * line_height(kind) + 4.0
+    wrap_text(text, width, kind).len() as f32 * font_metrics(kind).line_height + 4.0
 }
 
 fn wrap_text(text: &str, width: f32, kind: TextKind) -> Vec<String> {
+    wrap_text_with_measure(text, width, |candidate| measure_text(candidate, kind))
+}
+
+fn measure_text(text: &str, kind: TextKind) -> f32 {
+    TEXT_MEASURE_CACHE.with(|cache| {
+        let key = TextMeasureKey {
+            kind,
+            text: text.to_owned(),
+        };
+        if let Some(width) = cache.borrow().get(&key).copied() {
+            return width;
+        }
+        let width = measure_text_uncached(text, kind);
+        cache.borrow_mut().insert(key, width);
+        width
+    })
+}
+
+fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
+    let Ok(cstring) = CString::new(text) else {
+        return text.chars().count() as f32 * font_metrics(kind).font_size * 0.5;
+    };
+    unsafe {
+        ffi::MeasureTextEx(
+            ffi::GetFontDefault(),
+            cstring.as_ptr(),
+            font_metrics(kind).font_size,
+            font_metrics(kind).spacing,
+        )
+        .x
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FontMetrics {
+    font_size: f32,
+    line_height: f32,
+    #[allow(
+        dead_code,
+        reason = "baseline is part of the configured font metrics contract for upcoming baseline layout"
+    )]
+    baseline: f32,
+    spacing: f32,
+}
+
+const fn font_metrics(kind: TextKind) -> FontMetrics {
+    match kind {
+        TextKind::Title => FontMetrics {
+            font_size: 30.0,
+            line_height: 36.0,
+            baseline: 28.0,
+            spacing: 1.0,
+        },
+        TextKind::Heading => FontMetrics {
+            font_size: 18.0,
+            line_height: 22.0,
+            baseline: 17.0,
+            spacing: 1.0,
+        },
+        TextKind::Small => FontMetrics {
+            font_size: 13.0,
+            line_height: 16.0,
+            baseline: 12.0,
+            spacing: 1.0,
+        },
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct TextMeasureKey {
+    kind: TextKind,
+    text: String,
+}
+
+thread_local! {
+    static TEXT_MEASURE_CACHE: RefCell<BTreeMap<TextMeasureKey, f32>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+fn modal_rect_for_viewport(viewport: Rectangle) -> Rectangle {
+    let max_width = (viewport.width * 0.78).clamp(620.0, 980.0);
+    let max_height = (viewport.height * 0.82).clamp(420.0, 620.0);
+    Rectangle {
+        x: viewport.x + (viewport.width - max_width) * 0.5,
+        y: viewport.y + (viewport.height - max_height) * 0.5,
+        width: max_width,
+        height: max_height,
+    }
+}
+
+fn wrap_text_with_measure(
+    text: &str,
+    width: f32,
+    mut measure: impl FnMut(&str) -> f32,
+) -> Vec<String> {
     if text.is_empty() {
         return vec![String::new()];
     }
@@ -650,7 +732,7 @@ fn wrap_text(text: &str, width: f32, kind: TextKind) -> Vec<String> {
         } else {
             format!("{current} {word}")
         };
-        if measure_text(&candidate, kind) <= width || current.is_empty() {
+        if measure(&candidate) <= width || current.is_empty() {
             current.clone_from(&candidate);
         } else {
             lines.push(std::mem::take(&mut current));
@@ -663,33 +745,36 @@ fn wrap_text(text: &str, width: f32, kind: TextKind) -> Vec<String> {
     lines
 }
 
-fn measure_text(text: &str, kind: TextKind) -> f32 {
-    let Ok(cstring) = CString::new(text) else {
-        return text.chars().count() as f32 * font_size(kind) * 0.5;
-    };
-    unsafe {
-        ffi::MeasureTextEx(
-            ffi::GetFontDefault(),
-            cstring.as_ptr(),
-            font_size(kind),
-            1.0,
-        )
-        .x
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-const fn font_size(kind: TextKind) -> f32 {
-    match kind {
-        TextKind::Title => 30.0,
-        TextKind::Heading => 18.0,
-        TextKind::Small => 13.0,
+    #[test]
+    fn modal_rect_is_centered_and_bounded() {
+        let rect = modal_rect_for_viewport(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+        });
+        assert!(rect.width <= 980.0);
+        assert!(rect.height <= 620.0);
+        assert!((rect.x - ((1280.0 - rect.width) * 0.5)).abs() < f32::EPSILON);
     }
-}
 
-const fn line_height(kind: TextKind) -> f32 {
-    match kind {
-        TextKind::Title => 36.0,
-        TextKind::Heading => 22.0,
-        TextKind::Small => 16.0,
+    #[test]
+    fn text_wrap_respects_max_width_for_word_boundaries() {
+        let lines = wrap_text_with_measure("alpha beta gamma", 10.0, |text| text.len() as f32);
+        assert_eq!(lines, ["alpha beta", "gamma"]);
+    }
+
+    #[test]
+    fn configured_font_metrics_have_ordered_baselines() {
+        for kind in [TextKind::Title, TextKind::Heading, TextKind::Small] {
+            let metrics = font_metrics(kind);
+            assert!(metrics.font_size > 0.0);
+            assert!(metrics.line_height >= metrics.font_size);
+            assert!(metrics.baseline > 0.0 && metrics.baseline <= metrics.line_height);
+        }
     }
 }
