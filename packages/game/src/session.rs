@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    economy::{buy_upgrade, refuel_amount, repair_amount, sell_cargo},
+    economy::{buy_upgrade, refuel_amount, repair_amount, sell_cargo, upgrade_tier_name},
     game_state::{
         DrillDirection, DrillState, GameState, HazardCloud, InfrastructureKind, ModalScreen,
         PlacedBomb, PlacedInfrastructure, RunMode, SoundCue, TILE_SIZE,
@@ -4959,10 +4959,21 @@ impl GameSession {
             .world
             .player(player_id)
             .map(|player| (player.credits, player.fuel, player.hull))?;
+        let upgrade_offer =
+            if let crate::game_state::SessionServiceRequest::BuyUpgrade { index } = request {
+                self.world
+                    .player(player_id)
+                    .and_then(|player| crate::economy::upgrade_offers(player).get(index).copied())
+            } else {
+                None
+            };
         let command = match request {
             crate::game_state::SessionServiceRequest::Refuel { .. } => PlayerCommand::Refuel,
             crate::game_state::SessionServiceRequest::Repair { .. } => PlayerCommand::Repair,
             crate::game_state::SessionServiceRequest::SellCargo => PlayerCommand::SellCargo,
+            crate::game_state::SessionServiceRequest::BuyUpgrade { index } => {
+                PlayerCommand::BuyUpgrade { index }
+            }
         };
         let outcome = self.world.apply_player_command(player_id, &command);
         if matches!(outcome, PlayerScopedCommandOutcome::Applied) {
@@ -4976,7 +4987,8 @@ impl GameSession {
                     self.game.service_animation = Some(crate::game_state::ServiceAnimation::Repair);
                     self.game.service_animation_seconds = 1.4;
                 }
-                crate::game_state::SessionServiceRequest::SellCargo => {}
+                crate::game_state::SessionServiceRequest::SellCargo
+                | crate::game_state::SessionServiceRequest::BuyUpgrade { .. } => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5005,6 +5017,17 @@ impl GameSession {
                         self.game.total_earnings = self.game.total_earnings.saturating_add(earned);
                         self.game.sound_cues.push(SoundCue::Sell);
                         format!("Sold cargo for {earned} credits.")
+                    }
+                }
+                crate::game_state::SessionServiceRequest::BuyUpgrade { .. } => {
+                    if let Some(offer) = upgrade_offer {
+                        self.game.sound_cues.push(SoundCue::Upgrade);
+                        format!(
+                            "Bought {}.",
+                            upgrade_tier_name(offer.kind, offer.level.saturating_sub(1))
+                        )
+                    } else {
+                        "Upgrade purchase unavailable.".to_owned()
                     }
                 }
             };
@@ -7116,6 +7139,7 @@ mod tests {
     use std::{collections::BTreeMap, time::Duration};
 
     use crate::{
+        economy::SurfaceZone,
         game_state::{
             DrillDirection, DrillState, GameState, InfrastructureKind, ModalScreen, RunMode,
             SoundCue, TILE_SIZE,
@@ -10849,6 +10873,51 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_shop_modal_buys_upgrade_from_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.current_zone = Some(SurfaceZone::Shop);
+        session.game.player.x = 120.0 * TILE_SIZE;
+        session.game.player.y = 4.0 * TILE_SIZE;
+        session.game.modal = Some(crate::game_state::ModalScreen::ShopConfirm);
+        session.game.selected_menu_item = 0;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 10_000;
+            player.drill_strength = 1;
+            player.x = 120.0 * TILE_SIZE;
+            player.y = 4.0 * TILE_SIZE;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(!summary.legacy_bridge_active());
+        assert!(
+            session.game().message.contains("Bought"),
+            "{}",
+            session.game().message
+        );
+        assert!(session.game().player.credits < 10_000);
+        assert_eq!(session.game().player.drill_strength, 2);
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert!(player.credits < 10_000);
+        assert_eq!(player.drill_strength, 2);
     }
 
     #[test]

@@ -18,10 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     contract::ContractLog,
-    economy::{
-        DeepClaimStatus, PurchaseError, SurfaceZone, TownBuilding, TownDevelopment, buy_upgrade,
-        upgrade_offers, upgrade_tier_name,
-    },
+    economy::{DeepClaimStatus, SurfaceZone, TownBuilding, TownDevelopment, upgrade_offers},
     input::PlayerInput,
     multiplayer::{PlayerCommand, QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
     player::Player,
@@ -1957,6 +1954,7 @@ pub enum SessionServiceRequest {
     Refuel { menu_item: usize },
     Repair { menu_item: usize },
     SellCargo,
+    BuyUpgrade { index: usize },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9301,7 +9299,7 @@ impl GameState {
                 ModalScreen::Headquarters => self.confirm_headquarters(),
                 ModalScreen::DepotReceiptHistory => self.modal = Some(ModalScreen::Depot),
                 ModalScreen::Shop => self.modal = Some(ModalScreen::ShopConfirm),
-                ModalScreen::ShopConfirm => self.try_buy_upgrade(self.selected_menu_item),
+                ModalScreen::ShopConfirm => self.queue_buy_upgrade(self.selected_menu_item),
                 ModalScreen::Bank => self.confirm_bank_menu(),
                 ModalScreen::Explosives => self.confirm_explosives_menu(),
                 ModalScreen::Salvage => self.confirm_salvage_menu(),
@@ -10136,29 +10134,12 @@ impl GameState {
         );
     }
 
-    fn try_buy_upgrade(&mut self, index: usize) {
+    fn queue_buy_upgrade(&mut self, index: usize) {
         if self.current_zone != Some(SurfaceZone::Shop) {
             return;
         }
-
-        match buy_upgrade(&mut self.player, index) {
-            Ok(offer) => {
-                self.sound_cues.push(SoundCue::Upgrade);
-                self.message = format!(
-                    "Bought {}.",
-                    upgrade_tier_name(offer.kind, offer.level.saturating_sub(1))
-                );
-            }
-            Err(PurchaseError::InvalidSelection) => {
-                "Unknown upgrade selection.".clone_into(&mut self.message);
-            }
-            Err(PurchaseError::MaxLevel) => {
-                "That upgrade is already maxed.".clone_into(&mut self.message);
-            }
-            Err(PurchaseError::NotEnoughCredits) => {
-                "Not enough credits for that upgrade.".clone_into(&mut self.message);
-            }
-        }
+        self.session_service_request = Some(SessionServiceRequest::BuyUpgrade { index });
+        "Upgrade purchase queued for authoritative session.".clone_into(&mut self.message);
         self.modal = Some(ModalScreen::Shop);
     }
 
@@ -17005,6 +16986,31 @@ mod tests {
             Some(TileKind::Air)
         ));
         assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn shop_upgrade_confirm_queues_authoritative_session_purchase() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.current_zone = Some(SurfaceZone::Shop);
+        game.modal = Some(ModalScreen::ShopConfirm);
+        game.selected_menu_item = 0;
+        game.player.credits = 10_000;
+        let credits_before = game.player.credits;
+        let drill_before = game.player.drill_strength;
+
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::BuyUpgrade { index: 0 })
+        );
+        assert_eq!(game.player.credits, credits_before);
+        assert_eq!(game.player.drill_strength, drill_before);
+        assert!(game.message.contains("authoritative session"));
     }
 
     #[test]
