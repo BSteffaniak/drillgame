@@ -1700,6 +1700,162 @@ impl OnlineSaveExitPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineLocalPersistenceAction {
+    Save,
+    Load,
+}
+
+impl OnlineLocalPersistenceAction {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Save => "save",
+            Self::Load => "load",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLocalPersistenceDecision {
+    pub action: OnlineLocalPersistenceAction,
+    pub allowed: bool,
+    pub save_authority: OnlineSaveAuthority,
+    pub player_message: String,
+    pub status: String,
+}
+
+impl OnlineLocalPersistenceDecision {
+    #[must_use]
+    pub fn from_game(game: &GameState, action: OnlineLocalPersistenceAction) -> Self {
+        let policy = game.online_save_exit_policy();
+        let allowed = match action {
+            OnlineLocalPersistenceAction::Save => policy.local_save_allowed,
+            OnlineLocalPersistenceAction::Load => policy.local_load_allowed,
+        };
+        let player_message = match (action, allowed, policy.save_authority) {
+            (OnlineLocalPersistenceAction::Save, true, OnlineSaveAuthority::LocalPlayer) => {
+                "Save allowed: this instance owns the local/host session save.".to_owned()
+            }
+            (OnlineLocalPersistenceAction::Load, true, OnlineSaveAuthority::LocalPlayer) => {
+                "Load allowed: this instance owns local save selection.".to_owned()
+            }
+            (OnlineLocalPersistenceAction::Save, false, OnlineSaveAuthority::RemoteHost) => {
+                "Save blocked: host owns the online session save; joined clients cannot write local saves.".to_owned()
+            }
+            (OnlineLocalPersistenceAction::Load, false, OnlineSaveAuthority::RemoteHost) => {
+                "Load blocked: host owns the online session save; leave the session before loading a local save.".to_owned()
+            }
+            _ => format!(
+                "{} blocked: verify online save ownership before local persistence.",
+                action.label()
+            ),
+        };
+        let status = format!(
+            "Online local persistence: action={} allowed={} authority={:?} dirty={} role={} slot={} | {}",
+            action.label(),
+            yes_no(allowed),
+            policy.save_authority,
+            yes_no(game.save_dirty),
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            player_message
+        );
+        Self {
+            action,
+            allowed,
+            save_authority: policy.save_authority,
+            player_message,
+            status,
+        }
+    }
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "leave/end safety reports independent shutdown and save-corruption safeguards"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineLeaveEndSafetyStatus {
+    pub session_active: bool,
+    pub shutdown_requestable: bool,
+    pub shutdown_pending: bool,
+    pub shutdown_acknowledged: bool,
+    pub peer_notification_evidence: bool,
+    pub save_corruption_guarded: bool,
+    pub force_kill_not_required: bool,
+    pub status: String,
+}
+
+impl OnlineLeaveEndSafetyStatus {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let session_active = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+        );
+        let shutdown_requestable = session_active
+            && game.online_network_task_request != Some(OnlineNetworkTaskRequest::Shutdown);
+        let shutdown_pending = game.online_network_task_request
+            == Some(OnlineNetworkTaskRequest::Shutdown)
+            || game
+                .online_last_session_boundary_status
+                .contains("local-shutdown-requested");
+        let shutdown_acknowledged = game.online_session_state == OnlineSessionUxState::Shutdown
+            || game
+                .online_last_session_boundary_status
+                .contains("shutdown-acknowledged");
+        let peer_notification_evidence =
+            game.online_last_shutdown_summary.contains("peer notified")
+                || game
+                    .online_last_shutdown_summary
+                    .contains("no peer notification needed")
+                || game
+                    .online_last_session_boundary_status
+                    .contains("host-ended")
+                || game
+                    .online_last_session_boundary_status
+                    .contains("client-left")
+                || game
+                    .online_last_session_boundary_status
+                    .contains("transport-closed");
+        let save_policy = game.online_save_exit_policy();
+        let save_corruption_guarded = save_policy.local_save_allowed
+            || save_policy.unsaved_exit_action == OnlineUnsavedExitAction::DiscardOrCancelOnly
+            || shutdown_acknowledged;
+        let force_kill_not_required = shutdown_requestable
+            || shutdown_pending
+            || shutdown_acknowledged
+            || peer_notification_evidence;
+        let status = format!(
+            "Online leave/end safety: force_kill_not_required={} active={} requestable={} pending={} acknowledged={} peer_notice={} save_guarded={} role={} slot={}",
+            yes_no(force_kill_not_required),
+            yes_no(session_active),
+            yes_no(shutdown_requestable),
+            yes_no(shutdown_pending),
+            yes_no(shutdown_acknowledged),
+            yes_no(peer_notification_evidence),
+            yes_no(save_corruption_guarded),
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        );
+        Self {
+            session_active,
+            shutdown_requestable,
+            shutdown_pending,
+            shutdown_acknowledged,
+            peer_notification_evidence,
+            save_corruption_guarded,
+            force_kill_not_required,
+            status,
+        }
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "save boundary UX reports independent save/load/exit permission flags"
@@ -2265,6 +2421,7 @@ impl OnlineManualWorkingGameGateStatus {
             || game.online_last_failure_status.contains("category=");
         let directional = OnlineDirectionalGameplaySyncStatus::from_game(game);
         let clarity = OnlineGameplayClarityPresentation::from_game(game);
+        let leave_end = OnlineLeaveEndSafetyStatus::from_game(game);
         let ready = two_instances_ready
             && ui_host_join_ready
             && ui_ready_start_ready
@@ -2274,9 +2431,11 @@ impl OnlineManualWorkingGameGateStatus {
             && shutdown_safe
             && failures_triaged
             && directional.both_directions_visible
-            && clarity.hud_clear_enough;
+            && clarity.hud_clear_enough
+            && leave_end.force_kill_not_required
+            && leave_end.save_corruption_guarded;
         let status = format!(
-            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} directional={} hud_clear={} role={} slot={}",
+            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} directional={} hud_clear={} leave_safe={} save_guarded={} role={} slot={}",
             yes_no(ready),
             yes_no(two_instances_ready),
             yes_no(ui_host_join_ready),
@@ -2288,6 +2447,8 @@ impl OnlineManualWorkingGameGateStatus {
             yes_no(failures_triaged),
             yes_no(directional.both_directions_visible),
             yes_no(clarity.hud_clear_enough),
+            yes_no(leave_end.force_kill_not_required),
+            yes_no(leave_end.save_corruption_guarded),
             game.online_role_label(),
             game.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
@@ -6162,6 +6323,10 @@ impl GameState {
         self.apply_online_session_boundary_status(
             &OnlineSessionBoundaryStatus::local_shutdown_requested(),
         );
+        self.message = format!(
+            "shutdown requested; {}",
+            OnlineLeaveEndSafetyStatus::from_game(self).status
+        );
         true
     }
 
@@ -6578,22 +6743,28 @@ impl GameState {
     }
 
     fn block_joined_client_load(&mut self) -> bool {
-        if self.online_local_save_allowed() {
+        let decision =
+            OnlineLocalPersistenceDecision::from_game(self, OnlineLocalPersistenceAction::Load);
+        if decision.allowed {
             return false;
         }
-        let message = "Load blocked: host owns the online session save; leave the session before loading a local save.";
-        message.clone_into(&mut self.message);
-        self.apply_online_save_boundary_status(&OnlineSaveBoundaryStatus::blocked_save(message));
+        decision.player_message.clone_into(&mut self.message);
+        self.apply_online_save_boundary_status(&OnlineSaveBoundaryStatus::blocked_save(
+            &decision.player_message,
+        ));
         true
     }
 
     fn block_joined_client_save(&mut self) -> bool {
-        if self.online_local_save_allowed() {
+        let decision =
+            OnlineLocalPersistenceDecision::from_game(self, OnlineLocalPersistenceAction::Save);
+        if decision.allowed {
             return false;
         }
-        let message = "Save blocked: host owns the online session save; joined clients cannot write local saves.";
-        message.clone_into(&mut self.message);
-        self.apply_online_save_boundary_status(&OnlineSaveBoundaryStatus::blocked_save(message));
+        decision.player_message.clone_into(&mut self.message);
+        self.apply_online_save_boundary_status(&OnlineSaveBoundaryStatus::blocked_save(
+            &decision.player_message,
+        ));
         true
     }
 
@@ -6786,6 +6957,7 @@ impl GameState {
         });
         lines.push(OnlineDirectionalGameplaySyncStatus::from_game(self).status);
         lines.push(OnlineGameplayClarityPresentation::from_game(self).status);
+        lines.push(OnlineLeaveEndSafetyStatus::from_game(self).status);
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
@@ -14511,6 +14683,76 @@ mod tests {
         assert!(game.online_multiplayer_status_lines().iter().any(|line| {
             line.contains("Online manual working-game gate") && line.contains("ready=yes")
         }));
+    }
+
+    #[test]
+    fn local_persistence_decision_blocks_joined_client_and_allows_host() {
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.save_dirty = true;
+
+        let save_decision =
+            OnlineLocalPersistenceDecision::from_game(&client, OnlineLocalPersistenceAction::Save);
+        let load_decision =
+            OnlineLocalPersistenceDecision::from_game(&client, OnlineLocalPersistenceAction::Load);
+
+        assert!(!save_decision.allowed);
+        assert!(!load_decision.allowed);
+        assert_eq!(
+            save_decision.save_authority,
+            OnlineSaveAuthority::RemoteHost
+        );
+        assert!(save_decision.status.contains("allowed=no"));
+        assert!(load_decision.player_message.contains("Load blocked"));
+        assert!(client.block_joined_client_save());
+        assert!(client.message.contains("Save blocked"));
+
+        let mut host = GameState::new();
+        host.online_session_state = OnlineSessionUxState::Connected;
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        let host_decision =
+            OnlineLocalPersistenceDecision::from_game(&host, OnlineLocalPersistenceAction::Save);
+        assert!(host_decision.allowed);
+        assert_eq!(
+            host_decision.save_authority,
+            OnlineSaveAuthority::LocalPlayer
+        );
+        assert!(!host.block_joined_client_save());
+    }
+
+    #[test]
+    fn leave_end_safety_status_tracks_request_pending_ack_and_save_guard() {
+        let mut host = GameState::new();
+        host.online_session_state = OnlineSessionUxState::Connected;
+        host.online_host_owns_save = true;
+        host.online_player_slot = Some(1);
+        host.online_remote_player_connected = true;
+        host.save_dirty = true;
+
+        let active = OnlineLeaveEndSafetyStatus::from_game(&host);
+        assert!(active.session_active);
+        assert!(active.shutdown_requestable);
+        assert!(active.force_kill_not_required);
+        assert!(active.save_corruption_guarded);
+
+        assert!(host.request_online_shutdown_from_gameplay_exit());
+        let pending = OnlineLeaveEndSafetyStatus::from_game(&host);
+        assert!(pending.shutdown_pending);
+        assert!(!pending.shutdown_requestable);
+        assert!(pending.force_kill_not_required);
+        assert!(pending.status.contains("pending=yes"));
+
+        host.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::from_notification("descriptor host", true, true, None, true),
+        ));
+        let acknowledged = OnlineLeaveEndSafetyStatus::from_game(&host);
+        assert!(acknowledged.shutdown_acknowledged);
+        assert!(acknowledged.peer_notification_evidence);
+        assert!(acknowledged.force_kill_not_required);
+        assert!(acknowledged.status.contains("force_kill_not_required=yes"));
     }
 
     #[test]
