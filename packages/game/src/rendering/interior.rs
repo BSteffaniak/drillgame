@@ -1,6 +1,6 @@
 use raylib::prelude::*;
 
-use super::{SCREEN_WIDTH, ui::UiContext};
+use super::{SCREEN_WIDTH, layout::UiLayout};
 use crate::{
     economy::SurfaceZone,
     game_state::{GameState, ServiceAnimation},
@@ -27,33 +27,42 @@ pub(super) fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let visor_offset = if game.interior_facing >= 0.0 { 5 } else { -13 };
     draw.draw_rectangle(player_x as i32 + visor_offset, 389, 8, 5, Color::DARKBLUE);
 
-    let mut ui = UiContext::new(draw);
-    let mut header = ui.panel(Rectangle {
-        x: 55.0,
-        y: 145.0,
-        width: 610.0,
-        height: 100.0,
-    });
-    header.heading(title);
-    header.muted(npc_line(zone, game));
-    drop(header);
+    let mut ui = UiLayout::screen(draw);
+    ui.anchored_panel(
+        Rectangle {
+            x: 55.0,
+            y: 145.0,
+            width: 610.0,
+            height: 100.0,
+        },
+        title,
+        Some(npc_line(zone, game)),
+        trim,
+    );
 
-    let mut prompt = ui.panel(Rectangle {
-        x: 350.0,
-        y: 620.0,
-        width: 580.0,
-        height: 74.0,
-    });
-    prompt.muted("A/D walk | E use counter/door | Esc exits");
-    drop(prompt);
+    ui.anchored_panel(
+        Rectangle {
+            x: 350.0,
+            y: 620.0,
+            width: 580.0,
+            height: 74.0,
+        },
+        "Controls",
+        Some("A/D walk | E use counter/door | Esc exits"),
+        Color::LIGHTGRAY,
+    );
 
-    let mut interact = ui.panel(Rectangle {
-        x: service_x - 78.0,
-        y: 258.0,
-        width: 156.0,
-        height: 64.0,
-    });
-    interact.heading("Press E");
+    ui.anchored_panel(
+        Rectangle {
+            x: service_x - 78.0,
+            y: 258.0,
+            width: 156.0,
+            height: 64.0,
+        },
+        "Press E",
+        None,
+        Color::GOLD,
+    );
 }
 
 fn npc_line(zone: SurfaceZone, game: &GameState) -> &'static str {

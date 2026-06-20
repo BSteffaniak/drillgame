@@ -225,6 +225,28 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         self.draw_modal_content(body, content);
     }
 
+    pub(super) fn anchored_panel(
+        &mut self,
+        rect: Rectangle,
+        heading: &str,
+        body: Option<&str>,
+        accent: Color,
+    ) {
+        self.draw_panel(rect, PanelKind::Overlay);
+        let inner = inset(rect, Insets::symmetric(10.0, 8.0));
+        Self::draw_text(heading, inner.x, inner.y, TextKind::Heading, accent);
+        if let Some(body) = body {
+            Self::draw_wrapped(
+                body,
+                inner.x,
+                inner.y + 26.0,
+                inner.width,
+                TextKind::Small,
+                Color::LIGHTGRAY,
+            );
+        }
+    }
+
     pub(super) fn canvas_modal(&mut self, title: &str, subtitle: &str, summary: &str) -> Rectangle {
         self.draw.draw_rectangle(
             self.viewport.x as i32,
