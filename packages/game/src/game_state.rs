@@ -20,14 +20,14 @@ use crate::{
     contract::ContractLog,
     economy::{
         DeepClaimStatus, PurchaseError, SurfaceZone, TownBuilding, TownDevelopment, buy_upgrade,
-        refuel_amount, repair_amount, sell_cargo, upgrade_offers, upgrade_tier_name,
+        sell_cargo, upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
     multiplayer::{PlayerCommand, QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
     player::Player,
     save::{
-        load_game, load_game_slot, load_latest_game, save_exists, save_game_slot,
-        save_legacy_shell_game, save_slot_count, saves_exist,
+        load_game, load_latest_game, save_exists, save_legacy_shell_game, save_slot_count,
+        saves_exist,
     },
     surface::surface_building_at_tile,
     terrain::{
@@ -1944,6 +1944,18 @@ impl OnlineSaveBoundaryStatus {
             self.player_message
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionSlotIoRequest {
+    Save { slot: usize },
+    Load { slot: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionServiceRequest {
+    Refuel { menu_item: usize },
+    Repair { menu_item: usize },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -5755,6 +5767,10 @@ pub struct GameState {
     pub online_network_task_request: Option<OnlineNetworkTaskRequest>,
     #[serde(default, skip)]
     pub online_start_session_requested: bool,
+    #[serde(default, skip)]
+    pub session_slot_io_request: Option<SessionSlotIoRequest>,
+    #[serde(default, skip)]
+    pub session_service_request: Option<SessionServiceRequest>,
     #[serde(default)]
     pub online_gameplay_entry_source: OnlineGameplayEntrySource,
     #[serde(default)]
@@ -6038,6 +6054,8 @@ impl GameState {
             online_local_ready: false,
             online_network_task_request: None,
             online_start_session_requested: false,
+            session_slot_io_request: None,
+            session_service_request: None,
             online_gameplay_entry_source: OnlineGameplayEntrySource::None,
             online_gameplay_entry_authoritative_tick: None,
             online_last_gameplay_entry_status: String::new(),
@@ -9332,13 +9350,8 @@ impl GameState {
             self.modal = Some(ModalScreen::SaveSlots);
             return;
         }
-        match save_game_slot(self, slot) {
-            Ok(()) => {
-                self.save_dirty = false;
-                self.message = format!("Saved to slot {}.", slot + 1);
-            }
-            Err(error) => self.message = format!("Save slot failed: {error}"),
-        }
+        self.session_slot_io_request = Some(SessionSlotIoRequest::Save { slot });
+        self.message = format!("Saving slot {} from authoritative session...", slot + 1);
         self.modal = Some(ModalScreen::SaveSlots);
     }
 
@@ -9347,89 +9360,34 @@ impl GameState {
             self.modal = Some(ModalScreen::LoadSlots);
             return;
         }
-        match load_game_slot(slot) {
-            Ok(mut loaded) => {
-                loaded.master_volume = self.master_volume;
-                loaded.fullscreen = self.fullscreen;
-                loaded.migrate_loaded_state();
-                loaded.mark_full_terrain_refresh();
-                *self = loaded;
-                self.save_dirty = false;
-                self.message = format!("Loaded slot {}.", slot + 1);
-            }
-            Err(error) => self.message = format!("Load slot failed: {error}"),
-        }
+        self.session_slot_io_request = Some(SessionSlotIoRequest::Load { slot });
+        self.message = format!("Loading slot {} into authoritative session...", slot + 1);
     }
 
-    const fn selected_service_fraction(&self) -> f32 {
-        match self.selected_menu_item {
-            0 => 0.25,
-            1 => 0.5,
-            _ => 1.0,
-        }
+    #[must_use]
+    pub const fn take_session_slot_io_request(&mut self) -> Option<SessionSlotIoRequest> {
+        self.session_slot_io_request.take()
     }
 
     fn confirm_refuel(&mut self) {
-        let fraction = self.selected_service_fraction();
-        let cost = refuel_amount(&mut self.player, fraction);
-        self.message = if cost == 0 {
-            "Fuel already full or no credits available.".to_owned()
-        } else {
-            format!("Fuel topped up for {cost} credits.")
-        };
-        if cost > 0 {
-            if self.has_world_event(WorldEventKind::FuelShortage) {
-                let surcharge = (cost / 4).min(self.player.credits);
-                self.player.credits -= surcharge;
-                self.message = format!(
-                    "Fuel topped up for {cost} credits. Fuel shortage surcharge: {surcharge}."
-                );
-            } else if self.town_event_day.is_multiple_of(5) {
-                let refund = cost / 5;
-                self.player.credits += refund;
-                self.message = format!("Fuel topped up for {cost} credits. Sale refund: {refund}.");
-            }
-            self.sound_cues.push(SoundCue::Upgrade);
-            self.service_animation = Some(ServiceAnimation::Fuel);
-            self.service_animation_seconds = 1.4;
-        }
+        self.session_service_request = Some(SessionServiceRequest::Refuel {
+            menu_item: self.selected_menu_item,
+        });
+        "Refuel queued for authoritative session.".clone_into(&mut self.message);
         self.modal = Some(ModalScreen::Fuel);
     }
 
     fn confirm_repair(&mut self) {
-        let fraction = self.selected_service_fraction();
-        let cost = repair_amount(&mut self.player, fraction);
-        self.message = if cost == 0 {
-            "Hull already repaired or no credits available.".to_owned()
-        } else {
-            format!("Hull repaired for {cost} credits.")
-        };
-        if cost > 0 {
-            if self.town_development.mechanic_level > 0 {
-                let refund =
-                    (cost * u32::from(self.town_development.mechanic_level)).min(cost) / 10;
-                self.player.credits = self.player.credits.saturating_add(refund);
-                self.message =
-                    format!("Hull repaired for {cost} credits. Mechanic upgrade rebate: {refund}.");
-            }
-            if self.has_world_event(WorldEventKind::RepairBacklog) {
-                let surcharge = (cost / 4).min(self.player.credits);
-                self.player.credits -= surcharge;
-                self.message = format!(
-                    "Hull repaired for {cost} credits. Repair backlog event surcharge: {surcharge}."
-                );
-            } else if self.town_event_day % 5 == 2 {
-                let surcharge = (cost / 10).min(self.player.credits);
-                self.player.credits -= surcharge;
-                self.message = format!(
-                    "Hull repaired for {cost} credits. Repair backlog surcharge: {surcharge}."
-                );
-            }
-            self.sound_cues.push(SoundCue::Upgrade);
-            self.service_animation = Some(ServiceAnimation::Repair);
-            self.service_animation_seconds = 1.4;
-        }
+        self.session_service_request = Some(SessionServiceRequest::Repair {
+            menu_item: self.selected_menu_item,
+        });
+        "Repair queued for authoritative session.".clone_into(&mut self.message);
         self.modal = Some(ModalScreen::Repair);
+    }
+
+    #[must_use]
+    pub const fn take_session_service_request(&mut self) -> Option<SessionServiceRequest> {
+        self.session_service_request.take()
     }
 
     fn confirm_headquarters(&mut self) {
@@ -12961,6 +12919,7 @@ mod tests {
         assert!(game.message.contains("host owns"));
 
         game.save_slot(0);
+        assert_eq!(game.take_session_slot_io_request(), None);
         assert!(matches!(game.modal, Some(ModalScreen::SaveSlots)));
         assert!(game.message.contains("host owns"));
 
@@ -12973,6 +12932,36 @@ mod tests {
         }));
         assert!(!game.request_exit);
         assert!(game.message.contains("host owns"));
+    }
+
+    #[test]
+    fn save_and_load_slot_modals_queue_authoritative_session_io_instead_of_touching_legacy_game() {
+        let mut game = GameState::new();
+        game.modal = Some(ModalScreen::SaveSlots);
+        game.selected_menu_item = 1;
+        game.save_dirty = true;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_slot_io_request(),
+            Some(SessionSlotIoRequest::Save { slot: 1 })
+        );
+        assert!(game.save_dirty);
+        assert!(game.message.contains("authoritative session"));
+
+        game.modal = Some(ModalScreen::LoadSlots);
+        game.selected_menu_item = 2;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_slot_io_request(),
+            Some(SessionSlotIoRequest::Load { slot: 2 })
+        );
+        assert!(game.message.contains("authoritative session"));
     }
 
     #[test]
@@ -17167,13 +17156,12 @@ mod tests {
     }
 
     #[test]
-    fn damage_and_repair_regression_restores_hull_for_credits() {
+    fn damage_and_repair_regression_queues_authoritative_session_repair() {
         let mut game = GameState::new();
         game.run_mode = RunMode::Playing;
         game.player.hull = 50.0;
         game.player.credits = 500;
         game.modal = Some(ModalScreen::RepairConfirm);
-        let initial_credits = game.player.credits;
 
         game.update(
             PlayerInput {
@@ -17183,9 +17171,11 @@ mod tests {
             0.1,
         );
 
-        assert!(game.player.hull > 50.0);
-        assert!(game.player.credits < initial_credits);
-        assert!(game.message.contains("Hull repaired"));
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::Repair { menu_item: 0 })
+        );
+        assert!(game.message.contains("authoritative session"));
     }
 
     #[test]

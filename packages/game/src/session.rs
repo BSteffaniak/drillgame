@@ -4940,6 +4940,111 @@ impl GameSession {
         }
     }
 
+    fn handle_session_slot_io_request(&mut self) -> Option<SessionSaveLoadSummary> {
+        let request = self.game.take_session_slot_io_request()?;
+        Some(match request {
+            crate::game_state::SessionSlotIoRequest::Save { slot } => {
+                self.save_slot_from_session_request(slot)
+            }
+            crate::game_state::SessionSlotIoRequest::Load { slot } => {
+                self.load_slot_from_session_request(slot)
+            }
+        })
+    }
+
+    fn handle_session_service_request(&mut self) -> Option<SessionSaveLoadSummary> {
+        let request = self.game.take_session_service_request()?;
+        let player_id = self.local_client().controlled_player_id;
+        let before = self
+            .world
+            .player(player_id)
+            .map(|player| (player.credits, player.fuel, player.hull))?;
+        let command = match request {
+            crate::game_state::SessionServiceRequest::Refuel { .. } => PlayerCommand::Refuel,
+            crate::game_state::SessionServiceRequest::Repair { .. } => PlayerCommand::Repair,
+        };
+        let outcome = self.world.apply_player_command(player_id, &command);
+        if matches!(outcome, PlayerScopedCommandOutcome::Applied) {
+            self.sync_legacy_player_from_world(player_id);
+            match request {
+                crate::game_state::SessionServiceRequest::Refuel { .. } => {
+                    self.game.service_animation = Some(crate::game_state::ServiceAnimation::Fuel);
+                    self.game.service_animation_seconds = 1.4;
+                }
+                crate::game_state::SessionServiceRequest::Repair { .. } => {
+                    self.game.service_animation = Some(crate::game_state::ServiceAnimation::Repair);
+                    self.game.service_animation_seconds = 1.4;
+                }
+            }
+            self.game.sound_cues.push(SoundCue::Upgrade);
+            let after = self
+                .world
+                .player(player_id)
+                .map_or(before, |player| (player.credits, player.fuel, player.hull));
+            let spent = before.0.saturating_sub(after.0);
+            self.game.message = match request {
+                crate::game_state::SessionServiceRequest::Refuel { .. } if spent == 0 => {
+                    "Fuel already full or no credits available.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::Refuel { .. } => {
+                    format!("Fuel topped up for {spent} credits.")
+                }
+                crate::game_state::SessionServiceRequest::Repair { .. } if spent == 0 => {
+                    "Hull already repaired or no credits available.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::Repair { .. } => {
+                    format!("Hull repaired for {spent} credits.")
+                }
+            };
+        } else {
+            "Service unavailable for current player.".clone_into(&mut self.game.message);
+        }
+        Some(SessionSaveLoadSummary::saved(self.game.message.clone()))
+    }
+
+    fn save_slot_from_session_request(&mut self, slot: usize) -> SessionSaveLoadSummary {
+        if let Some(message) = self.local_save_authority_denial() {
+            self.game.message.clone_from(&message);
+            return SessionSaveLoadSummary::save_denied(message);
+        }
+        match self.save_session_slot(slot) {
+            Ok(()) => {
+                self.game.save_dirty = false;
+                self.game.message = format!("Saved slot {} from authoritative session.", slot + 1);
+                self.game.sound_cues.push(SoundCue::Ui);
+                SessionSaveLoadSummary::saved(self.game.message.clone())
+            }
+            Err(error) => {
+                self.game.message = format!("Save slot failed: {error}");
+                SessionSaveLoadSummary::failed(self.game.message.clone())
+            }
+        }
+    }
+
+    fn load_slot_from_session_request(&mut self, slot: usize) -> SessionSaveLoadSummary {
+        if self.game.online_player_slot.is_some() && !self.game.online_host_owns_save {
+            let message =
+                "Joined online clients cannot load over host-owned session state.".to_owned();
+            self.game.message.clone_from(&message);
+            return SessionSaveLoadSummary::failed(message);
+        }
+        match Self::load_session_slot(slot) {
+            Ok(mut loaded) => {
+                loaded.apply_settings(self.current_settings());
+                loaded.game.message =
+                    format!("Loaded slot {} into authoritative session.", slot + 1);
+                loaded.game.sound_cues.push(SoundCue::Ui);
+                loaded.game.mark_full_terrain_refresh();
+                *self = loaded;
+                SessionSaveLoadSummary::loaded(self.game.message.clone())
+            }
+            Err(error) => {
+                self.game.message = format!("Load slot failed: {error}");
+                SessionSaveLoadSummary::failed(self.game.message.clone())
+            }
+        }
+    }
+
     const fn input_without_session_save_load(mut input: PlayerInput) -> PlayerInput {
         input.save = false;
         input.load = false;
@@ -6377,7 +6482,7 @@ impl GameSession {
         input: PlayerInput,
         delta_seconds: f32,
     ) -> SessionAuthorityUpdateSummary {
-        if self.game.run_mode == RunMode::Playing && self.game.modal.is_none() {
+        if self.game.run_mode == RunMode::Playing {
             self.update_authoritative_gameplay_frame(input, delta_seconds)
         } else {
             self.update_legacy_frame(input, delta_seconds)
@@ -6391,11 +6496,15 @@ impl GameSession {
     ) -> SessionAuthorityUpdateSummary {
         let save_load = self.handle_session_save_load_input(input);
         let input = Self::input_without_session_save_load(input);
-        let gameplay_commands = crate::game_state::session_gameplay_commands_from_input(input);
-        if !gameplay_commands.is_empty() {
-            self.route_local_player_commands(gameplay_commands);
-        }
-        let shell_input = crate::game_state::input_without_session_gameplay_commands(input);
+        let shell_input = if self.game.modal.is_none() {
+            let gameplay_commands = crate::game_state::session_gameplay_commands_from_input(input);
+            if !gameplay_commands.is_empty() {
+                self.route_local_player_commands(gameplay_commands);
+            }
+            crate::game_state::input_without_session_gameplay_commands(input)
+        } else {
+            input
+        };
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         let _advance = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
@@ -6405,6 +6514,16 @@ impl GameSession {
         let shell_update = self
             .game
             .update_shell_after_session_authority(shell_input, delta_seconds);
+        if let Some(slot_summary) = self.handle_session_slot_io_request() {
+            self.push_event(WorldEvent::MessageChanged {
+                message: slot_summary.message,
+            });
+        }
+        if let Some(service_summary) = self.handle_session_service_request() {
+            self.push_event(WorldEvent::MessageChanged {
+                message: service_summary.message,
+            });
+        }
         if matches!(
             shell_update,
             crate::game_state::SessionShellUpdateSummary::ExitRequested
@@ -10673,6 +10792,107 @@ mod tests {
                 player_id: LOCAL_PLAYER_ID
             }
         )));
+    }
+
+    #[test]
+    fn session_slot_io_request_saves_world_state_from_authoritative_session() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "drillgame-session-slot-save-{}",
+            std::process::id()
+        ));
+        let _ignored = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("temp save dir");
+        unsafe {
+            std::env::set_var("DRILLGAME_STATE_DIR", &temp_dir);
+        }
+
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = Some(crate::game_state::ModalScreen::SaveSlots);
+        session.game.selected_menu_item = 0;
+        session.game.save_dirty = true;
+        session
+            .world_mut()
+            .player_mut(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .credits = 4321;
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(!summary.legacy_bridge_active());
+        assert!(!session.game().save_dirty);
+        assert!(session.game().message.contains("Saved slot 1"));
+        let loaded = crate::save::load_persistent_world_slot(0).expect("slot save loads");
+        assert_eq!(
+            loaded.default_player_state().expect("player state").credits,
+            4321
+        );
+        unsafe {
+            std::env::remove_var("DRILLGAME_STATE_DIR");
+        }
+        let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_service_modal_applies_refuel_and_repair_to_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 10_000;
+            player.fuel = 1.0;
+            player.hull = 1.0;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::FuelConfirm);
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().message.contains("Fuel"));
+        assert!(session.game().player.fuel > 1.0);
+        assert!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .fuel
+                > 1.0
+        );
+
+        session.game.modal = Some(crate::game_state::ModalScreen::RepairConfirm);
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().message.contains("Hull"));
+        assert!(session.game().player.hull > 1.0);
+        assert!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .hull
+                > 1.0
+        );
     }
 
     #[test]
