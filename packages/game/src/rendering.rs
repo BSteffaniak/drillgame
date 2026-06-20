@@ -6,7 +6,7 @@
     reason = "rendering APIs use integer pixels while camera math uses floats"
 )]
 
-use std::cell::RefCell;
+use std::{cell::RefCell, path::Path};
 
 use raylib::{ffi, prelude::*};
 
@@ -42,8 +42,46 @@ const SCREEN_HEIGHT: i32 = 720;
 
 pub struct GameRenderer {
     terrain: TerrainRenderer,
-    ui_fonts: layout::UiFonts,
+    ui_font_assets: UiFontAssets,
     ui_state: RefCell<layout::widgets::UiState>,
+}
+
+struct UiFontAssets {
+    title: Option<Font>,
+    heading: Option<Font>,
+    small: Option<Font>,
+}
+
+impl UiFontAssets {
+    fn load(raylib: &mut RaylibHandle, thread: &RaylibThread) -> Self {
+        Self {
+            title: load_ui_font(raylib, thread, "assets/ui/title.ttf"),
+            heading: load_ui_font(raylib, thread, "assets/ui/heading.ttf"),
+            small: load_ui_font(raylib, thread, "assets/ui/body.ttf"),
+        }
+    }
+
+    fn fonts(&self) -> layout::UiFonts {
+        let fallback = unsafe { ffi::GetFontDefault() };
+        layout::UiFonts::from_raw(
+            self.title.as_ref().map_or(fallback, |font| **font),
+            self.heading.as_ref().map_or(fallback, |font| **font),
+            self.small.as_ref().map_or(fallback, |font| **font),
+        )
+    }
+}
+
+fn load_ui_font(raylib: &mut RaylibHandle, thread: &RaylibThread, path: &str) -> Option<Font> {
+    if !Path::new(path).exists() {
+        return None;
+    }
+    match raylib.load_font(thread, path) {
+        Ok(font) => Some(font),
+        Err(error) => {
+            eprintln!("Failed to load UI font {path}: {error}");
+            None
+        }
+    }
 }
 
 fn centered_camera_for_player(
@@ -105,9 +143,10 @@ impl GameRenderer {
     }
 
     pub fn new(raylib: &mut RaylibHandle, thread: &RaylibThread, game: &GameState) -> Self {
+        let ui_font_assets = UiFontAssets::load(raylib, thread);
         Self {
             terrain: TerrainRenderer::new(raylib, thread, game),
-            ui_fonts: layout::UiFonts::raylib_default(),
+            ui_font_assets,
             ui_state: RefCell::new(layout::widgets::UiState::default()),
         }
     }
@@ -276,7 +315,7 @@ impl GameRenderer {
         world_players: &[crate::session::RenderWorldPlayerPresentation],
         hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
-        layout::set_current_fonts(self.ui_fonts);
+        layout::set_current_fonts(self.ui_font_assets.fonts());
         layout::set_current_ui_state(self.ui_state.borrow().clone());
         draw.clear_background(Color::new(105, 190, 235, 255));
 

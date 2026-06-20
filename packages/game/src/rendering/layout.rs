@@ -774,6 +774,14 @@ impl UiFonts {
         }
     }
 
+    pub(super) const fn from_raw(title: ffi::Font, heading: ffi::Font, small: ffi::Font) -> Self {
+        Self {
+            title,
+            heading,
+            small,
+        }
+    }
+
     pub(super) const fn font(self, role: FontRole) -> ffi::Font {
         match role {
             FontRole::Title => self.title,
