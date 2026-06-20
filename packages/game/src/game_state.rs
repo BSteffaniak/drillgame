@@ -1959,6 +1959,8 @@ pub enum SessionServiceRequest {
     BuyMiningRockets,
     ClaimFreeTestCharge,
     SalvagePatchHull,
+    Finance,
+    BuyInsurance,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9400,7 +9402,7 @@ impl GameState {
                 self.message = hq_story_message(self);
                 self.sound_cues.push(SoundCue::Milestone);
             }
-            2 => self.confirm_finance(),
+            2 => self.queue_finance(),
             3 if self.deep_claim_status == DeepClaimStatus::Unlocked => {
                 self.modal = Some(ModalScreen::TownDevelopment);
                 self.selected_menu_item = 0;
@@ -9418,7 +9420,7 @@ impl GameState {
                 self.modal = Some(ModalScreen::Crafting);
                 self.selected_menu_item = 0;
             }
-            _ => self.confirm_finance(),
+            _ => self.queue_finance(),
         }
     }
 
@@ -9680,8 +9682,8 @@ impl GameState {
 
     fn confirm_bank_menu(&mut self) {
         match self.selected_menu_item {
-            0 => self.confirm_finance(),
-            1 => self.buy_insurance(),
+            0 => self.queue_finance(),
+            1 => self.queue_insurance(),
             _ => self.start_side_contract(),
         }
     }
@@ -9727,33 +9729,14 @@ impl GameState {
         "Salvage patch queued for authoritative session.".clone_into(&mut self.message);
     }
 
-    fn buy_insurance(&mut self) {
-        if self.player.insured {
-            "Already insured for the next rescue.".clone_into(&mut self.message);
-            return;
-        }
-        let max_tier = 1_u8.saturating_add(self.town_development.bank_level).min(4);
-        let next_tier = self.player.insurance_tier.saturating_add(1).min(max_tier);
-        if self.player.insurance_tier >= max_tier {
-            self.message = format!(
-                "Bank level {} only supports tier {max_tier} insurance.",
-                self.town_development.bank_level
-            );
-            return;
-        }
-        let bank_discount = u32::from(self.town_development.bank_level).saturating_mul(15);
-        let cost = (70 + u32::from(next_tier) * 55).saturating_sub(bank_discount);
-        if self.player.credits < cost {
-            self.message = format!("Tier {next_tier} insurance costs {cost} credits.");
-            return;
-        }
-        self.player.credits -= cost;
-        self.player.insured = true;
-        self.player.insurance_tier = next_tier;
-        self.message = format!(
-            "Ledger sold tier {next_tier} rescue insurance. Higher tiers reduce fees and cargo loss."
-        );
-        self.sound_cues.push(SoundCue::Upgrade);
+    fn queue_finance(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::Finance);
+        "Finance request queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_insurance(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::BuyInsurance);
+        "Insurance purchase queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn start_side_contract(&mut self) {
@@ -9810,28 +9793,6 @@ impl GameState {
                     .then_some(self.town_event_day + 2),
             });
         }
-    }
-
-    fn confirm_finance(&mut self) {
-        if self.player.loan_debt == 0 {
-            let advance = 250 + u32::from(self.town_development.bank_level) * 150;
-            let risk_premium = 50 + u32::from(self.town_development.bank_level) * 25;
-            self.player.credits = self.player.credits.saturating_add(advance);
-            self.player.loan_debt = advance.saturating_add(risk_premium);
-            self.message = format!(
-                "HQ finance issued a {advance} credit advance. Risk-adjusted payoff: {} credits.",
-                self.player.loan_debt
-            );
-        } else {
-            let payment = self.player.loan_debt.min(self.player.credits);
-            self.player.credits -= payment;
-            self.player.loan_debt -= payment;
-            self.message = format!(
-                "Paid {payment} credits toward HQ debt. Remaining: {}.",
-                self.player.loan_debt
-            );
-        }
-        self.sound_cues.push(SoundCue::Sell);
     }
 
     fn salvage_recover_lost_cargo(&mut self) {
@@ -16972,6 +16933,40 @@ mod tests {
             Some(TileKind::Air)
         ));
         assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn bank_menu_queues_authoritative_finance_and_insurance_without_mutating_player() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = Some(ModalScreen::Bank);
+        game.selected_menu_item = 0;
+        game.player.credits = 100;
+        game.player.loan_debt = 0;
+
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::Finance)
+        );
+        assert_eq!(game.player.credits, 100);
+        assert_eq!(game.player.loan_debt, 0);
+
+        game.modal = Some(ModalScreen::Bank);
+        game.selected_menu_item = 1;
+        game.player.insured = false;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::BuyInsurance)
+        );
+        assert!(!game.player.insured);
     }
 
     #[test]

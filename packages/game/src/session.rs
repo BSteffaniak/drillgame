@@ -4981,7 +4981,9 @@ impl GameSession {
             crate::game_state::SessionServiceRequest::BuyBombBundle { .. }
             | crate::game_state::SessionServiceRequest::BuyMiningRockets
             | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
-            | crate::game_state::SessionServiceRequest::SalvagePatchHull => None,
+            | crate::game_state::SessionServiceRequest::SalvagePatchHull
+            | crate::game_state::SessionServiceRequest::Finance
+            | crate::game_state::SessionServiceRequest::BuyInsurance => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5004,7 +5006,9 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::BuyBombBundle { .. }
                 | crate::game_state::SessionServiceRequest::BuyMiningRockets
                 | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
-                | crate::game_state::SessionServiceRequest::SalvagePatchHull => {}
+                | crate::game_state::SessionServiceRequest::SalvagePatchHull
+                | crate::game_state::SessionServiceRequest::Finance
+                | crate::game_state::SessionServiceRequest::BuyInsurance => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5067,6 +5071,29 @@ impl GameSession {
                     let restored = after.2 - before.2;
                     format!("Salvage Yard patch job restored {restored:.0} hull.")
                 }
+                crate::game_state::SessionServiceRequest::Finance => {
+                    self.game.sound_cues.push(SoundCue::Sell);
+                    if before.0 < after.0 {
+                        let advance = after.0 - before.0;
+                        format!(
+                            "HQ finance issued a {advance} credit advance. Risk-adjusted payoff: {} credits.",
+                            self.game.player.loan_debt
+                        )
+                    } else {
+                        let payment = before.0.saturating_sub(after.0);
+                        format!(
+                            "Paid {payment} credits toward HQ debt. Remaining: {}.",
+                            self.game.player.loan_debt
+                        )
+                    }
+                }
+                crate::game_state::SessionServiceRequest::BuyInsurance => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    format!(
+                        "Ledger sold tier {} rescue insurance. Higher tiers reduce fees and cargo loss.",
+                        self.game.player.insurance_tier
+                    )
+                }
             };
         } else {
             "Service unavailable for current player.".clone_into(&mut self.game.message);
@@ -5107,6 +5134,41 @@ impl GameSession {
             crate::game_state::SessionServiceRequest::SalvagePatchHull => {
                 let patch = (player.max_hull() * 0.12).ceil();
                 player.hull = (player.hull + patch).min(player.max_hull());
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::Finance => {
+                if player.loan_debt == 0 {
+                    let advance = 250 + u32::from(self.game.town_development.bank_level) * 150;
+                    let risk_premium = 50 + u32::from(self.game.town_development.bank_level) * 25;
+                    player.credits = player.credits.saturating_add(advance);
+                    player.loan_debt = advance.saturating_add(risk_premium);
+                } else {
+                    let payment = player.loan_debt.min(player.credits);
+                    player.credits -= payment;
+                    player.loan_debt -= payment;
+                }
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::BuyInsurance => {
+                if player.insured {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let max_tier = 1_u8
+                    .saturating_add(self.game.town_development.bank_level)
+                    .min(4);
+                let next_tier = player.insurance_tier.saturating_add(1).min(max_tier);
+                if player.insurance_tier >= max_tier {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let bank_discount =
+                    u32::from(self.game.town_development.bank_level).saturating_mul(15);
+                let cost = (70 + u32::from(next_tier) * 55).saturating_sub(bank_discount);
+                if player.credits < cost {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                player.credits -= cost;
+                player.insured = true;
+                player.insurance_tier = next_tier;
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }
@@ -10954,6 +11016,57 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_bank_services_mutate_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.town_development.bank_level = 2;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 100;
+            player.loan_debt = 0;
+            player.insured = false;
+            player.insurance_tier = 0;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Bank);
+        session.game.selected_menu_item = 0;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().message.contains("credit advance"));
+        assert!(session.game().player.credits > 100);
+        assert!(session.game().player.loan_debt > 0);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Bank);
+        session.game.selected_menu_item = 1;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().player.insured);
+        assert_eq!(session.game().player.insurance_tier, 1);
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert!(player.insured);
+        assert_eq!(player.insurance_tier, 1);
     }
 
     #[test]
