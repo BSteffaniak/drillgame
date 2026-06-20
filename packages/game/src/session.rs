@@ -5665,6 +5665,11 @@ impl GameSession {
         batch
     }
 
+    #[must_use]
+    pub fn latest_local_authoritative_commands_for_tests(&self) -> &[PlayerCommand] {
+        &self.latest_local_authoritative_commands
+    }
+
     pub fn route_split_screen_player_commands(
         &mut self,
         client_id: ClientId,

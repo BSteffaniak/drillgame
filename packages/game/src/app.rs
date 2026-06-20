@@ -556,7 +556,13 @@ pub fn run() {
                 session.route_command_producer(local_input.client_id, local_input.producer);
         }
 
-        let authority_update = session.update_frame_from_session_authority(input, delta_seconds);
+        let authority_input = if split_screen_active {
+            crate::game_state::input_without_session_gameplay_commands(input)
+        } else {
+            input
+        };
+        let authority_update =
+            session.update_frame_from_session_authority(authority_input, delta_seconds);
         if session.should_exit() {
             online_tasks.drain_and_execute(session.game_mut());
         }
@@ -605,6 +611,56 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("online task did not complete");
+    }
+
+    #[test]
+    fn split_screen_authority_input_strips_primary_gameplay_after_command_producers_route_it() {
+        let mut session = GameSession::new();
+        session.game_mut().run_mode = RunMode::Playing;
+        assert!(session.enable_default_local_split_screen());
+        let primary_input = crate::input::PlayerInput {
+            horizontal: 1.0,
+            thrust: true,
+            cancel: true,
+            map: true,
+            ..crate::input::PlayerInput::default()
+        };
+        let producers = crate::input_mapping::local_split_screen_inputs(
+            crate::multiplayer::LOCAL_CLIENT_ID,
+            primary_input,
+            session.secondary_local_client_id(),
+            Some(crate::input::PlayerInput::default()),
+        );
+        for local_input in producers {
+            let _batch =
+                session.route_command_producer(local_input.client_id, local_input.producer);
+        }
+
+        let shell_input = crate::game_state::input_without_session_gameplay_commands(primary_input);
+        let summary = session.update_frame_from_session_authority(shell_input, FIXED_DELTA_SECONDS);
+
+        assert!(!summary.legacy_bridge_active());
+        assert!(summary.local_movement_authority);
+        assert!(
+            session
+                .latest_local_authoritative_commands_for_tests()
+                .iter()
+                .any(|command| {
+                    matches!(
+                        command,
+                        PlayerCommand::Movement {
+                            horizontal,
+                            thrust: true,
+                            drill_down: false,
+                        } if (*horizontal - 1.0).abs() < f32::EPSILON
+                    )
+                })
+        );
+        assert_eq!(session.game().run_mode, RunMode::Playing);
+        assert_eq!(
+            session.game().modal,
+            Some(crate::game_state::ModalScreen::Map)
+        );
     }
 
     #[test]
