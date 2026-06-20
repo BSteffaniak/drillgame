@@ -4984,7 +4984,10 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::SalvagePatchHull
             | crate::game_state::SessionServiceRequest::Finance
             | crate::game_state::SessionServiceRequest::BuyInsurance
-            | crate::game_state::SessionServiceRequest::CraftRecipe { .. } => None,
+            | crate::game_state::SessionServiceRequest::CraftRecipe { .. }
+            | crate::game_state::SessionServiceRequest::UpgradeTownBuilding { .. }
+            | crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo
+            | crate::game_state::SessionServiceRequest::SalvageLaunchDrone => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5010,7 +5013,10 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::SalvagePatchHull
                 | crate::game_state::SessionServiceRequest::Finance
                 | crate::game_state::SessionServiceRequest::BuyInsurance
-                | crate::game_state::SessionServiceRequest::CraftRecipe { .. } => {}
+                | crate::game_state::SessionServiceRequest::CraftRecipe { .. }
+                | crate::game_state::SessionServiceRequest::UpgradeTownBuilding { .. }
+                | crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo
+                | crate::game_state::SessionServiceRequest::SalvageLaunchDrone => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5100,6 +5106,26 @@ impl GameSession {
                     self.game.sound_cues.push(SoundCue::Upgrade);
                     format!("Crafted {}: {}.", recipe.name(), recipe.description())
                 }
+                crate::game_state::SessionServiceRequest::UpgradeTownBuilding { building } => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    format!(
+                        "{} upgraded to level {}. Deep Claim reputation increased.",
+                        building.name(),
+                        self.game.town_development.level(building)
+                    )
+                }
+                crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    format!(
+                        "Mara recovered {} lost cargo marker(s).",
+                        self.game.lost_cargo_count
+                    )
+                }
+                crate::game_state::SessionServiceRequest::SalvageLaunchDrone => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    "Salvage drone deployed to the rescue beacon and recovered marked cargo."
+                        .to_owned()
+                }
             };
         } else {
             "Service unavailable for current player.".clone_into(&mut self.game.message);
@@ -5108,6 +5134,7 @@ impl GameSession {
     }
 
     #[allow(
+        clippy::cast_possible_truncation,
         clippy::too_many_lines,
         reason = "direct session-owned service mutations are replacing removed GameState gameplay mutations"
     )]
@@ -5225,6 +5252,95 @@ impl GameSession {
                         player.ore_processor_kits = player.ore_processor_kits.saturating_add(1);
                     }
                 }
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::UpgradeTownBuilding { building } => {
+                let cost = self.game.town_development.upgrade_cost(building);
+                let material_gate = self.game.town_development.level(building) >= 1;
+                if material_gate
+                    && player
+                        .materials
+                        .get(&crate::terrain::StrategicResourceKind::AncientAlloy)
+                        .copied()
+                        .unwrap_or(0)
+                        == 0
+                {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                if player.credits < cost {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                player.credits -= cost;
+                if material_gate {
+                    if let Some(count) = player
+                        .materials
+                        .get_mut(&crate::terrain::StrategicResourceKind::AncientAlloy)
+                    {
+                        *count = count.saturating_sub(1);
+                    }
+                    player.materials.retain(|_, count| *count > 0);
+                }
+                *self.game.town_development.level_mut(building) += 1;
+                self.game.town_development.reputation =
+                    self.game.town_development.reputation.saturating_add(1);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvageRecoverLostCargo => {
+                let recovered = self.game.lost_cargo_count;
+                if recovered == 0 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let discount = u32::from(self.game.town_development.salvage_yard_level) * 3;
+                let fee = (recovered * 12)
+                    .saturating_sub(recovered * discount)
+                    .min(player.credits);
+                player.credits -= fee;
+                for (mineral, count) in std::mem::take(&mut self.game.lost_minerals) {
+                    *player.cargo.entry(mineral).or_default() += count;
+                }
+                for (artifact, count) in std::mem::take(&mut self.game.lost_artifacts) {
+                    *player.artifacts.entry(artifact).or_default() += count;
+                }
+                self.game.lost_cargo_count = 0;
+                self.game.lost_cargo_x = None;
+                self.game.lost_cargo_y = None;
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SalvageLaunchDrone => {
+                if self.game.town_development.salvage_yard_level < 2
+                    || self.game.lost_cargo_count == 0
+                {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let Some(x) = self.game.lost_cargo_x else {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                };
+                let y = self.game.lost_cargo_y.unwrap_or(10.0 * TILE_SIZE);
+                self.game
+                    .infrastructure
+                    .push(crate::game_state::PlacedInfrastructure {
+                        kind: crate::game_state::InfrastructureKind::SurveyDrone,
+                        position: TilePosition {
+                            x: (x / TILE_SIZE).floor() as i32,
+                            y: (y / TILE_SIZE).floor() as i32,
+                        },
+                        durability: crate::game_state::default_infrastructure_durability(),
+                    });
+                let recovered = self.game.lost_cargo_count;
+                let discount = u32::from(self.game.town_development.salvage_yard_level) * 3;
+                let fee = (recovered * 12)
+                    .saturating_sub(recovered * discount)
+                    .min(player.credits);
+                player.credits -= fee;
+                for (mineral, count) in std::mem::take(&mut self.game.lost_minerals) {
+                    *player.cargo.entry(mineral).or_default() += count;
+                }
+                for (artifact, count) in std::mem::take(&mut self.game.lost_artifacts) {
+                    *player.artifacts.entry(artifact).or_default() += count;
+                }
+                self.game.lost_cargo_count = 0;
+                self.game.lost_cargo_x = None;
+                self.game.lost_cargo_y = None;
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }
@@ -11072,6 +11188,60 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_town_development_and_salvage_recovery_mutate_authoritative_state() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = Some(crate::game_state::ModalScreen::TownDevelopment);
+        session.game.selected_menu_item = 0;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 10_000;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().town_development.depot_level, 1);
+        assert!(session.game().player.credits < 10_000);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Salvage);
+        session.game.selected_menu_item = 0;
+        session.game.lost_cargo_count = 1;
+        session
+            .game
+            .lost_minerals
+            .insert(crate::terrain::MineralKind::Copper, 1);
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().lost_cargo_count, 0);
+        assert_eq!(session.game().player.cargo_used(), 1);
+        assert_eq!(
+            session
+                .world()
+                .player(LOCAL_PLAYER_ID)
+                .expect("local player exists")
+                .cargo_used(),
+            1
+        );
     }
 
     #[test]

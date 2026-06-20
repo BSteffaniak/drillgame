@@ -1962,6 +1962,9 @@ pub enum SessionServiceRequest {
     Finance,
     BuyInsurance,
     CraftRecipe { recipe: RecipeKind },
+    UpgradeTownBuilding { building: TownBuilding },
+    SalvageRecoverLostCargo,
+    SalvageLaunchDrone,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -5279,7 +5282,7 @@ pub struct PlacedInfrastructure {
     pub durability: u8,
 }
 
-const fn default_infrastructure_durability() -> u8 {
+pub const fn default_infrastructure_durability() -> u8 {
     100
 }
 
@@ -9436,47 +9439,12 @@ impl GameState {
 
     fn confirm_town_development(&mut self) {
         let building = TownBuilding::ALL[self.selected_menu_item.min(TownBuilding::ALL.len() - 1)];
-        let cost = self.town_development.upgrade_cost(building);
-        let material_gate = self.town_development.level(building) >= 1;
-        if material_gate
-            && self
-                .player
-                .materials
-                .get(&StrategicResourceKind::AncientAlloy)
-                .copied()
-                .unwrap_or(0)
-                == 0
-        {
-            self.message = format!(
-                "{} level {} upgrade also needs 1 Ancient Alloy from Deep Claim ore.",
-                building.name(),
-                self.town_development.level(building) + 1
-            );
-            return;
-        }
-        if self.player.credits < cost {
-            self.message = format!("{} upgrade costs {cost} credits.", building.name());
-            return;
-        }
-        self.player.credits -= cost;
-        if material_gate {
-            if let Some(count) = self
-                .player
-                .materials
-                .get_mut(&StrategicResourceKind::AncientAlloy)
-            {
-                *count = count.saturating_sub(1);
-            }
-            self.player.materials.retain(|_, count| *count > 0);
-        }
-        *self.town_development.level_mut(building) += 1;
-        self.town_development.reputation = self.town_development.reputation.saturating_add(1);
+        self.session_service_request =
+            Some(SessionServiceRequest::UpgradeTownBuilding { building });
         self.message = format!(
-            "{} upgraded to level {}. Deep Claim reputation increased.",
-            building.name(),
-            self.town_development.level(building)
+            "{} upgrade queued for authoritative session.",
+            building.name()
         );
-        self.sound_cues.push(SoundCue::Upgrade);
     }
 
     fn refresh_expedition_offers(&mut self) {
@@ -9658,9 +9626,9 @@ impl GameState {
 
     fn confirm_salvage_menu(&mut self) {
         match self.selected_menu_item {
-            0 => self.salvage_recover_lost_cargo(),
+            0 => self.queue_salvage_recover_lost_cargo(),
             1 => self.queue_salvage_patch_hull(),
-            2 => self.salvage_launch_drone(),
+            2 => self.queue_salvage_launch_drone(),
             3 => self.salvage_recover_wrecked_part(),
             4 => self.salvage_clear_collapse_zone(),
             _ => self.salvage_sell_scrap_tip(),
@@ -9686,6 +9654,16 @@ impl GameState {
     fn queue_salvage_patch_hull(&mut self) {
         self.session_service_request = Some(SessionServiceRequest::SalvagePatchHull);
         "Salvage patch queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_recover_lost_cargo(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvageRecoverLostCargo);
+        "Lost cargo recovery queued for authoritative session.".clone_into(&mut self.message);
+    }
+
+    fn queue_salvage_launch_drone(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SalvageLaunchDrone);
+        "Salvage drone queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn queue_finance(&mut self) {
@@ -9752,53 +9730,6 @@ impl GameState {
                     .then_some(self.town_event_day + 2),
             });
         }
-    }
-
-    fn salvage_recover_lost_cargo(&mut self) {
-        let recovered = self.lost_cargo_count;
-        if recovered == 0 {
-            "No lost cargo beacon is active.".clone_into(&mut self.message);
-            return;
-        }
-        let discount = u32::from(self.town_development.salvage_yard_level) * 3;
-        let fee = (recovered * 12)
-            .saturating_sub(recovered * discount)
-            .min(self.player.credits);
-        self.player.credits -= fee;
-        for (mineral, count) in std::mem::take(&mut self.lost_minerals) {
-            *self.player.cargo.entry(mineral).or_default() += count;
-        }
-        for (artifact, count) in std::mem::take(&mut self.lost_artifacts) {
-            *self.player.artifacts.entry(artifact).or_default() += count;
-        }
-        self.lost_cargo_count = 0;
-        self.lost_cargo_x = None;
-        self.lost_cargo_y = None;
-        self.message = format!("Mara recovered {recovered} lost cargo markers for {fee} credits.");
-        self.sound_cues.push(SoundCue::Upgrade);
-    }
-
-    fn salvage_launch_drone(&mut self) {
-        if self.town_development.salvage_yard_level < 2 {
-            "Salvage drones unlock at Salvage Yard level 2.".clone_into(&mut self.message);
-            return;
-        }
-        let Some(x) = self.lost_cargo_x else {
-            "No rescue beacon for a salvage drone to follow.".clone_into(&mut self.message);
-            return;
-        };
-        let y = self.lost_cargo_y.unwrap_or(10.0 * TILE_SIZE);
-        self.infrastructure.push(PlacedInfrastructure {
-            kind: InfrastructureKind::SurveyDrone,
-            position: TilePosition {
-                x: (x / TILE_SIZE).floor() as i32,
-                y: (y / TILE_SIZE).floor() as i32,
-            },
-            durability: default_infrastructure_durability(),
-        });
-        self.salvage_recover_lost_cargo();
-        "Salvage drone deployed to the rescue beacon and recovered marked cargo."
-            .clone_into(&mut self.message);
     }
 
     fn salvage_recover_wrecked_part(&mut self) {
@@ -16892,6 +16823,56 @@ mod tests {
             Some(TileKind::Air)
         ));
         assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn town_development_and_salvage_recovery_queue_authoritative_session_services() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = Some(ModalScreen::TownDevelopment);
+        game.selected_menu_item = 0;
+        game.player.credits = 10_000;
+        let credits_before = game.player.credits;
+        let depot_before = game.town_development.depot_level;
+
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::UpgradeTownBuilding {
+                building: TownBuilding::Depot
+            })
+        );
+        assert_eq!(game.player.credits, credits_before);
+        assert_eq!(game.town_development.depot_level, depot_before);
+
+        game.modal = Some(ModalScreen::Salvage);
+        game.selected_menu_item = 0;
+        game.lost_cargo_count = 1;
+        game.lost_minerals.insert(MineralKind::Copper, 1);
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SalvageRecoverLostCargo)
+        );
+        assert_eq!(game.lost_cargo_count, 1);
+        assert_eq!(game.player.cargo_used(), 0);
+
+        game.modal = Some(ModalScreen::Salvage);
+        game.selected_menu_item = 2;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SalvageLaunchDrone)
+        );
     }
 
     #[test]
