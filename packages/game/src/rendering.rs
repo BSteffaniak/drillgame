@@ -6,7 +6,7 @@
     reason = "rendering APIs use integer pixels while camera math uses floats"
 )]
 
-use std::{cell::RefCell, path::Path};
+use std::cell::RefCell;
 
 use raylib::{ffi, prelude::*};
 
@@ -55,9 +55,27 @@ struct UiFontAssets {
 impl UiFontAssets {
     fn load(raylib: &mut RaylibHandle, thread: &RaylibThread) -> Self {
         Self {
-            title: load_ui_font(raylib, thread, "assets/ui/title.ttf"),
-            heading: load_ui_font(raylib, thread, "assets/ui/heading.ttf"),
-            small: load_ui_font(raylib, thread, "assets/ui/body.ttf"),
+            title: load_ui_font(
+                raylib,
+                thread,
+                "title",
+                include_bytes!("../../../assets/ui/title.ttf"),
+                34,
+            ),
+            heading: load_ui_font(
+                raylib,
+                thread,
+                "heading",
+                include_bytes!("../../../assets/ui/heading.ttf"),
+                20,
+            ),
+            small: load_ui_font(
+                raylib,
+                thread,
+                "body",
+                include_bytes!("../../../assets/ui/body.ttf"),
+                15,
+            ),
         }
     }
 
@@ -71,14 +89,17 @@ impl UiFontAssets {
     }
 }
 
-fn load_ui_font(raylib: &mut RaylibHandle, thread: &RaylibThread, path: &str) -> Option<Font> {
-    if !Path::new(path).exists() {
-        return None;
-    }
-    match raylib.load_font(thread, path) {
+fn load_ui_font(
+    raylib: &mut RaylibHandle,
+    thread: &RaylibThread,
+    name: &str,
+    data: &[u8],
+    font_size: i32,
+) -> Option<Font> {
+    match raylib.load_font_from_memory(thread, ".ttf", data, font_size, None) {
         Ok(font) => Some(font),
         Err(error) => {
-            eprintln!("Failed to load UI font {path}: {error}");
+            eprintln!("Failed to load embedded UI font {name}: {error}");
             None
         }
     }

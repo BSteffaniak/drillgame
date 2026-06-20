@@ -93,7 +93,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 x,
                 y,
                 width: card_width,
-                height: 42.0,
+                height: 64.0,
             };
             let mut children = vec![widgets::UiNode::Text(widgets::TextNode::colored(
                 &card.title,
@@ -144,7 +144,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         if let Some(stats) = details {
             let rect = Rectangle {
                 x: self.viewport.x + margin,
-                y: y + 48.0,
+                y: y + 70.0,
                 width: width.min(560.0),
                 height: 96.0,
             };
@@ -266,7 +266,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                     kind,
                     color,
                 } => {
-                    Self::draw_text(text, rect.x, rect.y, *kind, *color);
+                    Self::draw_text_wrapped(text, *rect, *kind, *color);
                 }
                 widgets::RenderCommand::Meter {
                     rect,
@@ -286,7 +286,8 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 } => {
                     self.draw_panel(*rect, PanelKind::Overlay);
                     if !text.is_empty() {
-                        Self::draw_text(text, rect.x + 8.0, rect.y + 6.0, TextKind::Small, *color);
+                        let text_rect = inset(*rect, Insets::symmetric(8.0, 5.0));
+                        Self::draw_text_wrapped(text, text_rect, TextKind::Small, *color);
                     }
                     if *focused {
                         self.draw.draw_rectangle_lines(
@@ -423,11 +424,20 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         );
     }
 
+    fn draw_text_wrapped(text: &str, rect: Rectangle, kind: TextKind, color: Color) {
+        let layout = layout_text(text, rect.width.max(0.0), kind);
+        for line in layout.lines {
+            Self::draw_text(&line.text, rect.x + line.x, rect.y + line.y, kind, color);
+        }
+    }
+
     fn draw_text(text: &str, x: f32, y: f32, kind: TextKind, color: Color) {
         let Ok(cstring) = CString::new(text) else {
             return;
         };
         let metrics = font_metrics(kind);
+        let x = x.round();
+        let y = y.round();
         let size = metrics.font_size;
         let spacing = metrics.spacing;
         unsafe {
@@ -435,7 +445,7 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
             ffi::DrawTextEx(
                 font,
                 cstring.as_ptr(),
-                Vector2::new(x + 1.0, y + 1.0),
+                Vector2::new(x + TEXT_SHADOW_OFFSET, y + TEXT_SHADOW_OFFSET),
                 size,
                 spacing,
                 Color::new(0, 0, 0, 180),
@@ -631,7 +641,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
                             .trim_end()
                             .to_owned(),
                         width,
-                        26.0,
+                        30.0,
                         focused,
                         stat.color,
                     )));
@@ -679,8 +689,10 @@ fn ratio(value: f32, max: f32) -> f32 {
     }
 }
 
+const TEXT_SHADOW_OFFSET: f32 = 1.0;
+
 fn wrapped_height(text: &str, width: f32, kind: TextKind) -> f32 {
-    layout_text(text, width, kind).size.height + 4.0
+    layout_text(text, width, kind).size.height
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -705,7 +717,7 @@ fn layout_text(text: &str, width: f32, kind: TextKind) -> TextLayout {
         .enumerate()
         .map(|(index, text)| {
             let y = index as f32 * metrics.line_height;
-            let measured_width = measure_text(&text, kind).min(width.max(0.0));
+            let measured_width = measure_text(&text, kind) + TEXT_SHADOW_OFFSET;
             TextLineLayout {
                 text,
                 x: 0.0,
@@ -715,7 +727,13 @@ fn layout_text(text: &str, width: f32, kind: TextKind) -> TextLayout {
             }
         })
         .collect::<Vec<_>>();
-    let height = lines.len() as f32 * metrics.line_height;
+    let height = if lines.is_empty() {
+        0.0
+    } else {
+        (lines.len().saturating_sub(1) as f32 * metrics.line_height)
+            + measure_text_height(kind)
+            + TEXT_SHADOW_OFFSET
+    };
     let measured_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
     TextLayout {
         lines,
@@ -727,7 +745,9 @@ fn layout_text(text: &str, width: f32, kind: TextKind) -> TextLayout {
 }
 
 fn wrap_text(text: &str, width: f32, kind: TextKind) -> Vec<String> {
-    wrap_text_with_measure(text, width, |candidate| measure_text(candidate, kind))
+    wrap_text_with_measure(text, (width - TEXT_SHADOW_OFFSET).max(0.0), |candidate| {
+        measure_text(candidate, kind)
+    })
 }
 
 fn measure_text(text: &str, kind: TextKind) -> f32 {
@@ -746,17 +766,32 @@ fn measure_text(text: &str, kind: TextKind) -> f32 {
 }
 
 fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
+    measure_text_size(text, kind).width
+}
+
+fn measure_text_height(kind: TextKind) -> f32 {
+    measure_text_size("Mg", kind).height
+}
+
+fn measure_text_size(text: &str, kind: TextKind) -> Size {
     let Ok(cstring) = CString::new(text) else {
-        return text.chars().count() as f32 * font_metrics(kind).font_size * 0.5;
+        let metrics = font_metrics(kind);
+        return Size {
+            width: text.chars().count() as f32 * metrics.font_size * 0.5,
+            height: metrics.font_size,
+        };
     };
     unsafe {
-        ffi::MeasureTextEx(
+        let measured = ffi::MeasureTextEx(
             font_for_role(font_role(kind)),
             cstring.as_ptr(),
             font_metrics(kind).font_size,
             font_metrics(kind).spacing,
-        )
-        .x
+        );
+        Size {
+            width: measured.x,
+            height: measured.y,
+        }
     }
 }
 
@@ -1607,22 +1642,22 @@ struct FontMetrics {
 const fn font_metrics(kind: TextKind) -> FontMetrics {
     match kind {
         TextKind::Title => FontMetrics {
-            font_size: 30.0,
-            line_height: 36.0,
-            baseline: 28.0,
+            font_size: 34.0,
+            line_height: 40.0,
+            baseline: 31.0,
             spacing: 1.0,
         },
         TextKind::Heading => FontMetrics {
-            font_size: 18.0,
-            line_height: 22.0,
-            baseline: 17.0,
+            font_size: 20.0,
+            line_height: 25.0,
+            baseline: 19.0,
             spacing: 1.0,
         },
         TextKind::Small => FontMetrics {
-            font_size: 13.0,
-            line_height: 16.0,
-            baseline: 12.0,
-            spacing: 1.0,
+            font_size: 15.0,
+            line_height: 19.0,
+            baseline: 14.0,
+            spacing: 0.5,
         },
     }
 }
@@ -1857,7 +1892,7 @@ mod tests {
             layout.lines[0].baseline_y,
             font_metrics(TextKind::Small).baseline,
         );
-        assert!(layout.size.height >= font_metrics(TextKind::Small).line_height);
+        assert!(layout.size.height >= measure_text_height(TextKind::Small) + TEXT_SHADOW_OFFSET);
     }
 
     #[test]
