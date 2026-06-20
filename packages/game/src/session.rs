@@ -11690,6 +11690,47 @@ mod tests {
             .expect("local player exists");
         assert_eq!(player.credits, 509);
         assert_eq!(player.cargo_used(), 0);
+
+        let mut story_contract_session = GameSession::new();
+        story_contract_session.game.run_mode = RunMode::Playing;
+        story_contract_session.game.modal = Some(crate::game_state::ModalScreen::Depot);
+        story_contract_session.game.selected_menu_item = 0;
+        {
+            let player = story_contract_session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 3;
+            *player
+                .cargo
+                .entry(crate::terrain::MineralKind::Copper)
+                .or_default() = 4;
+        }
+        story_contract_session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = story_contract_session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(story_contract_session.game().contracts.completed, 1);
+        assert_eq!(story_contract_session.game().player.credits, 93);
+        assert_eq!(story_contract_session.game().player.cargo_used(), 0);
+        assert!(
+            story_contract_session
+                .game()
+                .message
+                .contains("Starter Stockpile")
+        );
+        let player = story_contract_session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert_eq!(player.credits, 93);
+        assert_eq!(player.cargo_used(), 0);
     }
 
     #[test]
