@@ -295,6 +295,65 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "render-plan execution is available for upcoming live widget tree migration"
+    )]
+    fn render_plan(&mut self, plan: &widgets::RenderPlan) {
+        for command in plan.commands() {
+            match command {
+                widgets::RenderCommand::Panel { rect } => {
+                    self.draw_panel(*rect, PanelKind::Overlay);
+                }
+                widgets::RenderCommand::Text { rect, text, kind } => {
+                    Self::draw_text(text, rect.x, rect.y, *kind, Color::RAYWHITE);
+                }
+                widgets::RenderCommand::Meter { rect, ratio } => {
+                    self.draw_bar(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        *ratio,
+                        Color::SKYBLUE,
+                    );
+                }
+                widgets::RenderCommand::Button { rect, focused } => {
+                    self.draw_panel(*rect, PanelKind::Overlay);
+                    if *focused {
+                        self.draw.draw_rectangle_lines(
+                            rect.x as i32,
+                            rect.y as i32,
+                            rect.width as i32,
+                            rect.height as i32,
+                            Color::GOLD,
+                        );
+                    }
+                }
+                widgets::RenderCommand::Canvas { rect } => {
+                    self.draw.draw_rectangle_lines(
+                        rect.x as i32,
+                        rect.y as i32,
+                        rect.width as i32,
+                        rect.height as i32,
+                        Color::new(190, 205, 220, 230),
+                    );
+                }
+                widgets::RenderCommand::Clip { rect } => unsafe {
+                    ffi::BeginScissorMode(
+                        rect.x as i32,
+                        rect.y as i32,
+                        rect.width as i32,
+                        rect.height as i32,
+                    );
+                },
+                widgets::RenderCommand::EndClip => unsafe {
+                    ffi::EndScissorMode();
+                },
+            }
+        }
+    }
+
     fn draw_modal_content(&mut self, rect: Rectangle, content: &ModalContent) {
         unsafe {
             ffi::BeginScissorMode(
@@ -760,7 +819,7 @@ const fn font_role(kind: TextKind) -> FontRole {
     reason = "formal widget tree foundation is being introduced before screen call sites are migrated to it"
 )]
 mod widgets {
-    use super::{Insets, Size, inset};
+    use super::{Insets, Size, TextKind, inset};
     use raylib::prelude::Rectangle;
     use std::collections::BTreeMap;
 
@@ -831,14 +890,30 @@ mod widgets {
         }
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     pub(super) enum RenderCommand {
-        Panel { rect: Rectangle },
-        Text { rect: Rectangle },
-        Meter { rect: Rectangle, ratio: f32 },
-        Button { rect: Rectangle, focused: bool },
-        Canvas { rect: Rectangle },
-        Clip { rect: Rectangle },
+        Panel {
+            rect: Rectangle,
+        },
+        Text {
+            rect: Rectangle,
+            text: String,
+            kind: TextKind,
+        },
+        Meter {
+            rect: Rectangle,
+            ratio: f32,
+        },
+        Button {
+            rect: Rectangle,
+            focused: bool,
+        },
+        Canvas {
+            rect: Rectangle,
+        },
+        Clip {
+            rect: Rectangle,
+        },
         EndClip,
     }
 
@@ -927,7 +1002,11 @@ mod widgets {
 
         fn collect_render_commands(&self, plan: &mut RenderPlan) {
             match self {
-                Self::Text(node) => plan.push(RenderCommand::Text { rect: node.rect }),
+                Self::Text(node) => plan.push(RenderCommand::Text {
+                    rect: node.rect,
+                    text: node.text.clone(),
+                    kind: node.kind,
+                }),
                 Self::Meter(node) => plan.push(RenderCommand::Meter {
                     rect: node.rect,
                     ratio: node.ratio,
@@ -970,14 +1049,30 @@ mod widgets {
 
     #[derive(Clone, Debug)]
     pub(super) struct TextNode {
+        pub(super) text: String,
+        pub(super) kind: TextKind,
         pub(super) width: f32,
         pub(super) height: f32,
         pub(super) rect: Rectangle,
     }
 
     impl TextNode {
+        pub(super) fn label(text: impl Into<String>, kind: TextKind, width: f32) -> Self {
+            let text = text.into();
+            let height = super::wrapped_height(&text, width, kind);
+            Self {
+                text,
+                kind,
+                width,
+                height,
+                rect: zero_rect(),
+            }
+        }
+
         pub(super) const fn sized(width: f32, height: f32) -> Self {
             Self {
+                text: String::new(),
+                kind: TextKind::Small,
                 width,
                 height,
                 rect: zero_rect(),
