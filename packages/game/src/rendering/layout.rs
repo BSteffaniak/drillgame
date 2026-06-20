@@ -667,6 +667,39 @@ fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
 mod widgets {
     use super::{Insets, Size, inset};
     use raylib::prelude::Rectangle;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub(super) struct WidgetId(pub(super) &'static str);
+
+    #[derive(Clone, Debug, Default)]
+    pub(super) struct UiState {
+        focused: Option<WidgetId>,
+        scroll_offsets: BTreeMap<WidgetId, f32>,
+    }
+
+    impl UiState {
+        pub(super) const fn focused(&self) -> Option<WidgetId> {
+            self.focused
+        }
+
+        pub(super) const fn set_focused(&mut self, id: WidgetId) {
+            self.focused = Some(id);
+        }
+
+        pub(super) fn scroll_offset(&self, id: WidgetId) -> f32 {
+            self.scroll_offsets.get(&id).copied().unwrap_or(0.0)
+        }
+
+        pub(super) fn set_scroll_offset(&mut self, id: WidgetId, offset: f32) {
+            self.scroll_offsets.insert(id, offset.max(0.0));
+        }
+
+        pub(super) fn scroll_by(&mut self, id: WidgetId, delta: f32, max_offset: f32) {
+            let next = (self.scroll_offset(id) + delta).clamp(0.0, max_offset.max(0.0));
+            self.scroll_offsets.insert(id, next);
+        }
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub(super) struct LayoutConstraints {
@@ -700,6 +733,29 @@ mod widgets {
                 width: size.width.clamp(self.min_width, self.max_width),
                 height: size.height.clamp(self.min_height, self.max_height),
             }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) enum RenderCommand {
+        Panel { rect: Rectangle },
+        Text { rect: Rectangle },
+        Clip { rect: Rectangle },
+        EndClip,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub(super) struct RenderPlan {
+        commands: Vec<RenderCommand>,
+    }
+
+    impl RenderPlan {
+        pub(super) fn commands(&self) -> &[RenderCommand] {
+            &self.commands
+        }
+
+        fn push(&mut self, command: RenderCommand) {
+            self.commands.push(command);
         }
     }
 
@@ -746,6 +802,33 @@ mod widgets {
                 Self::Stack(node) => node.rect,
                 Self::Panel(node) => node.rect,
                 Self::Scroll(node) => node.rect,
+            }
+        }
+
+        pub(super) fn render_plan(&self) -> RenderPlan {
+            let mut plan = RenderPlan::default();
+            self.collect_render_commands(&mut plan);
+            plan
+        }
+
+        fn collect_render_commands(&self, plan: &mut RenderPlan) {
+            match self {
+                Self::Text(node) => plan.push(RenderCommand::Text { rect: node.rect }),
+                Self::Spacer(_) => {}
+                Self::Stack(node) => {
+                    for child in &node.children {
+                        child.collect_render_commands(plan);
+                    }
+                }
+                Self::Panel(node) => {
+                    plan.push(RenderCommand::Panel { rect: node.rect });
+                    node.child.collect_render_commands(plan);
+                }
+                Self::Scroll(node) => {
+                    plan.push(RenderCommand::Clip { rect: node.rect });
+                    node.child.collect_render_commands(plan);
+                    plan.push(RenderCommand::EndClip);
+                }
             }
         }
 
@@ -1174,5 +1257,44 @@ mod tests {
             node.measure(LayoutConstraints::loose(50.0, 80.0)).height,
             80.0,
         );
+    }
+
+    #[test]
+    fn ui_state_tracks_focus_and_scroll_offsets() {
+        use widgets::{UiState, WidgetId};
+        let inventory = WidgetId("inventory");
+        let depot = WidgetId("depot");
+        let mut state = UiState::default();
+        assert_eq!(state.focused(), None);
+        state.set_focused(inventory);
+        assert_eq!(state.focused(), Some(inventory));
+        state.set_scroll_offset(inventory, 12.0);
+        state.scroll_by(inventory, 10.0, 18.0);
+        state.scroll_by(depot, -10.0, 100.0);
+        assert_near(state.scroll_offset(inventory), 18.0);
+        assert_near(state.scroll_offset(depot), 0.0);
+    }
+
+    #[test]
+    fn widget_render_plan_preserves_panel_clip_and_text_order() {
+        use widgets::{PanelNode, RenderCommand, ScrollNode, TextNode, UiNode};
+        let mut node = UiNode::Panel(PanelNode::new(
+            Insets::all(4.0),
+            UiNode::Scroll(ScrollNode::vertical(
+                0.0,
+                UiNode::Text(TextNode::sized(20.0, 10.0)),
+            )),
+        ));
+        node.layout(Rectangle {
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 20.0,
+        });
+        let plan = node.render_plan();
+        assert!(matches!(plan.commands()[0], RenderCommand::Panel { .. }));
+        assert!(matches!(plan.commands()[1], RenderCommand::Clip { .. }));
+        assert!(matches!(plan.commands()[2], RenderCommand::Text { .. }));
+        assert!(matches!(plan.commands()[3], RenderCommand::EndClip));
     }
 }
