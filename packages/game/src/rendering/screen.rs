@@ -783,8 +783,7 @@ pub(super) fn draw_modal(
     modal: ModalScreen,
     hud: Option<PerPlayerHudSnapshot>,
 ) {
-    if modal == ModalScreen::Depot {
-        draw_modal_depot_ui(draw, game);
+    if draw_modal_ui(draw, game, modal, hud) {
         return;
     }
 
@@ -880,6 +879,239 @@ pub(super) fn draw_modal(
     }
 }
 
+fn draw_modal_ui(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    modal: ModalScreen,
+    hud: Option<PerPlayerHudSnapshot>,
+) -> bool {
+    match modal {
+        ModalScreen::Depot => draw_modal_depot_ui(draw, game),
+        ModalScreen::Fuel => draw_service_modal_ui(draw, game, hud, "Fuel Station", "fuel"),
+        ModalScreen::Repair => draw_service_modal_ui(draw, game, hud, "Repair Garage", "hull"),
+        ModalScreen::FuelConfirm => draw_confirm_modal_ui(
+            draw,
+            "Confirm Fuel Purchase",
+            "Enter/E confirms the selected refuel amount. Esc cancels.",
+        ),
+        ModalScreen::RepairConfirm => draw_confirm_modal_ui(
+            draw,
+            "Confirm Repair",
+            "Enter/E confirms the selected hull repair. Esc cancels.",
+        ),
+        ModalScreen::ExitConfirm => draw_confirm_modal_ui(
+            draw,
+            "Exit to Desktop?",
+            "Enter/E exits. Esc returns to the game.",
+        ),
+        ModalScreen::UnsavedExitConfirm => draw_unsaved_exit_confirm_ui(draw, game),
+        ModalScreen::Shop => draw_shop_ui(draw, game),
+        ModalScreen::Options => draw_options_ui(draw, game),
+        ModalScreen::SaveSlots => draw_slots_ui(draw, game, true),
+        ModalScreen::LoadSlots => draw_slots_ui(draw, game, false),
+        ModalScreen::Bank => draw_generic_options_ui(
+            draw,
+            game,
+            "Bank",
+            "Manage deposits and debt. Esc closes.",
+            &["Deposit credits", "Withdraw credits", "Pay debt"],
+        ),
+        ModalScreen::Explosives => draw_generic_options_ui(
+            draw,
+            game,
+            "Explosives Shack",
+            "Purchase mining explosives and blast tools. Esc closes.",
+            &[
+                "Small bomb pack",
+                "Standard bomb pack",
+                "Heavy blast charge",
+                "Safety permit",
+            ],
+        ),
+        ModalScreen::Salvage => draw_generic_options_ui(
+            draw,
+            game,
+            "Salvage Yard",
+            "Buy and deploy field infrastructure. Esc closes.",
+            &[
+                "Signal relay kit",
+                "Survey drone kit",
+                "Cargo lift kit",
+                "Rock support kit",
+                "Pump kit",
+                "Processor kit",
+            ],
+        ),
+        ModalScreen::Headquarters => draw_generic_options_ui(
+            draw,
+            game,
+            "Headquarters",
+            "Contracts, story briefings, finance, and expedition planning.",
+            &[
+                "Complete depot work",
+                "Read briefing",
+                "Request finance",
+                "Open expedition board",
+                "Research log",
+                "Town development",
+                "Deep claim status",
+            ],
+        ),
+        ModalScreen::Crafting => draw_generic_options_ui(
+            draw,
+            game,
+            "Crafting Bench",
+            "Turn recovered materials into support equipment.",
+            &[
+                "Relay parts",
+                "Drone parts",
+                "Lift frame",
+                "Support brace",
+                "Pump assembly",
+                "Processor assembly",
+            ],
+        ),
+        _ => return false,
+    }
+    true
+}
+
+fn draw_service_modal_ui(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    hud: Option<PerPlayerHudSnapshot>,
+    title: &str,
+    service: &str,
+) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(680, 420));
+    panel.title(title);
+    panel.muted("Up/Down: small/half/full | Enter/E buy selected | Esc close");
+    panel.separator();
+    if service == "fuel" {
+        let fuel = hud.map_or(game.player.fuel, |hud| hud.fuel);
+        let capacity = hud.map_or(game.player.fuel_capacity, |hud| hud.fuel_capacity);
+        let credits = hud.map_or(game.player.credits, |hud| hud.credits);
+        let missing = (capacity - fuel).ceil().max(0.0) as u32;
+        panel.label(&format!(
+            "Tank: {fuel:.0}/{capacity:.0}. Fill cost: {missing} cr. Credits: {credits}."
+        ));
+    } else {
+        let hull = hud.map_or(game.player.hull, |hud| hud.hull);
+        let capacity = hud.map_or_else(|| game.player.max_hull(), |hud| hud.max_hull);
+        let credits = hud.map_or(game.player.credits, |hud| hud.credits);
+        panel.label(&format!(
+            "Hull: {hull:.0}/{capacity:.0}. Credits available: {credits}."
+        ));
+    }
+    for (index, option) in ["Small 25%", "Half 50%", "Full 100%"].iter().enumerate() {
+        panel.option(index == game.selected_menu_item, option, None);
+    }
+}
+
+fn draw_confirm_modal_ui(draw: &mut RaylibDrawHandle<'_>, title: &str, body: &str) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(600, 260));
+    panel.title(title);
+    panel.separator();
+    panel.label(body);
+}
+
+fn draw_unsaved_exit_confirm_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(620, 340));
+    panel.title("Unsaved Progress");
+    panel.muted("Choose what to do before leaving the game.");
+    panel.separator();
+    for (index, option) in ["Save and exit", "Exit without saving", "Cancel"]
+        .iter()
+        .enumerate()
+    {
+        panel.option(index == game.selected_menu_item, option, None);
+    }
+}
+
+fn draw_shop_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(820, 540));
+    panel.begin_clip();
+    panel.title("Upgrade Shop");
+    panel.muted("Up/Down select | Enter/E buy | Esc close");
+    panel.separator();
+    for (index, offer) in upgrade_offers(&game.player).iter().enumerate() {
+        panel.option(
+            index == game.selected_menu_item,
+            &format!("{} — {} cr", offer.name, offer.cost),
+            Some(&format!(
+                "Tier {} {}",
+                offer.level + 1,
+                upgrade_tier_name(offer.kind, offer.level)
+            )),
+        );
+    }
+}
+
+fn draw_options_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(640, 360));
+    panel.title("Options");
+    panel.muted("Up/Down select | Left/Right adjust | Esc close");
+    panel.separator();
+    let options = [
+        format!("Master volume: {:.0}%", game.master_volume * 100.0),
+        format!("Fullscreen: {}", if game.fullscreen { "on" } else { "off" }),
+        "Back".to_owned(),
+    ];
+    for (index, option) in options.iter().enumerate() {
+        panel.option(index == game.selected_menu_item, option, None);
+    }
+}
+
+fn draw_slots_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState, saving: bool) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(760, 480));
+    panel.begin_clip();
+    panel.title(if saving { "Save Game" } else { "Load Game" });
+    panel.muted("Up/Down select | Enter/E confirm | Esc close");
+    panel.separator();
+    for slot in 0..save_slot_count() {
+        let label = match save_slot_metadata(slot) {
+            Some(metadata) => format!(
+                "Slot {} — depth {}m, {} credits",
+                slot + 1,
+                metadata.depth,
+                metadata.credits
+            ),
+            None => format!("Slot {} — empty", slot + 1),
+        };
+        panel.option(slot == game.selected_menu_item, &label, None);
+    }
+}
+
+fn draw_generic_options_ui(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    title: &str,
+    help: &str,
+    options: &[&str],
+) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(740, 500));
+    panel.begin_clip();
+    panel.title(title);
+    panel.muted(help);
+    panel.separator();
+    for (index, option) in options.iter().enumerate() {
+        panel.option(index == game.selected_menu_item, option, None);
+    }
+}
 fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_text("Online Multiplayer", 330, 112, 30, Color::SKYBLUE);
     draw.draw_text(
