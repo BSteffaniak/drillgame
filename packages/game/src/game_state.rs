@@ -1970,6 +1970,7 @@ pub enum SessionServiceRequest {
     SalvageSellScrapTip,
     SellScanData,
     AutoSortLowGradeCargo,
+    CompleteDepotWork,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9406,7 +9407,7 @@ impl GameState {
 
     fn confirm_headquarters(&mut self) {
         match self.selected_menu_item {
-            0 => self.confirm_complete_contract(),
+            0 => self.queue_complete_depot_work(),
             1 => {
                 self.message = hq_story_message(self);
                 self.sound_cues.push(SoundCue::Milestone);
@@ -9846,11 +9847,7 @@ impl GameState {
 
     fn confirm_depot(&mut self) {
         match self.selected_menu_item {
-            0 => {
-                self.try_complete_expeditions();
-                self.try_complete_side_contract();
-                self.confirm_complete_contract();
-            }
+            0 => self.queue_complete_depot_work(),
             1 => self.queue_sell_cargo(),
             2 => self.queue_auto_sort_low_grade_cargo(),
             3 => self.queue_sell_scan_data(),
@@ -9858,41 +9855,14 @@ impl GameState {
         }
     }
 
+    fn queue_complete_depot_work(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::CompleteDepotWork);
+        "Depot work completion queued for authoritative session.".clone_into(&mut self.message);
+    }
+
     fn queue_sell_cargo(&mut self) {
         self.session_service_request = Some(SessionServiceRequest::SellCargo);
         "Cargo sale queued for authoritative session.".clone_into(&mut self.message);
-    }
-
-    fn confirm_complete_contract(&mut self) {
-        if let Some(completion) = self.contracts.try_complete(&mut self.player) {
-            self.sound_cues.push(SoundCue::Sell);
-            let escrow_bonus = completion.reward * u32::from(self.town_development.bank_level) / 20;
-            if escrow_bonus > 0 {
-                self.player.credits = self.player.credits.saturating_add(escrow_bonus);
-            }
-            self.total_earnings += completion.reward.saturating_add(escrow_bonus);
-            if completion.finished_story {
-                self.won_game = true;
-                self.deep_claim_status = DeepClaimStatus::Unlocked;
-                self.fastest_star_core_seconds = self
-                    .fastest_star_core_seconds
-                    .map_or(Some(self.play_seconds), |best| {
-                        Some(best.min(self.play_seconds))
-                    });
-                self.message = format!(
-                    "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits + {escrow_bonus} escrow.",
-                    completion.completed_title, completion.reward
-                );
-            } else {
-                let story = ContractLog::story_for_completed(self.contracts.completed);
-                self.message = format!(
-                    "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
-                    completion.completed_title, completion.reward
-                );
-            }
-        } else {
-            "Contract target not ready.".clone_into(&mut self.message);
-        }
     }
 
     fn queue_sell_scan_data(&mut self) {
@@ -11828,7 +11798,7 @@ const fn deep_claim_material_for(
     }
 }
 
-fn consume_expedition_delivery(expedition: Expedition, player: &mut Player) {
+pub fn consume_expedition_delivery(expedition: Expedition, player: &mut Player) {
     if expedition.kind != ExpeditionObjectiveKind::DeliverCargo {
         return;
     }
@@ -11849,7 +11819,7 @@ fn consume_expedition_delivery(expedition: Expedition, player: &mut Player) {
     }
 }
 
-fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
+pub fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
     match expedition.kind {
         ExpeditionObjectiveKind::ReachDepth => {
             game.deepest_tile_reached as u32 >= expedition.required
@@ -11892,7 +11862,7 @@ fn expedition_satisfied(expedition: Expedition, game: &GameState) -> bool {
     }
 }
 
-fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {
+pub fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {
     if contract
         .expires_day
         .is_some_and(|expires_day| game.town_event_day > expires_day)
@@ -11931,7 +11901,7 @@ fn side_contract_satisfied(contract: SideContract, game: &GameState) -> bool {
     }
 }
 
-fn consume_side_contract_cargo(contract: SideContract, player: &mut Player) {
+pub fn consume_side_contract_cargo(contract: SideContract, player: &mut Player) {
     match contract.target {
         TileKind::Ore(mineral) => {
             consume_side_count(&mut player.cargo, &mineral, contract.required);
@@ -16966,6 +16936,17 @@ mod tests {
     fn cargo_and_economy_regression_queues_loaded_ore_sale_for_authoritative_session() {
         let mut game = GameState::new();
         assert!(game.player.add_cargo(MineralKind::Copper));
+        game.modal = Some(ModalScreen::Depot);
+        game.selected_menu_item = 0;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::CompleteDepotWork)
+        );
+
         game.modal = Some(ModalScreen::Depot);
         game.selected_menu_item = 1;
 

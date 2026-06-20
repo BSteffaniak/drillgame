@@ -4992,7 +4992,8 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
             | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
             | crate::game_state::SessionServiceRequest::SellScanData
-            | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => None,
+            | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo
+            | crate::game_state::SessionServiceRequest::CompleteDepotWork => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5026,7 +5027,8 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
                 | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
                 | crate::game_state::SessionServiceRequest::SellScanData
-                | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {}
+                | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo
+                | crate::game_state::SessionServiceRequest::CompleteDepotWork => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5155,6 +5157,10 @@ impl GameSession {
                 crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {
                     self.game.sound_cues.push(SoundCue::Sell);
                     self.game.last_depot_receipt.clone()
+                }
+                crate::game_state::SessionServiceRequest::CompleteDepotWork => {
+                    self.game.sound_cues.push(SoundCue::Sell);
+                    self.game.message.clone()
                 }
             };
         } else {
@@ -5449,6 +5455,43 @@ impl GameSession {
                     .push(self.game.last_depot_receipt.clone());
                 if self.game.depot_receipts.len() > 5 {
                     self.game.depot_receipts.remove(0);
+                }
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::CompleteDepotWork => {
+                let before_completed = self.game.contracts.completed;
+                let Some(completion) = self.game.contracts.try_complete(player) else {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                };
+                let escrow_bonus =
+                    completion.reward * u32::from(self.game.town_development.bank_level) / 20;
+                if escrow_bonus > 0 {
+                    player.credits = player.credits.saturating_add(escrow_bonus);
+                }
+                self.game.total_earnings = self
+                    .game
+                    .total_earnings
+                    .saturating_add(completion.reward.saturating_add(escrow_bonus));
+                if completion.finished_story {
+                    self.game.won_game = true;
+                    self.game.deep_claim_status = crate::economy::DeepClaimStatus::Unlocked;
+                    self.game.fastest_star_core_seconds = self
+                        .game
+                        .fastest_star_core_seconds
+                        .map_or(Some(self.game.play_seconds), |best| {
+                            Some(best.min(self.game.play_seconds))
+                        });
+                    self.game.message = format!(
+                        "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits + {escrow_bonus} escrow.",
+                        completion.completed_title, completion.reward
+                    );
+                } else {
+                    let story =
+                        crate::contract::ContractLog::story_for_completed(before_completed + 1);
+                    self.game.message = format!(
+                        "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
+                        completion.completed_title, completion.reward
+                    );
                 }
                 PlayerScopedCommandOutcome::Applied
             }
