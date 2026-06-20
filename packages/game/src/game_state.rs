@@ -5254,6 +5254,23 @@ impl GameState {
         }
     }
 
+    pub fn apply_session_exploration<I>(&mut self, positions: I) -> usize
+    where
+        I: IntoIterator<Item = TilePosition>,
+    {
+        let mut revealed = 0;
+        for position in positions {
+            if let Some(index) = self.tile_index(position)
+                && !self.explored_tiles[index]
+            {
+                self.explored_tiles[index] = true;
+                self.mark_exploration_visual_changed(position);
+                revealed += 1;
+            }
+        }
+        revealed
+    }
+
     fn mark_tiles_visual_changed<I>(&mut self, positions: I)
     where
         I: IntoIterator<Item = TilePosition>,

@@ -2273,17 +2273,65 @@ impl WorldState {
         center: TilePosition,
         radius: i32,
     ) -> usize {
+        self.reveal_scanner_positions(player_id, center, radius)
+            .len()
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "world positions are converted to terrain tile coordinates"
+    )]
+    pub fn reveal_tiles_near_player(&mut self, player_id: PlayerId) -> Vec<TilePosition> {
+        let Some(player) = self.players.get(&player_id) else {
+            return Vec::new();
+        };
+        let center = TilePosition {
+            x: (player.x / TILE_SIZE).floor() as i32,
+            y: (player.y / TILE_SIZE).floor() as i32,
+        };
+        self.reveal_rectangular_area(player_id, center, 4, 3)
+    }
+
+    fn reveal_rectangular_area(
+        &mut self,
+        player_id: PlayerId,
+        center: TilePosition,
+        radius_x: i32,
+        radius_y: i32,
+    ) -> Vec<TilePosition> {
         let discovered = self.discovered_tiles.entry(player_id).or_default();
-        let before = discovered.len();
-        let radius = radius.max(0);
-        for y in center.y - radius..=center.y + radius {
-            for x in center.x - radius..=center.x + radius {
-                if (x - center.x).abs() + (y - center.y).abs() <= radius {
-                    discovered.insert(TilePosition { x, y });
+        let mut revealed = Vec::new();
+        for y in center.y - radius_y.max(0)..=center.y + radius_y.max(0) {
+            for x in center.x - radius_x.max(0)..=center.x + radius_x.max(0) {
+                let position = TilePosition { x, y };
+                if discovered.insert(position) {
+                    revealed.push(position);
                 }
             }
         }
-        discovered.len() - before
+        revealed
+    }
+
+    fn reveal_scanner_positions(
+        &mut self,
+        player_id: PlayerId,
+        center: TilePosition,
+        radius: i32,
+    ) -> Vec<TilePosition> {
+        let discovered = self.discovered_tiles.entry(player_id).or_default();
+        let radius = radius.max(0);
+        let mut revealed = Vec::new();
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if (x - center.x).abs() + (y - center.y).abs() <= radius {
+                    let position = TilePosition { x, y };
+                    if discovered.insert(position) {
+                        revealed.push(position);
+                    }
+                }
+            }
+        }
+        revealed
     }
 
     pub fn apply_hazard_damage(
@@ -4750,6 +4798,7 @@ impl GameSession {
             .command_network_session
             .set_current_tick(session.current_tick);
         session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        let _revealed = session.reveal_legacy_exploration_from_world_player(LOCAL_PLAYER_ID);
         session.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
         session.sync_legacy_terrain_from_world();
         session
@@ -4858,7 +4907,7 @@ impl GameSession {
 
     fn from_game_and_world(game: GameState, world: WorldState) -> Self {
         let local_client = ClientState::default();
-        Self {
+        let mut session = Self {
             game,
             world,
             clients: BTreeMap::from([(LOCAL_CLIENT_ID, local_client)]),
@@ -4873,7 +4922,9 @@ impl GameSession {
             latest_movement_intents: BTreeMap::new(),
             latest_local_authoritative_commands: Vec::new(),
             remote_timing: RemoteTimingTuning::from_latency_loss(0.0, 0.0),
-        }
+        };
+        let _revealed = session.reveal_legacy_exploration_from_world_player(LOCAL_PLAYER_ID);
+        session
     }
 
     #[must_use]
@@ -6297,6 +6348,7 @@ impl GameSession {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         let _advance = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        let _revealed = self.reveal_legacy_exploration_from_world_player(LOCAL_PLAYER_ID);
         self.sync_legacy_active_drill_from_world(LOCAL_PLAYER_ID);
         self.sync_legacy_terrain_from_world();
         let shell_update = self
@@ -6822,6 +6874,11 @@ impl GameSession {
     fn sync_legacy_active_drill_from_world(&mut self, player_id: PlayerId) {
         self.world
             .sync_active_drill_to_legacy_game(player_id, &mut self.game);
+    }
+
+    fn reveal_legacy_exploration_from_world_player(&mut self, player_id: PlayerId) -> usize {
+        let revealed = self.world.reveal_tiles_near_player(player_id);
+        self.game.apply_session_exploration(revealed)
     }
 
     fn sync_legacy_terrain_from_world(&mut self) {
