@@ -158,7 +158,7 @@ impl UiPanel<'_, '_> {
     }
 
     fn text(&mut self, text: &str, style: TextStyle, color: Color) {
-        self.draw_text_at(self.content.x, self.cursor_y, text, style, color);
+        Self::draw_text_at(self.content.x, self.cursor_y, text, style, color);
         self.cursor_y += line_height(style) as f32 + self.theme.gap as f32;
     }
 
@@ -170,22 +170,31 @@ impl UiPanel<'_, '_> {
         let x = self.content.x + indent as f32;
         let width = (self.content.width - indent as f32).max(16.0);
         for line in wrap_text(text, width, font_size(style)) {
-            self.draw_text_at(x, self.cursor_y, &line, style, color);
+            Self::draw_text_at(x, self.cursor_y, &line, style, color);
             self.cursor_y += line_height(style) as f32;
         }
         self.cursor_y += self.theme.gap as f32;
     }
 
-    fn draw_text_at(&mut self, x: f32, y: f32, text: &str, style: TextStyle, color: Color) {
-        let size = font_size(style);
-        self.draw.draw_text(
-            text,
-            x as i32 + 1,
-            y as i32 + 1,
-            size,
-            Color::new(0, 0, 0, 180),
-        );
-        self.draw.draw_text(text, x as i32, y as i32, size, color);
+    fn draw_text_at(x: f32, y: f32, text: &str, style: TextStyle, color: Color) {
+        let size = font_size(style) as f32;
+        let Ok(cstring) = CString::new(text) else {
+            return;
+        };
+        unsafe {
+            let font = ffi::GetFontDefault();
+            let shadow = Vector2::new(x + 1.0, y + 1.0);
+            let position = Vector2::new(x, y);
+            ffi::DrawTextEx(
+                font,
+                cstring.as_ptr(),
+                shadow,
+                size,
+                1.0,
+                Color::new(0, 0, 0, 180),
+            );
+            ffi::DrawTextEx(font, cstring.as_ptr(), position, size, 1.0, color);
+        }
     }
 }
 
@@ -228,7 +237,15 @@ fn measure_text_width(text: &str, font_size: i32) -> i32 {
             i32::try_from(text.chars().count()).unwrap_or_else(|_| i32::MAX / font_size.max(1));
         return count.saturating_mul(font_size) / 2;
     };
-    unsafe { ffi::MeasureText(cstring.as_ptr(), font_size) }
+    unsafe {
+        let size = ffi::MeasureTextEx(
+            ffi::GetFontDefault(),
+            cstring.as_ptr(),
+            font_size as f32,
+            1.0,
+        );
+        size.x.ceil() as i32
+    }
 }
 
 fn wrap_text(text: &str, max_width: f32, font_size: i32) -> Vec<String> {
