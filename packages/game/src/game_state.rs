@@ -1023,6 +1023,36 @@ impl OnlineLobbyPresentation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct OnlineTerrainSyncMarker {
+    pub position: TilePosition,
+    pub seconds_remaining: f32,
+}
+
+impl OnlineTerrainSyncMarker {
+    const LIFETIME_SECONDS: f32 = 1.75;
+
+    #[must_use]
+    pub const fn new(position: TilePosition) -> Self {
+        Self {
+            position,
+            seconds_remaining: Self::LIFETIME_SECONDS,
+        }
+    }
+
+    #[must_use]
+    pub fn intensity(&self) -> f32 {
+        (self.seconds_remaining / Self::LIFETIME_SECONDS).clamp(0.0, 1.0)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineTerrainSyncMarkerBatch {
+    pub markers_added: usize,
+    pub marker_count: usize,
+    pub latest_status: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineGameplayHudPresentation {
     pub visible: bool,
@@ -4811,6 +4841,8 @@ pub struct GameState {
     pub local_multiplayer_player_slots: u8,
     #[serde(default)]
     pub local_multiplayer_status_message: String,
+    #[serde(default)]
+    pub online_terrain_sync_markers: Vec<OnlineTerrainSyncMarker>,
     pub current_zone: Option<SurfaceZone>,
     #[serde(default)]
     pub interior_zone: Option<SurfaceZone>,
@@ -5076,6 +5108,7 @@ impl GameState {
             local_multiplayer_active: false,
             local_multiplayer_player_slots: 1,
             local_multiplayer_status_message: String::new(),
+            online_terrain_sync_markers: Vec::new(),
             current_zone: None,
             interior_zone: None,
             interior_x: 88.0,
@@ -5299,6 +5332,7 @@ impl GameState {
             self.sound_cues.push(SoundCue::Ui);
         }
         self.update_persistent_ore_prediction();
+        self.update_online_terrain_sync_markers(delta_seconds);
         self.drill_flash_seconds = (self.drill_flash_seconds - delta_seconds).max(0.0);
         if matches!(self.run_mode, RunMode::Playing | RunMode::Interior)
             && !self.game_over
@@ -5727,6 +5761,49 @@ impl GameState {
         self.refresh_online_live_verification_status();
         self.refresh_online_gameplay_domain_status();
         self.refresh_online_playable_session_status();
+    }
+
+    pub fn mark_online_terrain_sync_positions(
+        &mut self,
+        positions: impl IntoIterator<Item = TilePosition>,
+    ) -> OnlineTerrainSyncMarkerBatch {
+        const MAX_ONLINE_TERRAIN_MARKERS: usize = 48;
+        let mut markers_added = 0;
+        for position in positions {
+            if let Some(marker) = self
+                .online_terrain_sync_markers
+                .iter_mut()
+                .find(|marker| marker.position == position)
+            {
+                marker.seconds_remaining = OnlineTerrainSyncMarker::LIFETIME_SECONDS;
+                continue;
+            }
+            self.online_terrain_sync_markers
+                .push(OnlineTerrainSyncMarker::new(position));
+            markers_added += 1;
+        }
+        if self.online_terrain_sync_markers.len() > MAX_ONLINE_TERRAIN_MARKERS {
+            let excess = self.online_terrain_sync_markers.len() - MAX_ONLINE_TERRAIN_MARKERS;
+            self.online_terrain_sync_markers.drain(0..excess);
+        }
+        if markers_added > 0 {
+            self.apply_online_terrain_status(format!(
+                "{markers_added} replicated terrain tile(s) highlighted for remote mining visibility"
+            ));
+        }
+        OnlineTerrainSyncMarkerBatch {
+            markers_added,
+            marker_count: self.online_terrain_sync_markers.len(),
+            latest_status: self.online_last_terrain_status.clone(),
+        }
+    }
+
+    fn update_online_terrain_sync_markers(&mut self, delta_seconds: f32) {
+        for marker in &mut self.online_terrain_sync_markers {
+            marker.seconds_remaining = (marker.seconds_remaining - delta_seconds).max(0.0);
+        }
+        self.online_terrain_sync_markers
+            .retain(|marker| marker.seconds_remaining > 0.0);
     }
 
     pub fn apply_online_authority_correction_status(
@@ -6389,9 +6466,22 @@ impl GameState {
             format!("Player sync: {}", self.online_last_replicated_player_status)
         };
         let terrain_label = if self.online_last_terrain_status.is_empty() {
-            "Terrain sync: waiting for terrain chunk updates.".to_owned()
-        } else {
+            if self.online_terrain_sync_markers.is_empty() {
+                "Terrain sync: waiting for terrain chunk updates.".to_owned()
+            } else {
+                format!(
+                    "Terrain sync: {} replicated tile highlight(s) active.",
+                    self.online_terrain_sync_markers.len()
+                )
+            }
+        } else if self.online_terrain_sync_markers.is_empty() {
             format!("Terrain sync: {}", self.online_last_terrain_status)
+        } else {
+            format!(
+                "Terrain sync: {}; {} highlight(s) active",
+                self.online_last_terrain_status,
+                self.online_terrain_sync_markers.len()
+            )
         };
         let authority_label = if self.online_last_correction_status.is_empty() {
             "Authority: host simulation owns corrections.".to_owned()

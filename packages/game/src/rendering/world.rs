@@ -39,6 +39,7 @@ pub(super) fn draw_world(
     draw_surface_buildings(draw);
     terrain.draw(draw, camera);
     draw_infrastructure(draw, game);
+    draw_online_terrain_sync_markers(draw, game);
 
     if let Some(drill) = game.active_drill {
         let x = (drill.target.x as f32 * TILE_SIZE) as i32;
@@ -95,6 +96,30 @@ pub(super) fn draw_world(
         draw.draw_circle(x + 10, y + 11, 2.0, Color::new(255, 235, 150, 170));
         if progress > 0.45 {
             draw.draw_circle(x + 21, y + 18, 2.0, Color::new(255, 235, 150, 150));
+        }
+    }
+}
+
+fn draw_online_terrain_sync_markers(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+) {
+    for marker in &game.online_terrain_sync_markers {
+        let intensity = marker.intensity();
+        let center_x = (marker.position.x as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
+        let center_y = (marker.position.y as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
+        let radius = 7.0 + (1.0 - intensity) * 10.0;
+        let alpha = (70.0 + 150.0 * intensity) as u8;
+        draw.draw_rectangle_lines(
+            (marker.position.x as f32 * TILE_SIZE) as i32,
+            (marker.position.y as f32 * TILE_SIZE) as i32,
+            TILE_SIZE as i32,
+            TILE_SIZE as i32,
+            Color::new(85, 220, 255, alpha),
+        );
+        draw.draw_circle_lines(center_x, center_y, radius, Color::new(120, 240, 255, alpha));
+        if intensity > 0.55 {
+            draw.draw_text("SYNC", center_x - 14, center_y - 5, 10, Color::SKYBLUE);
         }
     }
 }

@@ -6011,6 +6011,9 @@ impl GameSession {
         }
         let visible_tiles = changed_tiles.len();
         self.game.terrain.clone_from(self.world.terrain());
+        let marker_batch = self
+            .game
+            .mark_online_terrain_sync_positions(changed_tiles.clone());
         self.game
             .visual_changes
             .changed_tiles
@@ -6023,7 +6026,8 @@ impl GameSession {
             self.push_event(WorldEvent::TerrainChunksChanged { revisions });
         }
         self.game.apply_online_terrain_status(format!(
-            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {visible_tiles} visible tiles"
+            "applied chunk ({chunk_x},{chunk_y}) rev {revision}: {visible_tiles} visible tiles; {} highlighted",
+            marker_batch.marker_count
         ));
         self.game
             .apply_online_sync_loop_status(crate::game_state::OnlineSyncLoopStatus::terrain(
