@@ -77,6 +77,16 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         Self { draw, viewport }
     }
 
+    pub(super) fn screen(draw: &'draw mut RaylibDrawHandle<'handle>) -> Self {
+        let viewport = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: draw.get_screen_width() as f32,
+            height: draw.get_screen_height() as f32,
+        };
+        Self { draw, viewport }
+    }
+
     pub(super) fn top_hud(&mut self, cards: &[HudCard], details: Option<&[StatItem]>) {
         let margin = 8.0;
         let gap = 6.0;

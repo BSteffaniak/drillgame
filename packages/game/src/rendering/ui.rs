@@ -10,6 +10,10 @@ pub(super) enum TextStyle {
     Small,
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy panel renderer remains only for map canvas until canvas nodes are introduced"
+)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct UiTheme {
     pub background: Color,
@@ -111,6 +115,10 @@ pub(super) struct UiPanel<'draw, 'handle> {
 }
 
 impl UiPanel<'_, '_> {
+    #[allow(
+        dead_code,
+        reason = "legacy map panel clipping retained during layout migration"
+    )]
     pub(super) fn begin_clip(&mut self) {
         if self.clip_active {
             return;
@@ -149,6 +157,10 @@ impl UiPanel<'_, '_> {
         self.wrapped_text(text, TextStyle::Small, self.theme.muted);
     }
 
+    #[allow(
+        dead_code,
+        reason = "legacy option drawing retained while old panel module is retired"
+    )]
     pub(super) fn option(&mut self, selected: bool, label: &str, detail: Option<&str>) {
         let color = if selected {
             self.theme.selected
