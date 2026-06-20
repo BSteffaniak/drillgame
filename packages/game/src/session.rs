@@ -5563,6 +5563,36 @@ impl GameSession {
                     return PlayerScopedCommandOutcome::Applied;
                 }
 
+                let mut snapshot = self.game.clone();
+                snapshot.player.clone_from(player);
+                if self.game.side_contract_active
+                    && let Some(target) = self.game.side_contract_target
+                {
+                    let contract = crate::game_state::SideContract {
+                        kind: self.game.side_contract_kind,
+                        target,
+                        required: self.game.side_contract_required,
+                        expires_day: None,
+                    };
+                    if crate::game_state::side_contract_satisfied(contract, &snapshot) {
+                        if matches!(
+                            contract.kind,
+                            crate::game_state::SideContractKind::Cargo
+                                | crate::game_state::SideContractKind::Rush
+                        ) {
+                            crate::game_state::consume_side_contract_cargo(contract, player);
+                        }
+                        let completed_reward = 420 + contract.required * 80;
+                        player.credits = player.credits.saturating_add(completed_reward);
+                        self.game.total_earnings =
+                            self.game.total_earnings.saturating_add(completed_reward);
+                        self.game.side_contract_active = false;
+                        self.game.message =
+                            format!("Side contract fulfilled: {completed_reward} credits bonus.");
+                        return PlayerScopedCommandOutcome::Applied;
+                    }
+                }
+
                 let before_completed = self.game.contracts.completed;
                 let Some(completion) = self.game.contracts.try_complete(player) else {
                     return PlayerScopedCommandOutcome::IgnoredUnavailable;
@@ -11515,6 +11545,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "single regression intentionally covers expedition, active side-contract, and legacy fallback side-contract completion ordering"
+    )]
     fn session_complete_depot_work_handles_expeditions_and_side_contracts_authoritatively() {
         let mut expedition_session = GameSession::new();
         expedition_session.game.run_mode = RunMode::Playing;
@@ -11614,6 +11648,47 @@ mod tests {
             .player(LOCAL_PLAYER_ID)
             .expect("local player exists");
         assert_eq!(player.credits, 585);
+        assert_eq!(player.cargo_used(), 0);
+
+        let mut fallback_contract_session = GameSession::new();
+        fallback_contract_session.game.run_mode = RunMode::Playing;
+        fallback_contract_session.game.modal = Some(crate::game_state::ModalScreen::Depot);
+        fallback_contract_session.game.selected_menu_item = 0;
+        fallback_contract_session.game.side_contract_active = true;
+        fallback_contract_session.game.side_contract_kind =
+            crate::game_state::SideContractKind::Rush;
+        fallback_contract_session.game.side_contract_target =
+            Some(TileKind::Ore(crate::terrain::MineralKind::Ruby));
+        fallback_contract_session.game.side_contract_required = 1;
+        {
+            let player = fallback_contract_session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 9;
+            *player
+                .cargo
+                .entry(crate::terrain::MineralKind::Ruby)
+                .or_default() = 1;
+        }
+        fallback_contract_session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = fallback_contract_session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert!(!fallback_contract_session.game().side_contract_active);
+        assert_eq!(fallback_contract_session.game().player.credits, 509);
+        assert_eq!(fallback_contract_session.game().player.cargo_used(), 0);
+        let player = fallback_contract_session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert_eq!(player.credits, 509);
         assert_eq!(player.cargo_used(), 0);
     }
 
