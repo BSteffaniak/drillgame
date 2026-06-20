@@ -660,6 +660,324 @@ fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "formal widget tree foundation is being introduced before screen call sites are migrated to it"
+)]
+mod widgets {
+    use super::{Insets, Size, inset};
+    use raylib::prelude::Rectangle;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) struct LayoutConstraints {
+        pub(super) min_width: f32,
+        pub(super) max_width: f32,
+        pub(super) min_height: f32,
+        pub(super) max_height: f32,
+    }
+
+    impl LayoutConstraints {
+        pub(super) const fn tight(width: f32, height: f32) -> Self {
+            Self {
+                min_width: width,
+                max_width: width,
+                min_height: height,
+                max_height: height,
+            }
+        }
+
+        pub(super) const fn loose(max_width: f32, max_height: f32) -> Self {
+            Self {
+                min_width: 0.0,
+                max_width,
+                min_height: 0.0,
+                max_height,
+            }
+        }
+
+        pub(super) const fn constrain(self, size: Size) -> Size {
+            Size {
+                width: size.width.clamp(self.min_width, self.max_width),
+                height: size.height.clamp(self.min_height, self.max_height),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) enum Axis {
+        Horizontal,
+        Vertical,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) enum UiNode {
+        Text(TextNode),
+        Spacer(SpacerNode),
+        Stack(StackNode),
+        Panel(PanelNode),
+        Scroll(ScrollNode),
+    }
+
+    impl UiNode {
+        pub(super) fn measure(&self, constraints: LayoutConstraints) -> Size {
+            match self {
+                Self::Text(node) => node.measure(constraints),
+                Self::Spacer(node) => node.measure(constraints),
+                Self::Stack(node) => node.measure(constraints),
+                Self::Panel(node) => node.measure(constraints),
+                Self::Scroll(node) => Self::measure_scroll(node, constraints),
+            }
+        }
+
+        pub(super) fn layout(&mut self, rect: Rectangle) {
+            match self {
+                Self::Text(node) => node.rect = rect,
+                Self::Spacer(node) => node.rect = rect,
+                Self::Stack(node) => node.layout(rect),
+                Self::Panel(node) => node.layout(rect),
+                Self::Scroll(node) => node.layout(rect),
+            }
+        }
+
+        pub(super) const fn rect(&self) -> Rectangle {
+            match self {
+                Self::Text(node) => node.rect,
+                Self::Spacer(node) => node.rect,
+                Self::Stack(node) => node.rect,
+                Self::Panel(node) => node.rect,
+                Self::Scroll(node) => node.rect,
+            }
+        }
+
+        const fn measure_scroll(_node: &ScrollNode, constraints: LayoutConstraints) -> Size {
+            constraints.constrain(Size {
+                width: constraints.max_width,
+                height: constraints.max_height,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct TextNode {
+        pub(super) width: f32,
+        pub(super) height: f32,
+        pub(super) rect: Rectangle,
+    }
+
+    impl TextNode {
+        pub(super) const fn sized(width: f32, height: f32) -> Self {
+            Self {
+                width,
+                height,
+                rect: zero_rect(),
+            }
+        }
+
+        const fn measure(&self, constraints: LayoutConstraints) -> Size {
+            constraints.constrain(Size {
+                width: self.width,
+                height: self.height,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct SpacerNode {
+        pub(super) width: f32,
+        pub(super) height: f32,
+        pub(super) rect: Rectangle,
+    }
+
+    impl SpacerNode {
+        pub(super) const fn sized(width: f32, height: f32) -> Self {
+            Self {
+                width,
+                height,
+                rect: zero_rect(),
+            }
+        }
+
+        const fn measure(&self, constraints: LayoutConstraints) -> Size {
+            constraints.constrain(Size {
+                width: self.width,
+                height: self.height,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct StackNode {
+        pub(super) axis: Axis,
+        pub(super) gap: f32,
+        pub(super) children: Vec<UiNode>,
+        pub(super) rect: Rectangle,
+    }
+
+    impl StackNode {
+        pub(super) const fn vertical(gap: f32, children: Vec<UiNode>) -> Self {
+            Self {
+                axis: Axis::Vertical,
+                gap,
+                children,
+                rect: zero_rect(),
+            }
+        }
+
+        pub(super) const fn horizontal(gap: f32, children: Vec<UiNode>) -> Self {
+            Self {
+                axis: Axis::Horizontal,
+                gap,
+                children,
+                rect: zero_rect(),
+            }
+        }
+
+        fn measure(&self, constraints: LayoutConstraints) -> Size {
+            let mut main: f32 = 0.0;
+            let mut cross: f32 = 0.0;
+            for (index, child) in self.children.iter().enumerate() {
+                let size = child.measure(LayoutConstraints::loose(
+                    constraints.max_width,
+                    constraints.max_height,
+                ));
+                if index > 0 {
+                    main += self.gap;
+                }
+                match self.axis {
+                    Axis::Horizontal => {
+                        main += size.width;
+                        cross = cross.max(size.height);
+                    }
+                    Axis::Vertical => {
+                        main += size.height;
+                        cross = cross.max(size.width);
+                    }
+                }
+            }
+            let size = match self.axis {
+                Axis::Horizontal => Size {
+                    width: main,
+                    height: cross,
+                },
+                Axis::Vertical => Size {
+                    width: cross,
+                    height: main,
+                },
+            };
+            constraints.constrain(size)
+        }
+
+        fn layout(&mut self, rect: Rectangle) {
+            self.rect = rect;
+            let mut cursor = match self.axis {
+                Axis::Horizontal => rect.x,
+                Axis::Vertical => rect.y,
+            };
+            for child in &mut self.children {
+                let size = child.measure(LayoutConstraints::loose(rect.width, rect.height));
+                let child_rect = match self.axis {
+                    Axis::Horizontal => Rectangle {
+                        x: cursor,
+                        y: rect.y,
+                        width: size.width,
+                        height: rect.height,
+                    },
+                    Axis::Vertical => Rectangle {
+                        x: rect.x,
+                        y: cursor,
+                        width: rect.width,
+                        height: size.height,
+                    },
+                };
+                child.layout(child_rect);
+                cursor += match self.axis {
+                    Axis::Horizontal => size.width + self.gap,
+                    Axis::Vertical => size.height + self.gap,
+                };
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct PanelNode {
+        pub(super) padding: Insets,
+        pub(super) child: Box<UiNode>,
+        pub(super) rect: Rectangle,
+    }
+
+    impl PanelNode {
+        pub(super) fn new(padding: Insets, child: UiNode) -> Self {
+            Self {
+                padding,
+                child: Box::new(child),
+                rect: zero_rect(),
+            }
+        }
+
+        fn measure(&self, constraints: LayoutConstraints) -> Size {
+            let horizontal = self.padding.left + self.padding.right;
+            let vertical = self.padding.top + self.padding.bottom;
+            let child = self.child.measure(LayoutConstraints::loose(
+                (constraints.max_width - horizontal).max(0.0),
+                (constraints.max_height - vertical).max(0.0),
+            ));
+            constraints.constrain(Size {
+                width: child.width + horizontal,
+                height: child.height + vertical,
+            })
+        }
+
+        fn layout(&mut self, rect: Rectangle) {
+            self.rect = rect;
+            self.child.layout(inset(rect, self.padding));
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct ScrollNode {
+        pub(super) offset_y: f32,
+        pub(super) child: Box<UiNode>,
+        pub(super) content_height: f32,
+        pub(super) rect: Rectangle,
+    }
+
+    impl ScrollNode {
+        pub(super) fn vertical(offset_y: f32, child: UiNode) -> Self {
+            Self {
+                offset_y,
+                child: Box::new(child),
+                content_height: 0.0,
+                rect: zero_rect(),
+            }
+        }
+
+        fn layout(&mut self, rect: Rectangle) {
+            self.rect = rect;
+            let content = self
+                .child
+                .measure(LayoutConstraints::loose(rect.width, f32::MAX / 4.0));
+            self.content_height = content.height;
+            let max_offset = (self.content_height - rect.height).max(0.0);
+            let offset_y = self.offset_y.clamp(0.0, max_offset);
+            self.child.layout(Rectangle {
+                x: rect.x,
+                y: rect.y - offset_y,
+                width: rect.width,
+                height: content.height,
+            });
+        }
+    }
+
+    const fn zero_rect() -> Rectangle {
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FontMetrics {
     font_size: f32,
@@ -749,6 +1067,13 @@ fn wrap_text_with_measure(
 mod tests {
     use super::*;
 
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < f32::EPSILON,
+            "{actual} != {expected}"
+        );
+    }
+
     #[test]
     fn modal_rect_is_centered_and_bounded() {
         let rect = modal_rect_for_viewport(Rectangle {
@@ -776,5 +1101,78 @@ mod tests {
             assert!(metrics.line_height >= metrics.font_size);
             assert!(metrics.baseline > 0.0 && metrics.baseline <= metrics.line_height);
         }
+    }
+
+    #[test]
+    fn widget_stack_lays_out_children_sequentially() {
+        use widgets::{LayoutConstraints, StackNode, TextNode, UiNode};
+        let mut node = UiNode::Stack(StackNode::vertical(
+            4.0,
+            vec![
+                UiNode::Text(TextNode::sized(20.0, 10.0)),
+                UiNode::Text(TextNode::sized(30.0, 12.0)),
+            ],
+        ));
+        let measured = node.measure(LayoutConstraints::loose(100.0, 100.0));
+        assert_near(measured.width, 30.0);
+        assert_near(measured.height, 26.0);
+        node.layout(Rectangle {
+            x: 5.0,
+            y: 7.0,
+            width: 100.0,
+            height: measured.height,
+        });
+        let UiNode::Stack(stack) = node else {
+            panic!("expected stack")
+        };
+        assert_near(stack.children[0].rect().y, 7.0);
+        assert_near(stack.children[1].rect().y, 21.0);
+    }
+
+    #[test]
+    fn widget_panel_applies_padding_to_child() {
+        use widgets::{LayoutConstraints, PanelNode, TextNode, UiNode};
+        let mut node = UiNode::Panel(PanelNode::new(
+            Insets::all(5.0),
+            UiNode::Text(TextNode::sized(20.0, 10.0)),
+        ));
+        let measured = node.measure(LayoutConstraints::loose(100.0, 100.0));
+        assert_near(measured.width, 30.0);
+        assert_near(measured.height, 20.0);
+        node.layout(Rectangle {
+            x: 10.0,
+            y: 20.0,
+            width: measured.width,
+            height: measured.height,
+        });
+        let UiNode::Panel(panel) = node else {
+            panic!("expected panel")
+        };
+        assert_near(panel.child.rect().x, 15.0);
+        assert_near(panel.child.rect().y, 25.0);
+    }
+
+    #[test]
+    fn scroll_node_clamps_content_offset() {
+        use widgets::{LayoutConstraints, ScrollNode, SpacerNode, UiNode};
+        let mut node = UiNode::Scroll(ScrollNode::vertical(
+            500.0,
+            UiNode::Spacer(SpacerNode::sized(20.0, 200.0)),
+        ));
+        node.layout(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 50.0,
+            height: 80.0,
+        });
+        let UiNode::Scroll(ref scroll) = node else {
+            panic!("expected scroll")
+        };
+        assert_near(scroll.content_height, 200.0);
+        assert_near(scroll.child.rect().y, -120.0);
+        assert_near(
+            node.measure(LayoutConstraints::loose(50.0, 80.0)).height,
+            80.0,
+        );
     }
 }
