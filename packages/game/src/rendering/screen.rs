@@ -870,8 +870,9 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 
     draw_online_connection_card(draw, game, 700, 190);
-    draw_online_lobby_card(draw, game, 700, 360);
-    draw_online_action_card(draw, game, 700, 560);
+    draw_online_lobby_card(draw, game, 700, 340);
+    draw_online_descriptor_inspection_card(draw, game, 700, 500);
+    draw_online_action_card(draw, game, 700, 610);
 }
 
 fn draw_online_connection_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
@@ -954,8 +955,45 @@ fn draw_online_lobby_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: 
     draw.draw_text(&lobby.guidance, x, y + 126, 15, Color::LIGHTGRAY);
 }
 
+fn draw_online_descriptor_inspection_card(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    x: i32,
+    y: i32,
+) {
+    let inspection = game.online_descriptor_inspection_presentation();
+    let border = match inspection.severity {
+        crate::game_state::OnlineDescriptorInspectionSeverity::Pending => Color::DARKGRAY,
+        crate::game_state::OnlineDescriptorInspectionSeverity::Valid => Color::LIME,
+        crate::game_state::OnlineDescriptorInspectionSeverity::Warning => Color::YELLOW,
+        crate::game_state::OnlineDescriptorInspectionSeverity::Error => Color::RED,
+    };
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 122, border);
+    draw.draw_text(&inspection.heading, x, y, 22, border);
+    for (index, line) in inspection.lines.iter().take(4).enumerate() {
+        let color = if index == 0 {
+            Color::RAYWHITE
+        } else {
+            Color::LIGHTGRAY
+        };
+        draw.draw_text(
+            line,
+            x,
+            y + 32 + i32::try_from(index).unwrap_or(i32::MAX) * 18,
+            13,
+            color,
+        );
+    }
+    let join_hint = if inspection.can_join {
+        "Descriptor inspected: Join descriptor session can connect with this file."
+    } else {
+        "Inspect a shared host descriptor before joining from this game window."
+    };
+    draw.draw_text(join_hint, x, y + 96, 13, border);
+}
+
 fn draw_online_action_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
-    draw.draw_rectangle_lines(x - 12, y - 12, 520, 132, Color::DARKPURPLE);
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 106, Color::DARKPURPLE);
     draw.draw_text("What to do next", x, y, 22, Color::VIOLET);
     draw.draw_text(
         online_selected_action_help(game.selected_menu_item),

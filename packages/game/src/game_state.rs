@@ -1339,6 +1339,82 @@ impl OnlineDescriptorInputStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnlineDescriptorInspectionSeverity {
+    Pending,
+    Valid,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineDescriptorInspectionPresentation {
+    pub severity: OnlineDescriptorInspectionSeverity,
+    pub heading: String,
+    pub lines: Vec<String>,
+    pub can_join: bool,
+}
+
+impl OnlineDescriptorInspectionPresentation {
+    #[must_use]
+    pub fn pending(path: &Path) -> Self {
+        Self {
+            severity: OnlineDescriptorInspectionSeverity::Pending,
+            heading: "Descriptor inspection".to_owned(),
+            lines: vec![format!(
+                "No descriptor inspected yet. Current path: {}",
+                path.display()
+            )],
+            can_join: false,
+        }
+    }
+
+    #[must_use]
+    pub fn valid(
+        path: &Path,
+        descriptor: &crate::multiplayer::QuinnHostConnectionDescriptor,
+    ) -> Self {
+        Self {
+            severity: OnlineDescriptorInspectionSeverity::Valid,
+            heading: "Descriptor OK".to_owned(),
+            lines: vec![
+                format!("Path: {}", path.display()),
+                format!("Host address: {}", descriptor.host_addr),
+                format!("Server name: {}", descriptor.server_name),
+                format!("Certificate: {} bytes", descriptor.certificate_der.len()),
+                format!("cert={} bytes", descriptor.certificate_der.len()),
+                "Join will trust this descriptor certificate for direct connect.".to_owned(),
+            ],
+            can_join: true,
+        }
+    }
+
+    #[must_use]
+    pub fn warning(path: &Path, message: impl Into<String>) -> Self {
+        Self {
+            severity: OnlineDescriptorInspectionSeverity::Warning,
+            heading: "Descriptor pending".to_owned(),
+            lines: vec![format!("Path: {}", path.display()), message.into()],
+            can_join: false,
+        }
+    }
+
+    #[must_use]
+    pub fn error(path: &Path, message: impl Into<String>) -> Self {
+        Self {
+            severity: OnlineDescriptorInspectionSeverity::Error,
+            heading: "Descriptor problem".to_owned(),
+            lines: vec![format!("Path: {}", path.display()), message.into()],
+            can_join: false,
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        format!("{}: {}", self.heading, self.lines.join(" | "))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OnlineSaveAuthority {
     LocalPlayer,
     RemoteHost,
@@ -4792,6 +4868,14 @@ pub struct GameState {
     pub online_remote_player_connected: bool,
     #[serde(default)]
     pub online_remote_player_snapshots: Vec<OnlineRemotePlayerPresentation>,
+    #[serde(default)]
+    pub online_descriptor_inspection_status: String,
+    #[serde(default)]
+    pub online_descriptor_inspection_can_join: bool,
+    #[serde(default)]
+    pub online_descriptor_inspection_lines: Vec<String>,
+    #[serde(default)]
+    pub online_descriptor_inspection_severity: Option<String>,
     #[serde(default = "default_online_descriptor_path")]
     pub online_descriptor_path: PathBuf,
     #[serde(default)]
@@ -5096,6 +5180,10 @@ impl GameState {
             online_remote_player_ready: false,
             online_remote_player_connected: false,
             online_remote_player_snapshots: Vec::new(),
+            online_descriptor_inspection_status: String::new(),
+            online_descriptor_inspection_can_join: false,
+            online_descriptor_inspection_lines: Vec::new(),
+            online_descriptor_inspection_severity: None,
             online_descriptor_path: default_online_descriptor_path(),
             online_descriptor_path_editing: false,
             online_descriptor_path_draft: String::new(),
@@ -6463,6 +6551,55 @@ impl GameState {
     }
 
     #[must_use]
+    pub fn online_descriptor_inspection_presentation(
+        &self,
+    ) -> OnlineDescriptorInspectionPresentation {
+        if self.online_descriptor_inspection_status.is_empty() {
+            return OnlineDescriptorInspectionPresentation::pending(&self.online_descriptor_path);
+        }
+        let severity = match self.online_descriptor_inspection_severity.as_deref() {
+            Some("valid") => OnlineDescriptorInspectionSeverity::Valid,
+            Some("warning") => OnlineDescriptorInspectionSeverity::Warning,
+            Some("error") => OnlineDescriptorInspectionSeverity::Error,
+            _ => OnlineDescriptorInspectionSeverity::Pending,
+        };
+        OnlineDescriptorInspectionPresentation {
+            severity,
+            heading: match severity {
+                OnlineDescriptorInspectionSeverity::Pending => "Descriptor inspection".to_owned(),
+                OnlineDescriptorInspectionSeverity::Valid => "Descriptor OK".to_owned(),
+                OnlineDescriptorInspectionSeverity::Warning => "Descriptor pending".to_owned(),
+                OnlineDescriptorInspectionSeverity::Error => "Descriptor problem".to_owned(),
+            },
+            lines: if self.online_descriptor_inspection_lines.is_empty() {
+                vec![self.online_descriptor_inspection_status.clone()]
+            } else {
+                self.online_descriptor_inspection_lines.clone()
+            },
+            can_join: self.online_descriptor_inspection_can_join,
+        }
+    }
+
+    fn apply_online_descriptor_inspection(
+        &mut self,
+        presentation: OnlineDescriptorInspectionPresentation,
+    ) {
+        self.online_descriptor_inspection_status = presentation.status_line();
+        self.online_descriptor_inspection_can_join = presentation.can_join;
+        self.online_descriptor_inspection_lines = presentation.lines;
+        self.online_descriptor_inspection_severity = Some(
+            match presentation.severity {
+                OnlineDescriptorInspectionSeverity::Pending => "pending",
+                OnlineDescriptorInspectionSeverity::Valid => "valid",
+                OnlineDescriptorInspectionSeverity::Warning => "warning",
+                OnlineDescriptorInspectionSeverity::Error => "error",
+            }
+            .to_owned(),
+        );
+        self.online_session_status_message = self.online_descriptor_inspection_status.clone();
+    }
+
+    #[must_use]
     pub fn online_lobby_participant_lines(&self) -> Vec<String> {
         self.online_lobby_presentation().lines()
     }
@@ -6796,6 +6933,27 @@ impl GameState {
     }
 
     fn inspect_online_descriptor_path(&mut self) {
+        let input_status = OnlineDescriptorInputStatus::validate(
+            OnlineDescriptorInputMode::JoinRead,
+            &self.online_descriptor_path,
+        );
+        if !input_status.can_attempt_task {
+            self.apply_online_descriptor_inspection(OnlineDescriptorInspectionPresentation::error(
+                &self.online_descriptor_path,
+                input_status.message,
+            ));
+            self.online_session_state = OnlineSessionUxState::Error;
+            return;
+        }
+        if !input_status.accepted {
+            self.apply_online_descriptor_inspection(
+                OnlineDescriptorInspectionPresentation::warning(
+                    &self.online_descriptor_path,
+                    input_status.message,
+                ),
+            );
+            return;
+        }
         match std::fs::read_to_string(&self.online_descriptor_path)
             .map_err(|error| format!("descriptor read failed: {error}"))
             .and_then(|contents| {
@@ -6803,19 +6961,20 @@ impl GameState {
                     .map_err(|error| format!("descriptor parse failed: {error}"))
             }) {
             Ok(descriptor) => {
-                self.online_session_status_message = format!(
-                    "Descriptor OK: path={}, host={}, server={}, cert={} bytes",
-                    self.online_descriptor_path.display(),
-                    descriptor.host_addr,
-                    descriptor.server_name,
-                    descriptor.certificate_der.len()
+                self.apply_online_descriptor_inspection(
+                    OnlineDescriptorInspectionPresentation::valid(
+                        &self.online_descriptor_path,
+                        &descriptor,
+                    ),
                 );
             }
             Err(error) => {
                 self.online_session_state = OnlineSessionUxState::Error;
-                self.online_session_status_message = format!(
-                    "Descriptor inspect failed for {}: {error}",
-                    self.online_descriptor_path.display()
+                self.apply_online_descriptor_inspection(
+                    OnlineDescriptorInspectionPresentation::error(
+                        &self.online_descriptor_path,
+                        format!("Descriptor inspect failed: {error}"),
+                    ),
                 );
             }
         }
