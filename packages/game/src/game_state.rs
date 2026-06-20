@@ -9562,57 +9562,6 @@ impl GameState {
         self.sound_cues.push(SoundCue::Ui);
     }
 
-    fn try_complete_expeditions(&mut self) {
-        let mut reward = 0;
-        let mut completed = 0;
-        let mut completed_expeditions = Vec::new();
-        let snapshot = self.clone();
-        self.active_expeditions.retain(|expedition| {
-            if expedition.expires_day < snapshot.town_event_day {
-                return false;
-            }
-            if expedition_satisfied(*expedition, &snapshot) {
-                reward += expedition.reward;
-                completed += 1;
-                completed_expeditions.push(*expedition);
-                false
-            } else {
-                true
-            }
-        });
-        for expedition in completed_expeditions {
-            match expedition.kind {
-                ExpeditionObjectiveKind::RetrieveArtifact => {
-                    self.legendary_blueprints
-                        .insert(LegendaryBlueprint::StarPlating);
-                    self.rig_part_inventory.insert(RigPartKind::ResonanceDrill);
-                }
-                ExpeditionObjectiveKind::ScanAnomaly | ExpeditionObjectiveKind::ScanHazards => {
-                    self.player
-                        .add_material(StrategicResourceKind::CrystalLens, expedition.required);
-                }
-                ExpeditionObjectiveKind::RecoverProbe | ExpeditionObjectiveKind::ReachSignal => {
-                    self.rig_part_inventory.insert(RigPartKind::HazardScanner);
-                }
-                ExpeditionObjectiveKind::MineVein => {
-                    self.player
-                        .add_material(StrategicResourceKind::AncientAlloy, 1);
-                }
-                _ => {}
-            }
-            consume_expedition_delivery(expedition, &mut self.player);
-        }
-        if reward > 0 {
-            self.player.credits = self.player.credits.saturating_add(reward);
-            self.total_earnings = self.total_earnings.saturating_add(reward);
-            self.expeditions_completed = self.expeditions_completed.saturating_add(completed);
-            self.town_development.reputation =
-                self.town_development.reputation.saturating_add(completed);
-            self.message = format!("Completed {completed} expedition(s) for {reward} credits.");
-            self.sound_cues.push(SoundCue::Milestone);
-        }
-    }
-
     fn confirm_bank_menu(&mut self) {
         match self.selected_menu_item {
             0 => self.queue_finance(),
