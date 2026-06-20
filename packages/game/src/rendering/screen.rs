@@ -69,27 +69,24 @@ pub(super) fn draw_hud_snapshot_for_view(
     draw_view_hud_panel(draw, game, view, Some(hud));
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "top HUD composes multiple bounded panels"
+)]
 fn draw_view_hud_panel(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
     view: &ClientView,
     hud: Option<PerPlayerHudSnapshot>,
 ) {
+    let fps = draw.get_fps();
     let mut ui = UiContext::new(draw);
-    let panel_width = view.viewport.width.clamp(300, 460) as f32;
-    let panel_height = if view.viewport.height < 420 {
-        205.0
-    } else {
-        270.0
-    };
-    let mut panel = ui.panel(Rectangle {
-        x: view.viewport.x as f32 + 12.0,
-        y: view.viewport.y as f32 + 12.0,
-        width: panel_width,
-        height: panel_height,
-    });
-    panel.begin_clip();
-    panel.heading(&format!("Pilot {}", view.controlled_player_id.get()));
+    let margin = 12.0;
+    let gap = 8.0;
+    let origin_x = view.viewport.x as f32 + margin;
+    let origin_y = view.viewport.y as f32 + margin;
+    let available_width = (view.viewport.width as f32 - margin * 2.0).max(280.0);
+    let metric_width = ((available_width - gap * 3.0) / 4.0).max(120.0);
 
     let (hull, max_hull, fuel, fuel_capacity, credits, cargo_used, cargo_capacity) = hud
         .map_or_else(
@@ -117,28 +114,121 @@ fn draw_view_hud_panel(
             },
         );
 
-    panel.progress_bar("Hull", hull, max_hull, Color::SKYBLUE, Color::RED);
-    panel.progress_bar("Fuel", fuel, fuel_capacity, Color::LIME, Color::ORANGE);
-    panel.stat_line("Credits", &format!("{credits} cr"), Color::GOLD);
-    panel.stat_line(
-        "Cargo",
-        &format!("{cargo_used}/{cargo_capacity} slots"),
+    let mut hull_panel = ui.compact_panel(Rectangle {
+        x: origin_x,
+        y: origin_y,
+        width: metric_width,
+        height: 74.0,
+    });
+    hull_panel.begin_clip();
+    hull_panel.heading(&format!("P{} Hull", view.controlled_player_id.get()));
+    hull_panel.progress_bar("", hull, max_hull, Color::SKYBLUE, Color::RED);
+    drop(hull_panel);
+
+    let mut fuel_panel = ui.compact_panel(Rectangle {
+        x: origin_x + (metric_width + gap),
+        y: origin_y,
+        width: metric_width,
+        height: 74.0,
+    });
+    fuel_panel.begin_clip();
+    fuel_panel.heading("Fuel");
+    fuel_panel.progress_bar("", fuel, fuel_capacity, Color::LIME, Color::ORANGE);
+    drop(fuel_panel);
+
+    let mut cargo_panel = ui.compact_panel(Rectangle {
+        x: origin_x + (metric_width + gap) * 2.0,
+        y: origin_y,
+        width: metric_width,
+        height: 74.0,
+    });
+    cargo_panel.begin_clip();
+    cargo_panel.heading("Cargo");
+    cargo_panel.stat_line(
+        "Hold",
+        &format!("{cargo_used}/{cargo_capacity}"),
         Color::LIGHTGRAY,
     );
-    panel.stat_line(
+    cargo_panel.progress_bar(
+        "",
+        cargo_used as f32,
+        cargo_capacity as f32,
+        Color::GOLD,
+        Color::ORANGE,
+    );
+    drop(cargo_panel);
+
+    let mut run_panel = ui.compact_panel(Rectangle {
+        x: origin_x + (metric_width + gap) * 3.0,
+        y: origin_y,
+        width: metric_width,
+        height: 74.0,
+    });
+    run_panel.begin_clip();
+    run_panel.heading("Run");
+    run_panel.stat_line("Credits", &format!("{credits} cr"), Color::GOLD);
+    run_panel.stat_line(
         "Depth",
         &format!("{}m", (game.player.y / TILE_SIZE).max(0.0) as i32),
         Color::LIGHTGRAY,
     );
-    panel.separator();
-    panel.muted(&format!(
-        "Objective: {} {}/{} {}",
+    drop(run_panel);
+
+    let objective_width = (available_width * 0.58).max(300.0);
+    let mut objective_panel = ui.compact_panel(Rectangle {
+        x: origin_x,
+        y: origin_y + 82.0,
+        width: objective_width,
+        height: 74.0,
+    });
+    objective_panel.begin_clip();
+    objective_panel.heading("Objective");
+    objective_panel.muted(&format!(
+        "{} {}/{} {}",
         game.contracts.active.title,
         game.contracts.active.progress(&game.player),
         game.contracts.active.required,
         game.contracts.active.target.name()
     ));
-    panel.muted(&game.warning_summary());
+    drop(objective_panel);
+
+    let mut alert_panel = ui.compact_panel(Rectangle {
+        x: origin_x + objective_width + gap,
+        y: origin_y + 82.0,
+        width: (available_width - objective_width - gap).max(220.0),
+        height: 74.0,
+    });
+    alert_panel.begin_clip();
+    alert_panel.heading("Status");
+    alert_panel.muted(&game.warning_summary());
+    alert_panel.muted(&game.active_world_event_summary());
+    drop(alert_panel);
+
+    if game.show_details {
+        let detail_width = available_width.min(620.0);
+        let detail_x = origin_x;
+        let detail_y = origin_y + 164.0;
+        let mut details = ui.compact_panel(Rectangle {
+            x: detail_x,
+            y: detail_y,
+            width: detail_width,
+            height: 132.0,
+        });
+        details.begin_clip();
+        details.heading("Diagnostics");
+        details.stat_line("FPS", &format!("{fps}"), Color::LIME);
+        details.stat_line("Tick", &format!("{}", game.update_ticks), Color::LIGHTGRAY);
+        details.stat_line(
+            "Camera",
+            &format!(
+                "{:.0},{:.0}",
+                view.camera.x / TILE_SIZE,
+                view.camera.y / TILE_SIZE
+            ),
+            Color::LIGHTGRAY,
+        );
+        details.muted(&format!("Message: {}", game.message));
+    }
 }
 
 pub(super) fn draw_minimap_for_view(

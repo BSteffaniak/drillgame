@@ -56,6 +56,18 @@ impl<'draw, 'handle> UiContext<'draw, 'handle> {
     }
 
     pub(super) fn panel<'ui>(&'ui mut self, rect: Rectangle) -> UiPanel<'ui, 'handle> {
+        self.panel_with_padding(rect, self.theme.padding)
+    }
+
+    pub(super) fn compact_panel<'ui>(&'ui mut self, rect: Rectangle) -> UiPanel<'ui, 'handle> {
+        self.panel_with_padding(rect, 10)
+    }
+
+    fn panel_with_padding<'ui>(
+        &'ui mut self,
+        rect: Rectangle,
+        padding: i32,
+    ) -> UiPanel<'ui, 'handle> {
         self.draw.draw_rectangle(
             rect.x as i32,
             rect.y as i32,
@@ -71,10 +83,10 @@ impl<'draw, 'handle> UiContext<'draw, 'handle> {
             self.theme.border,
         );
         let content = Rectangle {
-            x: rect.x + self.theme.padding as f32,
-            y: rect.y + self.theme.padding as f32,
-            width: rect.width - (self.theme.padding * 2) as f32,
-            height: rect.height - (self.theme.padding * 2) as f32,
+            x: rect.x + padding as f32,
+            y: rect.y + padding as f32,
+            width: rect.width - (padding * 2) as f32,
+            height: rect.height - (padding * 2) as f32,
         };
         UiPanel {
             draw: self.draw,
@@ -163,15 +175,17 @@ impl UiPanel<'_, '_> {
         } else {
             (value / max_value).clamp(0.0, 1.0)
         };
-        let label_line = format!("{label} {value:.0}/{max_value:.0}");
-        Self::draw_text_at(
-            self.content.x,
-            self.cursor_y,
-            &label_line,
-            TextStyle::Small,
-            self.theme.text,
-        );
-        self.cursor_y += line_height(TextStyle::Small) as f32;
+        if !label.is_empty() {
+            let label_line = format!("{label} {value:.0}/{max_value:.0}");
+            Self::draw_text_at(
+                self.content.x,
+                self.cursor_y,
+                &label_line,
+                TextStyle::Small,
+                self.theme.text,
+            );
+            self.cursor_y += line_height(TextStyle::Small) as f32;
+        }
         let x = self.content.x as i32;
         let y = self.cursor_y as i32;
         let width = self.content.width as i32;
