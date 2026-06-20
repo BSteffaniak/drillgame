@@ -277,8 +277,16 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                     let color = if *ratio < 0.25 { *danger } else { *fill };
                     self.draw_bar(rect.x, rect.y, rect.width, rect.height, *ratio, color);
                 }
-                widgets::RenderCommand::Button { rect, focused } => {
+                widgets::RenderCommand::Button {
+                    rect,
+                    focused,
+                    text,
+                    color,
+                } => {
                     self.draw_panel(*rect, PanelKind::Overlay);
+                    if !text.is_empty() {
+                        Self::draw_text(text, rect.x + 8.0, rect.y + 6.0, TextKind::Small, *color);
+                    }
                     if *focused {
                         self.draw.draw_rectangle_lines(
                             rect.x as i32,
@@ -603,6 +611,17 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
                         *danger,
                     )));
                 }
+                SectionItem::Stat(stat) if is_selectable_stat(stat) => {
+                    sections.push(widgets::UiNode::Button(widgets::ButtonNode::label(
+                        format!("{} {}", stat.label, stat.value)
+                            .trim_end()
+                            .to_owned(),
+                        width,
+                        26.0,
+                        stat.label.trim_start().starts_with('>'),
+                        stat.color,
+                    )));
+                }
                 SectionItem::Stat(stat) => {
                     sections.push(widgets::UiNode::Text(widgets::TextNode::colored(
                         format!("{} {}", stat.label, stat.value),
@@ -621,6 +640,11 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
         current_scroll_offset(widgets::WidgetId("modal-content")),
         widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, sections)),
     ))
+}
+
+fn is_selectable_stat(stat: &StatItem) -> bool {
+    let label = stat.label.as_str();
+    label.starts_with("> ") || label.starts_with("  ")
 }
 
 fn inset(rect: Rectangle, insets: Insets) -> Rectangle {
@@ -883,6 +907,8 @@ pub(super) mod widgets {
         Button {
             rect: Rectangle,
             focused: bool,
+            text: String,
+            color: Color,
         },
         Canvas {
             rect: Rectangle,
@@ -993,6 +1019,8 @@ pub(super) mod widgets {
                 Self::Button(node) => plan.push(RenderCommand::Button {
                     rect: node.rect,
                     focused: node.focused,
+                    text: node.text.clone(),
+                    color: node.color,
                 }),
                 Self::Canvas(node) => plan.push(RenderCommand::Canvas { rect: node.rect }),
                 Self::Spacer(_) => {}
@@ -1124,19 +1152,33 @@ pub(super) mod widgets {
     #[derive(Clone, Debug)]
     pub(super) struct ButtonNode {
         pub(super) focused: bool,
+        pub(super) text: String,
+        pub(super) color: Color,
         pub(super) width: f32,
         pub(super) height: f32,
         pub(super) rect: Rectangle,
     }
 
     impl ButtonNode {
-        pub(super) const fn sized(width: f32, height: f32, focused: bool) -> Self {
+        pub(super) fn label(
+            text: impl Into<String>,
+            width: f32,
+            height: f32,
+            focused: bool,
+            color: Color,
+        ) -> Self {
             Self {
                 focused,
+                text: text.into(),
+                color,
                 width,
                 height,
                 rect: zero_rect(),
             }
+        }
+
+        pub(super) fn sized(width: f32, height: f32, focused: bool) -> Self {
+            Self::label(String::new(), width, height, focused, Color::RAYWHITE)
         }
 
         const fn measure(&self, constraints: LayoutConstraints) -> Size {
