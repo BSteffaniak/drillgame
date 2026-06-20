@@ -5465,169 +5465,8 @@ impl GameSession {
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::CompleteDepotWork => {
-                let mut snapshot = self.game.clone();
-                snapshot.player.clone_from(player);
-                let mut completed_expeditions = Vec::new();
-                let mut expedition_reward: u32 = 0;
-                self.game.active_expeditions.retain(|expedition| {
-                    if expedition.expires_day < self.game.town_event_day {
-                        return false;
-                    }
-                    if crate::game_state::expedition_satisfied(*expedition, &snapshot) {
-                        expedition_reward = expedition_reward.saturating_add(expedition.reward);
-                        completed_expeditions.push(*expedition);
-                        false
-                    } else {
-                        true
-                    }
-                });
-                for expedition in completed_expeditions.iter().copied() {
-                    match expedition.kind {
-                        crate::game_state::ExpeditionObjectiveKind::RetrieveArtifact => {
-                            self.game
-                                .legendary_blueprints
-                                .insert(crate::game_state::LegendaryBlueprint::StarPlating);
-                            self.game
-                                .rig_part_inventory
-                                .insert(crate::game_state::RigPartKind::ResonanceDrill);
-                        }
-                        crate::game_state::ExpeditionObjectiveKind::ScanAnomaly
-                        | crate::game_state::ExpeditionObjectiveKind::ScanHazards => {
-                            player.add_material(
-                                crate::terrain::StrategicResourceKind::CrystalLens,
-                                expedition.required,
-                            );
-                        }
-                        crate::game_state::ExpeditionObjectiveKind::RecoverProbe
-                        | crate::game_state::ExpeditionObjectiveKind::ReachSignal => {
-                            self.game
-                                .rig_part_inventory
-                                .insert(crate::game_state::RigPartKind::HazardScanner);
-                        }
-                        crate::game_state::ExpeditionObjectiveKind::MineVein => {
-                            player.add_material(
-                                crate::terrain::StrategicResourceKind::AncientAlloy,
-                                1,
-                            );
-                        }
-                        _ => {}
-                    }
-                    crate::game_state::consume_expedition_delivery(expedition, player);
-                }
-                if expedition_reward > 0 {
-                    let completed = u32::try_from(completed_expeditions.len()).unwrap_or(u32::MAX);
-                    player.credits = player.credits.saturating_add(expedition_reward);
-                    self.game.total_earnings =
-                        self.game.total_earnings.saturating_add(expedition_reward);
-                    self.game.expeditions_completed =
-                        self.game.expeditions_completed.saturating_add(completed);
-                    self.game.town_development.reputation = self
-                        .game
-                        .town_development
-                        .reputation
-                        .saturating_add(completed);
-                    self.game.message = format!(
-                        "Completed {} expedition(s) for {expedition_reward} credits.",
-                        completed_expeditions.len()
-                    );
-                    return PlayerScopedCommandOutcome::Applied;
-                }
-
-                let mut snapshot = self.game.clone();
-                snapshot.player.clone_from(player);
-                if let Some((index, _contract)) = self
-                    .game
-                    .active_side_contracts
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .find(|(_, contract)| {
-                        crate::game_state::side_contract_satisfied(*contract, &snapshot)
-                    })
-                {
-                    let contract = self.game.active_side_contracts.remove(index);
-                    if matches!(
-                        contract.kind,
-                        crate::game_state::SideContractKind::Cargo
-                            | crate::game_state::SideContractKind::Rush
-                    ) {
-                        crate::game_state::consume_side_contract_cargo(contract, player);
-                    }
-                    let completed_reward = 420 + contract.required.min(10) * 80;
-                    player.credits = player.credits.saturating_add(completed_reward);
-                    self.game.total_earnings =
-                        self.game.total_earnings.saturating_add(completed_reward);
-                    self.game.side_contract_active = !self.game.active_side_contracts.is_empty();
-                    self.game.message =
-                        format!("Side contract fulfilled: {completed_reward} credits bonus.");
-                    return PlayerScopedCommandOutcome::Applied;
-                }
-
-                let mut snapshot = self.game.clone();
-                snapshot.player.clone_from(player);
-                if self.game.side_contract_active
-                    && let Some(target) = self.game.side_contract_target
-                {
-                    let contract = crate::game_state::SideContract {
-                        kind: self.game.side_contract_kind,
-                        target,
-                        required: self.game.side_contract_required,
-                        expires_day: None,
-                    };
-                    if crate::game_state::side_contract_satisfied(contract, &snapshot) {
-                        if matches!(
-                            contract.kind,
-                            crate::game_state::SideContractKind::Cargo
-                                | crate::game_state::SideContractKind::Rush
-                        ) {
-                            crate::game_state::consume_side_contract_cargo(contract, player);
-                        }
-                        let completed_reward = 420 + contract.required * 80;
-                        player.credits = player.credits.saturating_add(completed_reward);
-                        self.game.total_earnings =
-                            self.game.total_earnings.saturating_add(completed_reward);
-                        self.game.side_contract_active = false;
-                        self.game.message =
-                            format!("Side contract fulfilled: {completed_reward} credits bonus.");
-                        return PlayerScopedCommandOutcome::Applied;
-                    }
-                }
-
-                let before_completed = self.game.contracts.completed;
-                let Some(completion) = self.game.contracts.try_complete(player) else {
-                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
-                };
-                let escrow_bonus =
-                    completion.reward * u32::from(self.game.town_development.bank_level) / 20;
-                if escrow_bonus > 0 {
-                    player.credits = player.credits.saturating_add(escrow_bonus);
-                }
-                self.game.total_earnings = self
-                    .game
-                    .total_earnings
-                    .saturating_add(completion.reward.saturating_add(escrow_bonus));
-                if completion.finished_story {
-                    self.game.won_game = true;
-                    self.game.deep_claim_status = crate::economy::DeepClaimStatus::Unlocked;
-                    self.game.fastest_star_core_seconds = self
-                        .game
-                        .fastest_star_core_seconds
-                        .map_or(Some(self.game.play_seconds), |best| {
-                            Some(best.min(self.game.play_seconds))
-                        });
-                    self.game.message = format!(
-                        "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits + {escrow_bonus} escrow.",
-                        completion.completed_title, completion.reward
-                    );
-                } else {
-                    let story =
-                        crate::contract::ContractLog::story_for_completed(before_completed + 1);
-                    self.game.message = format!(
-                        "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
-                        completion.completed_title, completion.reward
-                    );
-                }
-                PlayerScopedCommandOutcome::Applied
+                let _ = player;
+                self.complete_depot_work_for_player(player_id)
             }
             crate::game_state::SessionServiceRequest::StartSideContract => {
                 if self.game.active_side_contracts.len() >= 3 {
@@ -5704,6 +5543,215 @@ impl GameSession {
                 PlayerScopedCommandOutcome::IgnoredUnavailable
             }
         }
+    }
+
+    fn complete_depot_work_for_player(
+        &mut self,
+        player_id: PlayerId,
+    ) -> PlayerScopedCommandOutcome {
+        if self.complete_expedition_work_for_player(player_id) {
+            return PlayerScopedCommandOutcome::Applied;
+        }
+        if self.complete_active_side_contract_for_player(player_id) {
+            return PlayerScopedCommandOutcome::Applied;
+        }
+        if self.complete_legacy_side_contract_for_player(player_id) {
+            return PlayerScopedCommandOutcome::Applied;
+        }
+        self.complete_story_contract_for_player(player_id)
+    }
+
+    fn complete_expedition_work_for_player(&mut self, player_id: PlayerId) -> bool {
+        let Some(player_snapshot) = self.world.player(player_id).cloned() else {
+            return false;
+        };
+        let mut snapshot = self.game.clone();
+        snapshot.player = player_snapshot;
+        let mut completed_expeditions = Vec::new();
+        let mut expedition_reward: u32 = 0;
+        self.game.active_expeditions.retain(|expedition| {
+            if expedition.expires_day < self.game.town_event_day {
+                return false;
+            }
+            if crate::game_state::expedition_satisfied(*expedition, &snapshot) {
+                expedition_reward = expedition_reward.saturating_add(expedition.reward);
+                completed_expeditions.push(*expedition);
+                false
+            } else {
+                true
+            }
+        });
+        if expedition_reward == 0 {
+            return false;
+        }
+        for expedition in completed_expeditions.iter().copied() {
+            match expedition.kind {
+                crate::game_state::ExpeditionObjectiveKind::RetrieveArtifact => {
+                    self.game
+                        .legendary_blueprints
+                        .insert(crate::game_state::LegendaryBlueprint::StarPlating);
+                    self.game
+                        .rig_part_inventory
+                        .insert(crate::game_state::RigPartKind::ResonanceDrill);
+                }
+                crate::game_state::ExpeditionObjectiveKind::RecoverProbe
+                | crate::game_state::ExpeditionObjectiveKind::ReachSignal => {
+                    self.game
+                        .rig_part_inventory
+                        .insert(crate::game_state::RigPartKind::HazardScanner);
+                }
+                _ => {}
+            }
+            let Some(player) = self.world.player_mut(player_id) else {
+                return false;
+            };
+            match expedition.kind {
+                crate::game_state::ExpeditionObjectiveKind::ScanAnomaly
+                | crate::game_state::ExpeditionObjectiveKind::ScanHazards => {
+                    player.add_material(
+                        crate::terrain::StrategicResourceKind::CrystalLens,
+                        expedition.required,
+                    );
+                }
+                crate::game_state::ExpeditionObjectiveKind::MineVein => {
+                    player.add_material(crate::terrain::StrategicResourceKind::AncientAlloy, 1);
+                }
+                _ => {}
+            }
+            crate::game_state::consume_expedition_delivery(expedition, player);
+        }
+        let Some(player) = self.world.player_mut(player_id) else {
+            return false;
+        };
+        let completed = u32::try_from(completed_expeditions.len()).unwrap_or(u32::MAX);
+        player.credits = player.credits.saturating_add(expedition_reward);
+        self.game.total_earnings = self.game.total_earnings.saturating_add(expedition_reward);
+        self.game.expeditions_completed = self.game.expeditions_completed.saturating_add(completed);
+        self.game.town_development.reputation = self
+            .game
+            .town_development
+            .reputation
+            .saturating_add(completed);
+        self.game.message = format!(
+            "Completed {} expedition(s) for {expedition_reward} credits.",
+            completed_expeditions.len()
+        );
+        true
+    }
+
+    fn complete_active_side_contract_for_player(&mut self, player_id: PlayerId) -> bool {
+        let Some(player_snapshot) = self.world.player(player_id).cloned() else {
+            return false;
+        };
+        let mut snapshot = self.game.clone();
+        snapshot.player = player_snapshot;
+        let Some((index, _contract)) = self
+            .game
+            .active_side_contracts
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, contract)| crate::game_state::side_contract_satisfied(*contract, &snapshot))
+        else {
+            return false;
+        };
+        let contract = self.game.active_side_contracts.remove(index);
+        let Some(player) = self.world.player_mut(player_id) else {
+            return false;
+        };
+        if matches!(
+            contract.kind,
+            crate::game_state::SideContractKind::Cargo | crate::game_state::SideContractKind::Rush
+        ) {
+            crate::game_state::consume_side_contract_cargo(contract, player);
+        }
+        let completed_reward = 420 + contract.required.min(10) * 80;
+        player.credits = player.credits.saturating_add(completed_reward);
+        self.game.total_earnings = self.game.total_earnings.saturating_add(completed_reward);
+        self.game.side_contract_active = !self.game.active_side_contracts.is_empty();
+        self.game.message = format!("Side contract fulfilled: {completed_reward} credits bonus.");
+        true
+    }
+
+    fn complete_legacy_side_contract_for_player(&mut self, player_id: PlayerId) -> bool {
+        if !self.game.side_contract_active {
+            return false;
+        }
+        let Some(target) = self.game.side_contract_target else {
+            return false;
+        };
+        let Some(player_snapshot) = self.world.player(player_id).cloned() else {
+            return false;
+        };
+        let mut snapshot = self.game.clone();
+        snapshot.player = player_snapshot;
+        let contract = crate::game_state::SideContract {
+            kind: self.game.side_contract_kind,
+            target,
+            required: self.game.side_contract_required,
+            expires_day: None,
+        };
+        if !crate::game_state::side_contract_satisfied(contract, &snapshot) {
+            return false;
+        }
+        let Some(player) = self.world.player_mut(player_id) else {
+            return false;
+        };
+        if matches!(
+            contract.kind,
+            crate::game_state::SideContractKind::Cargo | crate::game_state::SideContractKind::Rush
+        ) {
+            crate::game_state::consume_side_contract_cargo(contract, player);
+        }
+        let completed_reward = 420 + contract.required * 80;
+        player.credits = player.credits.saturating_add(completed_reward);
+        self.game.total_earnings = self.game.total_earnings.saturating_add(completed_reward);
+        self.game.side_contract_active = false;
+        self.game.message = format!("Side contract fulfilled: {completed_reward} credits bonus.");
+        true
+    }
+
+    fn complete_story_contract_for_player(
+        &mut self,
+        player_id: PlayerId,
+    ) -> PlayerScopedCommandOutcome {
+        let Some(player) = self.world.player_mut(player_id) else {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        };
+        let before_completed = self.game.contracts.completed;
+        let Some(completion) = self.game.contracts.try_complete(player) else {
+            return PlayerScopedCommandOutcome::IgnoredUnavailable;
+        };
+        let escrow_bonus =
+            completion.reward * u32::from(self.game.town_development.bank_level) / 20;
+        if escrow_bonus > 0 {
+            player.credits = player.credits.saturating_add(escrow_bonus);
+        }
+        self.game.total_earnings = self
+            .game
+            .total_earnings
+            .saturating_add(completion.reward.saturating_add(escrow_bonus));
+        if completion.finished_story {
+            self.game.won_game = true;
+            self.game.deep_claim_status = crate::economy::DeepClaimStatus::Unlocked;
+            self.game.fastest_star_core_seconds = self
+                .game
+                .fastest_star_core_seconds
+                .map_or(Some(self.game.play_seconds), |best| {
+                    Some(best.min(self.game.play_seconds))
+                });
+            self.game.message = format!(
+                "{} complete! Star Core secured. Deep Claim charter unlocked. Bonus: {} credits + {escrow_bonus} escrow.",
+                completion.completed_title, completion.reward
+            );
+        } else {
+            let story = crate::contract::ContractLog::story_for_completed(before_completed + 1);
+            self.game.message = format!(
+                "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
+                completion.completed_title, completion.reward
+            );
+        }
+        PlayerScopedCommandOutcome::Applied
     }
 
     fn save_slot_from_session_request(&mut self, slot: usize) -> SessionSaveLoadSummary {
