@@ -1994,6 +1994,7 @@ pub enum OnlineNetworkTaskRequest {
     JoinDirectConnect,
     HostDescriptorFile { path: PathBuf },
     HostLanGame { path: PathBuf },
+    JoinLanGame,
     JoinDescriptorFile { path: PathBuf },
     ReconnectDirectConnect,
     Shutdown,
@@ -8412,31 +8413,16 @@ impl GameState {
                 );
             }
             1 => {
-                let descriptor_status = OnlineDescriptorInputStatus::validate(
-                    OnlineDescriptorInputMode::JoinRead,
-                    &self.online_descriptor_path,
-                );
-                if !descriptor_status.can_attempt_task {
-                    self.apply_online_descriptor_input_status(&descriptor_status);
-                    self.sound_cues.push(SoundCue::Ui);
-                    return;
-                }
-                self.apply_online_descriptor_input_status(&descriptor_status);
                 self.online_session_state = OnlineSessionUxState::Joining;
-                self.online_network_task_request =
-                    Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
-                        path: self.online_descriptor_path.clone(),
-                    });
+                self.online_network_task_request = Some(OnlineNetworkTaskRequest::JoinLanGame);
                 self.online_host_owns_save = false;
                 self.online_player_slot = Some(2);
                 self.online_local_ready = false;
                 self.online_remote_player_name = Some("Host miner".to_owned());
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
-                self.online_session_status_message = format!(
-                    "Joining with descriptor {}. Waiting for host assignment.",
-                    self.online_descriptor_path.display()
-                );
+                "Scanning LAN for Drillgame hosts via mDNS."
+                    .clone_into(&mut self.online_session_status_message);
             }
             2 => {
                 let decision = OnlineReconnectAttemptDecision::from_game(self);
@@ -12806,9 +12792,7 @@ mod tests {
         );
         assert_eq!(
             game.take_online_network_task_request(),
-            Some(OnlineNetworkTaskRequest::JoinDescriptorFile {
-                path: default_online_descriptor_path()
-            })
+            Some(OnlineNetworkTaskRequest::JoinLanGame)
         );
 
         game.online_session_state = OnlineSessionUxState::Timeout;
@@ -12846,7 +12830,7 @@ mod tests {
         assert!(
             pending_lines
                 .iter()
-                .any(|line| line.contains("JoinDescriptorFile"))
+                .any(|line| line.contains("JoinLanGame"))
         );
         assert!(pending_lines.iter().any(|line| line.contains("Joining")));
         assert!(
@@ -14326,12 +14310,18 @@ mod tests {
         join_game.online_descriptor_path = PathBuf::from("descriptor.txt");
         join_game.selected_menu_item = 1;
         join_game.confirm_online_multiplayer();
-        assert!(join_game.online_network_task_request.is_none());
-        assert_eq!(join_game.online_session_state, OnlineSessionUxState::Idle);
+        assert_eq!(
+            join_game.online_network_task_request,
+            Some(OnlineNetworkTaskRequest::JoinLanGame)
+        );
+        assert_eq!(
+            join_game.online_session_state,
+            OnlineSessionUxState::Joining
+        );
         assert!(
             join_game
-                .online_last_descriptor_input_status
-                .contains("must end in .json")
+                .online_session_status_message
+                .contains("Scanning LAN")
         );
     }
 
@@ -14364,12 +14354,12 @@ mod tests {
         join_game.confirm_online_multiplayer();
         assert!(matches!(
             join_game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::JoinDescriptorFile { .. })
+            Some(OnlineNetworkTaskRequest::JoinLanGame)
         ));
         assert!(
             join_game
-                .online_last_descriptor_input_status
-                .contains("Join descriptor path accepted")
+                .online_session_status_message
+                .contains("Scanning LAN")
         );
         let _ignored = std::fs::remove_file(unique_path);
     }

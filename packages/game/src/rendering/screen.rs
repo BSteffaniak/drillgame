@@ -623,7 +623,7 @@ fn selected_label(selected: bool, label: &str) -> String {
 const fn online_selected_action_help(_game: &GameState, index: usize) -> &'static str {
     match index {
         0 => "Publish a LAN game over mDNS and wait for a client.",
-        1 => "Join using the configured descriptor path.",
+        1 => "Find a LAN host with mDNS and join automatically.",
         2 => "Reconnect the current online session.",
         3 => "Edit the descriptor path.",
         4 => "Inspect the descriptor currently on disk.",
@@ -817,9 +817,9 @@ fn draw_inventory_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
 fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let options = [
         "Host LAN game (mDNS)",
-        "Join descriptor session",
+        "Join LAN game (auto-discover)",
         "Reconnect",
-        "Descriptor path",
+        "Advanced descriptor path",
         "Inspect descriptor file",
         "Host bind addr",
         "Host advertise addr",

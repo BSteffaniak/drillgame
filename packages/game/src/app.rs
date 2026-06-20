@@ -217,6 +217,43 @@ impl OnlineTaskDispatcher {
         });
     }
 
+    fn spawn_join_lan(&mut self) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.pending_completion = Some(receiver);
+        runtime.spawn(async move {
+            let result = async {
+                let browser = crate::lan_discovery::LanDiscoveryBrowser::new()
+                    .map_err(|error| format!("LAN discovery failed: {error}"))?;
+                let games = browser
+                    .browse_for(std::time::Duration::from_secs(3))
+                    .map_err(|error| format!("LAN browse failed: {error}"))?;
+                let game = games
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "No Drillgame LAN hosts found via mDNS".to_owned())?;
+                let descriptor = crate::lan_discovery::fetch_descriptor(game.descriptor_addr)
+                    .map_err(|error| format!("LAN descriptor fetch failed: {error}"))?;
+                let path = std::env::temp_dir().join(format!(
+                    "drillgame-lan-join-{}-{}.json",
+                    std::process::id(),
+                    game.session_id.replace(['/', ':', '\\'], "-")
+                ));
+                let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
+                std::fs::write(&path, json).map_err(|error| error.to_string())?;
+                let mut local_game = GameState::new();
+                RealOnlineSessionController::connect_descriptor_client(&mut local_game, &path)
+                    .await
+                    .map(|controller| (controller, path))
+                    .map_err(|error| format!("{error:?}"))
+            }
+            .await;
+            let _ignored = sender.send(OnlineTaskCompletion::JoinedDescriptor(result));
+        });
+    }
+
     fn spawn_connect(&mut self) {
         let Some(runtime) = &self.runtime else {
             return;
@@ -249,6 +286,10 @@ impl OnlineTaskDispatcher {
         });
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "online task dispatcher keeps request routing and shutdown policy together"
+    )]
     fn drain_and_execute(&mut self, game: &mut GameState) {
         self.poll_descriptor_accept(game);
         self.poll_completions(game);
@@ -294,6 +335,11 @@ impl OnlineTaskDispatcher {
             }
             OnlineNetworkTaskRequest::JoinDescriptorFile { path } => {
                 self.spawn_join_descriptor(path);
+            }
+            OnlineNetworkTaskRequest::JoinLanGame => {
+                "Scanning LAN for Drillgame hosts via mDNS."
+                    .clone_into(&mut game.online_session_status_message);
+                self.spawn_join_lan();
             }
             OnlineNetworkTaskRequest::ReconnectDirectConnect => {
                 if let Some(controller) = self.controller.take() {
