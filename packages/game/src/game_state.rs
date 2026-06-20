@@ -1054,6 +1054,28 @@ pub struct OnlineTerrainSyncMarkerBatch {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlinePauseSessionPresentation {
+    pub active: bool,
+    pub heading: String,
+    pub lines: Vec<String>,
+    pub primary_action: String,
+    pub save_warning: Option<String>,
+}
+
+impl OnlinePauseSessionPresentation {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            active: false,
+            heading: "Online session".to_owned(),
+            lines: vec!["No online session is active.".to_owned()],
+            primary_action: "Open Online Session menu to host or join.".to_owned(),
+            save_warning: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineGameplayHudPresentation {
     pub visible: bool,
     pub role_label: &'static str,
@@ -4261,6 +4283,7 @@ pub enum PauseOption {
     Resume,
     Save,
     Load,
+    OnlineSession,
     Options,
     ExitToDesktop,
 }
@@ -4292,10 +4315,11 @@ impl TitleOption {
 }
 
 impl PauseOption {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Resume,
         Self::Save,
         Self::Load,
+        Self::OnlineSession,
         Self::Options,
         Self::ExitToDesktop,
     ];
@@ -4306,6 +4330,7 @@ impl PauseOption {
             Self::Resume => "Resume",
             Self::Save => "Save Game",
             Self::Load => "Load Game",
+            Self::OnlineSession => "Online Session",
             Self::Options => "Options",
             Self::ExitToDesktop => "Exit to Desktop",
         }
@@ -5982,7 +6007,7 @@ impl GameState {
         ) || self.online_host_owns_save
     }
 
-    const fn online_save_exit_policy(&self) -> OnlineSaveExitPolicy {
+    pub const fn online_save_exit_policy(&self) -> OnlineSaveExitPolicy {
         let local_allowed = self.can_write_local_save();
         OnlineSaveExitPolicy {
             save_authority: if local_allowed {
@@ -6440,6 +6465,91 @@ impl GameState {
     #[must_use]
     pub fn online_lobby_participant_lines(&self) -> Vec<String> {
         self.online_lobby_presentation().lines()
+    }
+
+    #[must_use]
+    pub const fn online_session_active(&self) -> bool {
+        matches!(
+            self.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+                | OnlineSessionUxState::Timeout
+                | OnlineSessionUxState::Error
+        )
+    }
+
+    #[must_use]
+    pub fn online_pause_session_presentation(&self) -> OnlinePauseSessionPresentation {
+        if !self.online_session_active() {
+            return OnlinePauseSessionPresentation::empty();
+        }
+        let save_policy = self.online_save_exit_policy();
+        let remote_name = self
+            .online_remote_player_name
+            .clone()
+            .unwrap_or_else(|| "waiting for remote player".to_owned());
+        let slot = self
+            .online_player_slot
+            .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string());
+        let heading = format!("Online {} session", self.online_role_label());
+        let primary_action = if matches!(self.online_session_state, OnlineSessionUxState::Connected)
+        {
+            "Choose Online Session to manage ready/start/reconnect/shutdown without force-kill."
+                .to_owned()
+        } else {
+            "Choose Online Session to inspect, reconnect, or safely shut down this session."
+                .to_owned()
+        };
+        let save_warning = (!save_policy.local_save_allowed).then(|| {
+            "Host owns this online save: local save/load are blocked on this joined client."
+                .to_owned()
+        });
+        let mut lines = vec![
+            format!(
+                "State: {:?} | slot {} | {}",
+                self.online_session_state,
+                slot,
+                if self.online_host_owns_save {
+                    "host owns save"
+                } else {
+                    "remote host owns save"
+                }
+            ),
+            format!(
+                "Remote: {remote_name} | connected={} | ready={}",
+                yes_no(self.online_remote_player_connected),
+                yes_no(self.online_remote_player_ready)
+            ),
+            format!(
+                "Local ready={} | save/load allowed={}",
+                yes_no(self.online_local_ready),
+                yes_no(save_policy.local_save_allowed)
+            ),
+        ];
+        if !self.online_last_replicated_player_status.is_empty() {
+            lines.push(format!(
+                "Player sync: {}",
+                self.online_last_replicated_player_status
+            ));
+        }
+        if !self.online_last_terrain_status.is_empty() {
+            lines.push(format!("Terrain sync: {}", self.online_last_terrain_status));
+        }
+        if !self.online_last_session_boundary_status.is_empty() {
+            lines.push(format!(
+                "Boundary: {}",
+                self.online_last_session_boundary_status
+            ));
+        }
+        OnlinePauseSessionPresentation {
+            active: true,
+            heading,
+            lines,
+            primary_action,
+            save_warning,
+        }
     }
 
     #[must_use]
@@ -7643,6 +7753,10 @@ impl GameState {
                 }
                 self.modal = Some(ModalScreen::LoadSlots);
                 self.selected_menu_item = 0;
+            }
+            PauseOption::OnlineSession => {
+                self.modal = Some(ModalScreen::OnlineMultiplayer);
+                self.selected_menu_item = if self.online_session_active() { 11 } else { 0 };
             }
             PauseOption::Options => {
                 self.modal = Some(ModalScreen::Options);

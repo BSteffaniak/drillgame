@@ -2389,27 +2389,77 @@ fn draw_unsaved_exit_confirm(draw: &mut RaylibDrawHandle<'_>, game: &GameState) 
 
 pub(super) fn draw_pause(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color::new(0, 0, 0, 150));
-    draw.draw_rectangle(430, 170, 420, 360, Color::new(0, 0, 0, 220));
-    draw.draw_rectangle_lines(430, 170, 420, 360, Color::RAYWHITE);
-    draw.draw_text("PAUSED", 548, 200, 44, Color::RAYWHITE);
+    draw.draw_rectangle(360, 150, 560, 420, Color::new(0, 0, 0, 220));
+    draw.draw_rectangle_lines(360, 150, 560, 420, Color::RAYWHITE);
+    draw.draw_text("PAUSED", 548, 182, 44, Color::RAYWHITE);
 
     for (index, option) in PauseOption::ALL.iter().enumerate() {
-        let y = 300 + i32::try_from(index).unwrap_or(i32::MAX) * 42;
-        let color = if index == game.selected_pause_item {
-            Color::YELLOW
-        } else {
-            Color::WHITE
+        let y = 270 + i32::try_from(index).unwrap_or(i32::MAX) * 38;
+        let selected = index == game.selected_pause_item;
+        let save_blocked = matches!(option, PauseOption::Save | PauseOption::Load)
+            && !game.online_save_exit_policy().local_save_allowed;
+        let color = match (selected, save_blocked) {
+            (true, true) => Color::ORANGE,
+            (false, true) => Color::GRAY,
+            (true, false) => Color::YELLOW,
+            (false, false) => Color::WHITE,
         };
-        draw.draw_text(option.label(), 520, y, 24, color);
+        draw.draw_text(option.label(), 430, y, 24, color);
     }
+
+    draw_online_pause_panel(draw, game, 610, 264);
 
     draw.draw_text(
         "Up/Down select | Enter/E confirm | Esc/P resume",
-        455,
-        455,
+        400,
+        535,
         18,
         Color::LIGHTGRAY,
     );
+}
+
+fn draw_online_pause_panel(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
+    let presentation = game.online_pause_session_presentation();
+    draw.draw_rectangle(x - 12, y - 16, 280, 230, Color::new(0, 16, 35, 180));
+    draw.draw_rectangle_lines(
+        x - 12,
+        y - 16,
+        280,
+        230,
+        if presentation.active {
+            Color::SKYBLUE
+        } else {
+            Color::DARKGRAY
+        },
+    );
+    draw.draw_text(&presentation.heading, x, y, 18, Color::SKYBLUE);
+    for (index, line) in presentation.lines.iter().take(6).enumerate() {
+        let color = if line.contains("blocked") || line.contains("remote host owns") {
+            Color::YELLOW
+        } else if line.contains("waiting") {
+            Color::GRAY
+        } else {
+            Color::RAYWHITE
+        };
+        draw.draw_text(
+            line,
+            x,
+            y + 28 + i32::try_from(index).unwrap_or(i32::MAX) * 22,
+            12,
+            color,
+        );
+    }
+    let action_y = y + 166;
+    draw.draw_text(
+        &presentation.primary_action,
+        x,
+        action_y,
+        12,
+        Color::LIGHTGRAY,
+    );
+    if let Some(warning) = &presentation.save_warning {
+        draw.draw_text(warning, x, action_y + 34, 12, Color::ORANGE);
+    }
 }
 
 fn format_duration(seconds: f32) -> String {
