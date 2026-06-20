@@ -448,19 +448,12 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         );
     }
 
-    fn draw_wrapped(
-        text: &str,
-        x: f32,
-        mut y: f32,
-        width: f32,
-        kind: TextKind,
-        color: Color,
-    ) -> f32 {
-        for line in wrap_text(text, width, kind) {
-            Self::draw_text(&line, x, y, kind, color);
-            y += font_metrics(kind).line_height;
+    fn draw_wrapped(text: &str, x: f32, y: f32, width: f32, kind: TextKind, color: Color) -> f32 {
+        let layout = layout_text(text, width, kind);
+        for line in &layout.lines {
+            Self::draw_text(&line.text, x + line.x, y + line.y, kind, color);
         }
-        y + 4.0
+        y + layout.size.height + 4.0
     }
 
     fn draw_text(text: &str, x: f32, y: f32, kind: TextKind, color: Color) {
@@ -639,7 +632,50 @@ fn ratio(value: f32, max: f32) -> f32 {
 }
 
 fn wrapped_height(text: &str, width: f32, kind: TextKind) -> f32 {
-    wrap_text(text, width, kind).len() as f32 * font_metrics(kind).line_height + 4.0
+    layout_text(text, width, kind).size.height + 4.0
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TextLineLayout {
+    text: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    baseline_y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TextLayout {
+    lines: Vec<TextLineLayout>,
+    size: Size,
+}
+
+fn layout_text(text: &str, width: f32, kind: TextKind) -> TextLayout {
+    let metrics = font_metrics(kind);
+    let lines = wrap_text(text, width, kind)
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let y = index as f32 * metrics.line_height;
+            let measured_width = measure_text(&text, kind).min(width.max(0.0));
+            TextLineLayout {
+                text,
+                x: 0.0,
+                y,
+                width: measured_width,
+                baseline_y: y + metrics.baseline,
+            }
+        })
+        .collect::<Vec<_>>();
+    let height = lines.len() as f32 * metrics.line_height;
+    let measured_width = lines.iter().map(|line| line.width).fold(0.0_f32, f32::max);
+    TextLayout {
+        lines,
+        size: Size {
+            width: measured_width,
+            height,
+        },
+    }
 }
 
 fn wrap_text(text: &str, width: f32, kind: TextKind) -> Vec<String> {
@@ -676,8 +712,34 @@ fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
     }
 }
 
-fn font_for_role(_role: FontRole) -> ffi::Font {
-    unsafe { ffi::GetFontDefault() }
+#[derive(Clone, Copy, Debug)]
+struct UiFonts {
+    title: ffi::Font,
+    heading: ffi::Font,
+    small: ffi::Font,
+}
+
+impl UiFonts {
+    fn raylib_default() -> Self {
+        let font = unsafe { ffi::GetFontDefault() };
+        Self {
+            title: font,
+            heading: font,
+            small: font,
+        }
+    }
+
+    const fn font(self, role: FontRole) -> ffi::Font {
+        match role {
+            FontRole::Title => self.title,
+            FontRole::Heading => self.heading,
+            FontRole::Small => self.small,
+        }
+    }
+}
+
+fn font_for_role(role: FontRole) -> ffi::Font {
+    UiFonts::raylib_default().font(role)
 }
 
 const fn font_role(kind: TextKind) -> FontRole {
@@ -1407,6 +1469,26 @@ mod tests {
     fn text_wrap_respects_max_width_for_word_boundaries() {
         let lines = wrap_text_with_measure("alpha beta gamma", 10.0, |text| text.len() as f32);
         assert_eq!(lines, ["alpha beta", "gamma"]);
+    }
+
+    #[test]
+    fn text_layout_tracks_line_boxes_and_baselines() {
+        let layout = layout_text("alpha", 200.0, TextKind::Small);
+        assert_eq!(layout.lines.len(), 1);
+        assert_near(layout.lines[0].y, 0.0);
+        assert_near(
+            layout.lines[0].baseline_y,
+            font_metrics(TextKind::Small).baseline,
+        );
+        assert!(layout.size.height >= font_metrics(TextKind::Small).line_height);
+    }
+
+    #[test]
+    fn ui_fonts_default_routes_all_roles_to_font_handles() {
+        let fonts = UiFonts::raylib_default();
+        let _title = fonts.font(FontRole::Title);
+        let _heading = fonts.font(FontRole::Heading);
+        let _small = fonts.font(FontRole::Small);
     }
 
     #[test]
