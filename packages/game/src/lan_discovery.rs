@@ -6,7 +6,7 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -224,19 +224,50 @@ pub fn fetch_descriptor(
     serde_json::from_slice(&json).map_err(std::io::Error::other)
 }
 
+#[must_use]
+pub const fn patch_descriptor_addr_for_lan(
+    mut descriptor: QuinnHostConnectionDescriptor,
+    discovered_game_addr: SocketAddr,
+) -> QuinnHostConnectionDescriptor {
+    descriptor.host_addr = patch_non_lan_addr(descriptor.host_addr, discovered_game_addr.ip());
+    descriptor
+}
+
+fn resolved_service_addr(info: &ResolvedService) -> Option<SocketAddr> {
+    info.get_addresses()
+        .iter()
+        .find(|address| address.is_ipv4())
+        .map(mdns_sd::ScopedIp::to_ip_addr)
+        .map(|address| SocketAddr::new(address, info.get_port()))
+}
+
+const fn patch_non_lan_addr(addr: SocketAddr, fallback_ip: IpAddr) -> SocketAddr {
+    if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+        SocketAddr::new(fallback_ip, addr.port())
+    } else {
+        addr
+    }
+}
+
+#[must_use]
+pub fn likely_lan_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).ok()?;
+    socket
+        .connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 80))
+        .ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
 fn discovered_game_from_service(info: &ResolvedService) -> Option<LanDiscoveredGame> {
     let properties = info.get_properties();
     let descriptor_addr = properties.get("descriptor_addr")?.val_str().parse().ok()?;
     let game_addr = properties
         .get("game_addr")
         .and_then(|property| property.val_str().parse().ok())
-        .or_else(|| {
-            info.get_addresses()
-                .iter()
-                .find(|address| address.is_ipv4())
-                .map(mdns_sd::ScopedIp::to_ip_addr)
-                .map(|address| SocketAddr::new(address, info.get_port()))
-        })?;
+        .or_else(|| resolved_service_addr(info))?;
+    let descriptor_addr = patch_non_lan_addr(descriptor_addr, game_addr.ip());
+    let game_addr = patch_non_lan_addr(game_addr, descriptor_addr.ip());
     Some(LanDiscoveredGame {
         instance_name: info.get_fullname().split('.').next()?.to_owned(),
         host_name: info.get_hostname().to_owned(),

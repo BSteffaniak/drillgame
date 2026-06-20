@@ -3550,8 +3550,15 @@ impl RealOnlineSessionController {
             },
         )?;
         let mut descriptor = listener.connection_descriptor()?;
-        if game.online_host_advertise_addr.port() != 0 {
+        if !publish_lan && game.online_host_advertise_addr.port() != 0 {
             descriptor.host_addr = game.online_host_advertise_addr;
+        }
+        if publish_lan
+            && (descriptor.host_addr.ip().is_loopback()
+                || descriptor.host_addr.ip().is_unspecified())
+            && let Some(lan_ip) = crate::lan_discovery::likely_lan_ip()
+        {
+            descriptor.host_addr = SocketAddr::new(lan_ip, descriptor.host_addr.port());
         }
         let json = serde_json::to_string(&descriptor).map_err(|error| {
             crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
@@ -3574,6 +3581,10 @@ impl RealOnlineSessionController {
             let advertisement =
                 crate::lan_discovery::LanGameAdvertisement::from_descriptor(&descriptor)
                     .with_descriptor_addr(descriptor_addr);
+            game.online_session_status_message = format!(
+                "LAN mDNS host ready as `{}` at {}; descriptor endpoint {}; waiting for client.",
+                advertisement.instance_name, descriptor.host_addr, descriptor_addr
+            );
             let publisher = crate::lan_discovery::LanDiscoveryPublisher::publish(&advertisement)
                 .map_err(|error| {
                     crate::multiplayer::QuinnOnlineSessionError::Accept(format!(
@@ -4636,6 +4647,29 @@ impl RealOnlineSessionController {
     #[must_use]
     pub const fn mode_label(&self) -> &'static str {
         self.mode.label()
+    }
+
+    #[must_use]
+    pub fn lan_host_status_line(&self) -> Option<String> {
+        match &self.mode {
+            RealOnlineSessionMode::DescriptorHostPending {
+                descriptor,
+                lan_publisher: Some(_),
+                ..
+            }
+            | RealOnlineSessionMode::DescriptorHostAccepted {
+                descriptor,
+                lan_publisher: Some(_),
+                ..
+            } => Some(format!(
+                "LAN host ready at {}; advertised by mDNS; waiting for client.",
+                descriptor.host_addr
+            )),
+            RealOnlineSessionMode::CombinedLocalhost(_)
+            | RealOnlineSessionMode::DescriptorHostPending { .. }
+            | RealOnlineSessionMode::DescriptorHostAccepted { .. }
+            | RealOnlineSessionMode::DescriptorClientConnected { .. } => None,
+        }
     }
 
     /// Drive one real network tick from a caller-provided payload and apply online UX state.

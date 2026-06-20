@@ -850,7 +850,7 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
     let lobby = game.online_lobby_presentation();
     UiLayout::screen(draw).modal_with_render_plan(
         "Online Multiplayer",
-        "Direct-connect setup for two running game windows. Host writes a descriptor; client joins with that file.",
+        "LAN setup for two computers. Host publishes via mDNS; client auto-discovers and fetches the descriptor internally.",
         &ModalContent::new(vec![
             Section::new("Actions", Color::SKYBLUE, option_items),
             Section::new(
@@ -862,6 +862,15 @@ fn draw_online_multiplayer_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState)
                     SectionItem::stat("Host advertise", game.online_host_advertise_addr.to_string(), Color::LIGHTGRAY),
                     SectionItem::stat("Client bind", game.online_client_bind_addr.to_string(), Color::LIGHTGRAY),
                 ],
+            ),
+            Section::new(
+                "Status",
+                Color::ORANGE,
+                game.online_multiplayer_status_lines()
+                    .into_iter()
+                    .take(8)
+                    .map(SectionItem::text)
+                    .collect(),
             ),
             Section::new(
                 "Lobby",

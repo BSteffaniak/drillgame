@@ -108,6 +108,10 @@ impl OnlineTaskDispatcher {
                         "waiting for descriptor client",
                     ),
                 );
+                if let Some(status) = controller.lan_host_status_line() {
+                    game.online_session_status_message = status;
+                    game.message = game.online_session_status_message.clone();
+                }
                 self.spawn_descriptor_accept(controller);
             }
             OnlineTaskCompletion::JoinedDescriptor(Ok((controller, path))) => {
@@ -234,8 +238,11 @@ impl OnlineTaskDispatcher {
                     .into_iter()
                     .next()
                     .ok_or_else(|| "No Drillgame LAN hosts found via mDNS".to_owned())?;
-                let descriptor = crate::lan_discovery::fetch_descriptor(game.descriptor_addr)
-                    .map_err(|error| format!("LAN descriptor fetch failed: {error}"))?;
+                let mut descriptor =
+                    crate::lan_discovery::fetch_descriptor(game.descriptor_addr)
+                        .map_err(|error| format!("LAN descriptor fetch failed: {error}"))?;
+                descriptor =
+                    crate::lan_discovery::patch_descriptor_addr_for_lan(descriptor, game.game_addr);
                 let path = std::env::temp_dir().join(format!(
                     "drillgame-lan-join-{}-{}.json",
                     std::process::id(),
