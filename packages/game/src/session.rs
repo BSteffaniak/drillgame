@@ -2300,16 +2300,15 @@ impl WorldState {
         radius_y: i32,
     ) -> Vec<TilePosition> {
         let discovered = self.discovered_tiles.entry(player_id).or_default();
-        let mut revealed = Vec::new();
+        let mut visible = Vec::new();
         for y in center.y - radius_y.max(0)..=center.y + radius_y.max(0) {
             for x in center.x - radius_x.max(0)..=center.x + radius_x.max(0) {
                 let position = TilePosition { x, y };
-                if discovered.insert(position) {
-                    revealed.push(position);
-                }
+                discovered.insert(position);
+                visible.push(position);
             }
         }
-        revealed
+        visible
     }
 
     fn reveal_scanner_positions(
@@ -6748,9 +6747,12 @@ impl GameSession {
         let previous_player = self.game.player.clone();
         let previous_request_exit = self.game.request_exit;
         self.game.update(legacy_adapter_input, delta_seconds);
-        self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
         self.sync_client_settings_from_legacy_game();
         self.sync_legacy_mutations_into_world_preserving_authoritative_movement(&previous_player);
+        if self.game.run_mode == RunMode::Playing {
+            let _revealed = self.reveal_legacy_exploration_from_world_player(LOCAL_PLAYER_ID);
+        }
+        self.capture_legacy_events(&previous_message, &previous_player, previous_request_exit);
     }
 
     fn legacy_adapter_input(&self, mut input: PlayerInput) -> PlayerInput {
