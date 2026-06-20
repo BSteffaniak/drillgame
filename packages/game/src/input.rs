@@ -191,9 +191,9 @@ fn read_primary_keyboard_input_with_options(
         interact: raylib.is_key_pressed(KeyboardKey::KEY_E),
         confirm: raylib.is_key_pressed(KeyboardKey::KEY_ENTER)
             || raylib.is_key_pressed(KeyboardKey::KEY_E),
-        cancel: raylib.is_key_pressed(KeyboardKey::KEY_BACKSPACE)
+        cancel: raylib.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
+        pause: raylib.is_key_pressed(KeyboardKey::KEY_P)
             || raylib.is_key_pressed(KeyboardKey::KEY_ESCAPE),
-        pause: raylib.is_key_pressed(KeyboardKey::KEY_P),
         menu_up: raylib.is_key_pressed(KeyboardKey::KEY_UP)
             || raylib.is_key_pressed(KeyboardKey::KEY_W),
         menu_down: raylib.is_key_pressed(KeyboardKey::KEY_DOWN)

@@ -7259,8 +7259,25 @@ impl GameSession {
         input: PlayerInput,
         delta_seconds: f32,
     ) -> SessionAuthorityUpdateSummary {
+        self.update_frame_from_session_authority_with_local_routing(input, delta_seconds, true)
+    }
+
+    pub fn update_shell_frame_from_session_authority(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+    ) -> SessionAuthorityUpdateSummary {
+        self.update_frame_from_session_authority_with_local_routing(input, delta_seconds, false)
+    }
+
+    fn update_frame_from_session_authority_with_local_routing(
+        &mut self,
+        input: PlayerInput,
+        delta_seconds: f32,
+        route_local_gameplay: bool,
+    ) -> SessionAuthorityUpdateSummary {
         if self.game.run_mode == RunMode::Playing {
-            self.update_authoritative_gameplay_frame(input, delta_seconds)
+            self.update_authoritative_gameplay_frame(input, delta_seconds, route_local_gameplay)
         } else {
             self.update_legacy_frame(input, delta_seconds)
         }
@@ -7270,12 +7287,13 @@ impl GameSession {
         &mut self,
         input: PlayerInput,
         delta_seconds: f32,
+        route_local_gameplay: bool,
     ) -> SessionAuthorityUpdateSummary {
         let save_load = self.handle_session_save_load_input(input);
         let input = Self::input_without_session_save_load(input);
         let shell_input = if self.game.modal.is_none() {
             let gameplay_commands = crate::game_state::session_gameplay_commands_from_input(input);
-            if !gameplay_commands.is_empty() {
+            if route_local_gameplay {
                 self.route_local_player_commands(gameplay_commands);
             }
             crate::game_state::input_without_session_gameplay_commands(input)
@@ -12186,6 +12204,90 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_idle_input_keeps_physics_live_and_clears_sticky_movement() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        let start_y = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists")
+            .y;
+
+        let idle_summary = session
+            .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
+
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert!(!idle_summary.legacy_bridge_active());
+        assert!(idle_summary.local_movement_authority);
+        assert!(player.y > start_y);
+        assert!(player.velocity_y > 0.0);
+        assert_eq!(
+            session.latest_local_movement_intent,
+            Some(super::PlayerMovementIntent {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            })
+        );
+
+        let _moving = session.update_frame_from_session_authority(
+            PlayerInput {
+                horizontal: 1.0,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(
+            (session
+                .latest_local_movement_intent
+                .expect("movement intent after moving")
+                .horizontal
+                - 1.0)
+                .abs()
+                < f32::EPSILON
+        );
+
+        let _released = session
+            .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
+        assert_eq!(
+            session.latest_local_movement_intent,
+            Some(super::PlayerMovementIntent {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            })
+        );
+    }
+
+    #[test]
+    fn session_authority_preserves_surface_interact_for_shell_store_entry() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.player.x = TILE_SIZE * 122.0;
+        session.game.player.y = TILE_SIZE * 2.0;
+        let tick = session.current_tick();
+        let game = session.game.clone();
+        session.world_mut().sync_from_legacy_game(tick, &game);
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                interact: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().run_mode, RunMode::Interior);
+        assert_eq!(
+            session.game().interior_zone,
+            Some(crate::economy::SurfaceZone::Shop)
+        );
+    }
+
+    #[test]
     fn production_session_authority_update_maps_real_local_input_into_world_commands() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
@@ -12218,7 +12320,7 @@ mod tests {
     }
 
     #[test]
-    fn production_session_authority_strips_gameplay_input_before_shell_update() {
+    fn production_session_authority_preserves_shell_boundary_input_after_routing_movement() {
         let mut session = GameSession::new();
         session.game.run_mode = RunMode::Playing;
         session.game.modal = None;
@@ -12232,7 +12334,7 @@ mod tests {
             FIXED_DELTA_SECONDS,
         );
 
-        assert_eq!(session.game().run_mode, RunMode::Playing);
+        assert_eq!(session.game().run_mode, RunMode::Paused);
         assert_eq!(session.game().modal, None);
         assert_eq!(session.latest_local_authoritative_commands.len(), 2);
         assert!(
@@ -12263,7 +12365,7 @@ mod tests {
             .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
 
         assert!(!summary.legacy_bridge_active());
-        assert_eq!(summary.command_adapter_count, 2);
+        assert_eq!(summary.command_adapter_count, 1);
         let player = session
             .world()
             .player(LOCAL_PLAYER_ID)

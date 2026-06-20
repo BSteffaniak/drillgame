@@ -8,8 +8,7 @@ use crate::{
     },
     input::{
         combine_player_input, read_gamepad_input, read_input, read_input_with_arrow_aliases,
-        read_primary_keyboard_input, read_primary_keyboard_input_with_arrow_aliases,
-        read_secondary_keyboard_input,
+        read_primary_keyboard_input, read_secondary_keyboard_input,
     },
     input_mapping::map_local_input,
     multiplayer::{FIXED_DELTA_SECONDS, PlayerCommand},
@@ -536,24 +535,22 @@ pub fn run() {
         {
             online_tasks.drain_and_execute(session.game_mut());
         }
-        let secondary_input = (session.client_count() > 1).then(|| {
-            let keyboard = read_secondary_keyboard_input(&raylib);
-            read_gamepad_input(&raylib, 0)
-                .map_or(keyboard, |gamepad| combine_player_input(keyboard, gamepad))
-        });
-        let primary_input = if session.client_count() > 1 {
-            read_primary_keyboard_input(&mut raylib)
-        } else {
-            read_primary_keyboard_input_with_arrow_aliases(&mut raylib)
-        };
-        for local_input in crate::input_mapping::local_split_screen_inputs(
-            crate::multiplayer::LOCAL_CLIENT_ID,
-            primary_input,
-            session.secondary_local_client_id(),
-            secondary_input,
-        ) {
-            let _batch =
-                session.route_command_producer(local_input.client_id, local_input.producer);
+        if split_screen_active {
+            let secondary_input = Some({
+                let keyboard = read_secondary_keyboard_input(&raylib);
+                read_gamepad_input(&raylib, 0)
+                    .map_or(keyboard, |gamepad| combine_player_input(keyboard, gamepad))
+            });
+            let primary_input = read_primary_keyboard_input(&mut raylib);
+            for local_input in crate::input_mapping::local_split_screen_inputs(
+                crate::multiplayer::LOCAL_CLIENT_ID,
+                primary_input,
+                session.secondary_local_client_id(),
+                secondary_input,
+            ) {
+                let _batch =
+                    session.route_command_producer(local_input.client_id, local_input.producer);
+            }
         }
 
         let authority_input = if split_screen_active {
@@ -561,8 +558,11 @@ pub fn run() {
         } else {
             input
         };
-        let authority_update =
-            session.update_frame_from_session_authority(authority_input, delta_seconds);
+        let authority_update = if split_screen_active {
+            session.update_shell_frame_from_session_authority(authority_input, delta_seconds)
+        } else {
+            session.update_frame_from_session_authority(authority_input, delta_seconds)
+        };
         if session.should_exit() {
             online_tasks.drain_and_execute(session.game_mut());
         }
@@ -637,7 +637,8 @@ mod tests {
         }
 
         let shell_input = crate::game_state::input_without_session_gameplay_commands(primary_input);
-        let summary = session.update_frame_from_session_authority(shell_input, FIXED_DELTA_SECONDS);
+        let summary =
+            session.update_shell_frame_from_session_authority(shell_input, FIXED_DELTA_SECONDS);
 
         assert!(!summary.legacy_bridge_active());
         assert!(summary.local_movement_authority);
@@ -657,10 +658,7 @@ mod tests {
                 })
         );
         assert_eq!(session.game().run_mode, RunMode::Playing);
-        assert_eq!(
-            session.game().modal,
-            Some(crate::game_state::ModalScreen::Map)
-        );
+        assert_eq!(session.game().modal, None);
     }
 
     #[test]

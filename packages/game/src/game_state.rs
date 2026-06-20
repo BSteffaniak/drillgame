@@ -6361,6 +6361,7 @@ impl GameState {
             self.run_mode = RunMode::Paused;
             return SessionShellUpdateSummary::Paused;
         }
+        self.handle_interaction(input);
         self.apply_depth_pressure(delta_seconds);
         self.apply_lava_damage(delta_seconds);
         self.update_depth_milestones();
@@ -11912,13 +11913,11 @@ fn input_changes_game(input: PlayerInput) -> bool {
 
 pub fn session_gameplay_commands_from_input(input: PlayerInput) -> Vec<PlayerCommand> {
     let mut commands = Vec::new();
-    if input.horizontal.abs() > f32::EPSILON || input.thrust || input.drill_down {
-        commands.push(PlayerCommand::Movement {
-            horizontal: input.horizontal.clamp(-1.0, 1.0),
-            thrust: input.thrust,
-            drill_down: input.drill_down,
-        });
-    }
+    commands.push(PlayerCommand::Movement {
+        horizontal: input.horizontal.clamp(-1.0, 1.0),
+        thrust: input.thrust,
+        drill_down: input.drill_down,
+    });
     if input.interact {
         commands.push(PlayerCommand::Interact);
     }
@@ -11956,9 +11955,6 @@ pub const fn input_without_session_gameplay_commands(mut input: PlayerInput) -> 
     input.horizontal = 0.0;
     input.thrust = false;
     input.drill_down = false;
-    input.interact = false;
-    input.confirm = false;
-    input.cancel = false;
     input.bomb = false;
     input.scan = false;
     input.place_relay = false;
@@ -12015,9 +12011,9 @@ mod tests {
         assert!(shell_input.horizontal.abs() < f32::EPSILON);
         assert!(!shell_input.thrust);
         assert!(!shell_input.drill_down);
-        assert!(!shell_input.interact);
-        assert!(!shell_input.confirm);
-        assert!(!shell_input.cancel);
+        assert!(shell_input.interact);
+        assert!(shell_input.confirm);
+        assert!(shell_input.cancel);
         assert!(!shell_input.scan);
         assert!(!shell_input.bomb);
         assert!(!shell_input.place_relay);

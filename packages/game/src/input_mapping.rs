@@ -199,10 +199,17 @@ mod tests {
     }
 
     #[test]
-    fn does_not_emit_idle_movement_commands() {
+    fn emits_idle_movement_commands_to_clear_authoritative_intents() {
         let mapped = map_local_input(PlayerInput::default());
 
-        assert!(mapped.player_commands.is_empty());
+        assert_eq!(
+            mapped.player_commands,
+            vec![PlayerCommand::Movement {
+                horizontal: 0.0,
+                thrust: false,
+                drill_down: false,
+            }]
+        );
     }
 
     #[test]
