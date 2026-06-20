@@ -4990,7 +4990,9 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::SalvageLaunchDrone
             | crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart
             | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
-            | crate::game_state::SessionServiceRequest::SalvageSellScrapTip => None,
+            | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
+            | crate::game_state::SessionServiceRequest::SellScanData
+            | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5022,7 +5024,9 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::SalvageLaunchDrone
                 | crate::game_state::SessionServiceRequest::SalvageRecoverWreckedPart
                 | crate::game_state::SessionServiceRequest::SalvageClearCollapseZones
-                | crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {}
+                | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
+                | crate::game_state::SessionServiceRequest::SellScanData
+                | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5143,6 +5147,14 @@ impl GameSession {
                 crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {
                     self.game.sound_cues.push(SoundCue::Sell);
                     "Mara bought scrap telemetry for 35 credits.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::SellScanData => {
+                    self.game.sound_cues.push(SoundCue::Sell);
+                    "Scanner Lab bought mapped contacts.".to_owned()
+                }
+                crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {
+                    self.game.sound_cues.push(SoundCue::Sell);
+                    self.game.last_depot_receipt.clone()
                 }
             };
         } else {
@@ -5389,6 +5401,55 @@ impl GameSession {
             }
             crate::game_state::SessionServiceRequest::SalvageSellScrapTip => {
                 player.credits = player.credits.saturating_add(35);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::SellScanData => {
+                if self.game.town_development.scanner_lab_level == 0
+                    || self.game.scan_markers.is_empty()
+                {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let marker_count = u32::try_from(self.game.scan_markers.len()).unwrap_or(u32::MAX);
+                let payout = marker_count.saturating_mul(
+                    6 + u32::from(self.game.town_development.scanner_lab_level) * 4,
+                );
+                self.game.scan_markers.clear();
+                player.credits = player.credits.saturating_add(payout);
+                self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo => {
+                if self.game.town_development.depot_level < 3 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                let low_grade = [
+                    crate::terrain::MineralKind::Copper,
+                    crate::terrain::MineralKind::Iron,
+                    crate::terrain::MineralKind::Silver,
+                ];
+                let mut units = 0;
+                let mut payout: u32 = 0;
+                for mineral in low_grade {
+                    let Some(count) = player.cargo.remove(&mineral) else {
+                        continue;
+                    };
+                    units += count;
+                    payout = payout.saturating_add(mineral.value().saturating_mul(count));
+                }
+                if payout == 0 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                player.credits = player.credits.saturating_add(payout);
+                self.game.total_earnings = self.game.total_earnings.saturating_add(payout);
+                self.game.last_depot_receipt = format!(
+                    "AUTO-SORT sold {units} low-grade unit(s) for {payout} cr. Rare minerals and artifacts preserved."
+                );
+                self.game
+                    .depot_receipts
+                    .push(self.game.last_depot_receipt.clone());
+                if self.game.depot_receipts.len() > 5 {
+                    self.game.depot_receipts.remove(0);
+                }
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }

@@ -1968,6 +1968,8 @@ pub enum SessionServiceRequest {
     SalvageRecoverWreckedPart,
     SalvageClearCollapseZones,
     SalvageSellScrapTip,
+    SellScanData,
+    AutoSortLowGradeCargo,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9850,8 +9852,8 @@ impl GameState {
                 self.confirm_complete_contract();
             }
             1 => self.queue_sell_cargo(),
-            2 => self.auto_sort_low_grade_cargo(),
-            3 => self.sell_scan_data(),
+            2 => self.queue_auto_sort_low_grade_cargo(),
+            3 => self.queue_sell_scan_data(),
             _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
     }
@@ -9893,61 +9895,14 @@ impl GameState {
         }
     }
 
-    fn sell_scan_data(&mut self) {
-        if self.town_development.scanner_lab_level == 0 {
-            "Scanner Lab must be funded before scan data has a buyer."
-                .clone_into(&mut self.message);
-            return;
-        }
-        let marker_count = u32::try_from(self.scan_markers.len()).unwrap_or(u32::MAX);
-        if marker_count == 0 {
-            "No scan markers to sell. Pulse the scanner or deploy survey drones first."
-                .clone_into(&mut self.message);
-            return;
-        }
-        let payout =
-            marker_count.saturating_mul(6 + u32::from(self.town_development.scanner_lab_level) * 4);
-        self.scan_markers.clear();
-        self.player.credits = self.player.credits.saturating_add(payout);
-        self.total_earnings = self.total_earnings.saturating_add(payout);
-        self.sound_cues.push(SoundCue::Sell);
-        self.message =
-            format!("Scanner Lab bought {marker_count} mapped contact(s) for {payout} credits.");
+    fn queue_sell_scan_data(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SellScanData);
+        "Scan data sale queued for authoritative session.".clone_into(&mut self.message);
     }
 
-    fn auto_sort_low_grade_cargo(&mut self) {
-        if self.town_development.depot_level < 3 {
-            "Depot auto-sort rules unlock at Depot level 3.".clone_into(&mut self.message);
-            return;
-        }
-        let low_grade = [MineralKind::Copper, MineralKind::Iron, MineralKind::Silver];
-        let mut units = 0;
-        let mut payout = 0;
-        for mineral in low_grade {
-            let Some(count) = self.player.cargo.remove(&mineral) else {
-                continue;
-            };
-            units += count;
-            payout += self.mineral_market_value(mineral).saturating_mul(count);
-        }
-        if payout == 0 {
-            "Auto-sort found no low-grade mineral cargo. Rare cargo preserved."
-                .clone_into(&mut self.message);
-            return;
-        }
-        self.player.credits = self.player.credits.saturating_add(payout);
-        self.total_earnings = self.total_earnings.saturating_add(payout);
-        self.last_depot_receipt = format!(
-            "AUTO-SORT sold {units} low-grade unit(s) for {payout} cr. Rare minerals and artifacts preserved."
-        );
-        self.depot_receipts.push(self.last_depot_receipt.clone());
-        if self.depot_receipts.len() > 5 {
-            self.depot_receipts.remove(0);
-        }
-        self.sound_cues.push(SoundCue::Sell);
-        self.message = format!(
-            "Depot auto-sort sold {units} low-grade unit(s) for {payout} credits; rare cargo kept onboard."
-        );
+    fn queue_auto_sort_low_grade_cargo(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::AutoSortLowGradeCargo);
+        "Depot auto-sort queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn queue_buy_upgrade(&mut self, index: usize) {
@@ -17024,7 +16979,27 @@ mod tests {
             Some(SessionServiceRequest::SellCargo)
         );
         assert_eq!(game.player.cargo_used(), 1);
-        assert!(game.message.contains("authoritative session"));
+        game.modal = Some(ModalScreen::Depot);
+        game.selected_menu_item = 2;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::AutoSortLowGradeCargo)
+        );
+
+        game.modal = Some(ModalScreen::Depot);
+        game.selected_menu_item = 3;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SellScanData)
+        );
     }
 
     #[test]
