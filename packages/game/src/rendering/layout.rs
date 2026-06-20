@@ -50,7 +50,7 @@ enum TextKind {
     Small,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PanelKind {
     Hud,
     Modal,
@@ -95,14 +95,12 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 width: card_width,
                 height: 42.0,
             };
-            self.draw_panel(rect, PanelKind::Hud);
-            Self::draw_text(
+            let mut children = vec![widgets::UiNode::Text(widgets::TextNode::colored(
                 &card.title,
-                rect.x + 6.0,
-                rect.y + 5.0,
                 TextKind::Small,
+                (card_width - 12.0).max(0.0),
                 card.color,
-            );
+            ))];
             match &card.value {
                 HudCardValue::Meter {
                     value,
@@ -110,34 +108,37 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                     fill,
                     danger,
                 } => {
-                    let ratio = ratio(*value, *max);
-                    let fill = if ratio < 0.25 { *danger } else { *fill };
-                    Self::draw_text(
-                        &format!("{value:.0}/{max:.0}"),
-                        rect.x + rect.width - 64.0,
-                        rect.y + 5.0,
+                    children.push(widgets::UiNode::Text(widgets::TextNode::colored(
+                        format!("{value:.0}/{max:.0}"),
                         TextKind::Small,
+                        (card_width - 12.0).max(0.0),
                         Color::LIGHTGRAY,
-                    );
-                    self.draw_bar(
-                        rect.x + 6.0,
-                        rect.y + 25.0,
-                        rect.width - 12.0,
+                    )));
+                    children.push(widgets::UiNode::Meter(widgets::MeterNode::colored(
+                        ratio(*value, *max),
+                        (card_width - 12.0).max(0.0),
                         8.0,
-                        ratio,
-                        fill,
-                    );
+                        *fill,
+                        *danger,
+                    )));
                 }
                 HudCardValue::Text { value } => {
-                    Self::draw_text(
+                    children.push(widgets::UiNode::Text(widgets::TextNode::colored(
                         value,
-                        rect.x + 6.0,
-                        rect.y + 23.0,
                         TextKind::Small,
+                        (card_width - 12.0).max(0.0),
                         Color::RAYWHITE,
-                    );
+                    )));
                 }
             }
+            let mut node = widgets::UiNode::Panel(widgets::PanelNode::with_kind(
+                Insets::symmetric(6.0, 5.0),
+                PanelKind::Hud,
+                widgets::UiNode::Stack(widgets::StackNode::vertical(3.0, children)),
+            ));
+            node.layout(rect);
+            let plan = node.render_plan();
+            self.render_plan(&plan);
         }
 
         if let Some(stats) = details {
@@ -147,25 +148,28 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 width: width.min(560.0),
                 height: 96.0,
             };
-            self.draw_panel(rect, PanelKind::Overlay);
-            Self::draw_text(
+            let mut children = vec![widgets::UiNode::Text(widgets::TextNode::colored(
                 "Diagnostics",
-                rect.x + 8.0,
-                rect.y + 7.0,
                 TextKind::Heading,
+                (rect.width - 16.0).max(0.0),
                 Color::LIME,
-            );
-            let mut cursor = rect.y + 34.0;
+            ))];
             for stat in stats.iter().take(4) {
-                Self::draw_text(
-                    &format!("{}: {}", stat.label, stat.value),
-                    rect.x + 8.0,
-                    cursor,
+                children.push(widgets::UiNode::Text(widgets::TextNode::colored(
+                    format!("{}: {}", stat.label, stat.value),
                     TextKind::Small,
+                    (rect.width - 16.0).max(0.0),
                     stat.color,
-                );
-                cursor += 17.0;
+                )));
             }
+            let mut node = widgets::UiNode::Panel(widgets::PanelNode::with_kind(
+                Insets::symmetric(8.0, 7.0),
+                PanelKind::Overlay,
+                widgets::UiNode::Stack(widgets::StackNode::vertical(5.0, children)),
+            ));
+            node.layout(rect);
+            let plan = node.render_plan();
+            self.render_plan(&plan);
         }
     }
 
@@ -253,8 +257,8 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
     fn render_plan(&mut self, plan: &widgets::RenderPlan) {
         for command in plan.commands() {
             match command {
-                widgets::RenderCommand::Panel { rect } => {
-                    self.draw_panel(*rect, PanelKind::Overlay);
+                widgets::RenderCommand::Panel { rect, kind } => {
+                    self.draw_panel(*rect, *kind);
                 }
                 widgets::RenderCommand::Text {
                     rect,
@@ -765,7 +769,7 @@ const fn font_role(kind: TextKind) -> FontRole {
     reason = "formal widget tree foundation is being introduced before screen call sites are migrated to it"
 )]
 pub(super) mod widgets {
-    use super::{Insets, Size, TextKind, inset};
+    use super::{Insets, PanelKind, Size, TextKind, inset};
     use raylib::prelude::{Color, Rectangle};
     use std::collections::BTreeMap;
 
@@ -862,6 +866,7 @@ pub(super) mod widgets {
     pub(super) enum RenderCommand {
         Panel {
             rect: Rectangle,
+            kind: PanelKind,
         },
         Text {
             rect: Rectangle,
@@ -1002,7 +1007,10 @@ pub(super) mod widgets {
                     }
                 }
                 Self::Panel(node) => {
-                    plan.push(RenderCommand::Panel { rect: node.rect });
+                    plan.push(RenderCommand::Panel {
+                        rect: node.rect,
+                        kind: node.kind,
+                    });
                     node.child.collect_render_commands(plan);
                 }
                 Self::Scroll(node) => {
@@ -1379,14 +1387,20 @@ pub(super) mod widgets {
     #[derive(Clone, Debug)]
     pub(super) struct PanelNode {
         pub(super) padding: Insets,
+        pub(super) kind: PanelKind,
         pub(super) child: Box<UiNode>,
         pub(super) rect: Rectangle,
     }
 
     impl PanelNode {
         pub(super) fn new(padding: Insets, child: UiNode) -> Self {
+            Self::with_kind(padding, PanelKind::Overlay, child)
+        }
+
+        pub(super) fn with_kind(padding: Insets, kind: PanelKind, child: UiNode) -> Self {
             Self {
                 padding,
+                kind,
                 child: Box::new(child),
                 rect: zero_rect(),
             }
