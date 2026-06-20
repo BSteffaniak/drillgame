@@ -244,7 +244,7 @@ impl GameRenderer {
         world_players: &[crate::session::RenderWorldPlayerPresentation],
         hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
-        let _default_ui_font = self.ui_fonts.font(layout::FontRole::small());
+        layout::set_current_fonts(self.ui_fonts);
         draw.clear_background(Color::new(105, 190, 235, 255));
 
         let camera = view.camera;

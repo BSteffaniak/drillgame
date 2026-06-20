@@ -58,12 +58,6 @@ pub(super) enum FontRole {
     Small,
 }
 
-impl FontRole {
-    pub(super) const fn small() -> Self {
-        Self::Small
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum TextKind {
     Title,
@@ -745,7 +739,12 @@ impl UiFonts {
 }
 
 fn font_for_role(role: FontRole) -> ffi::Font {
-    UiFonts::raylib_default().font(role)
+    CURRENT_UI_FONTS.with(|current| {
+        current
+            .borrow()
+            .unwrap_or_else(UiFonts::raylib_default)
+            .font(role)
+    })
 }
 
 const fn font_role(kind: TextKind) -> FontRole {
@@ -1405,6 +1404,11 @@ struct TextMeasureKey {
 
 thread_local! {
     static TEXT_MEASURE_CACHE: RefCell<BTreeMap<TextMeasureKey, f32>> = const { RefCell::new(BTreeMap::new()) };
+    static CURRENT_UI_FONTS: RefCell<Option<UiFonts>> = const { RefCell::new(None) };
+}
+
+pub(super) fn set_current_fonts(fonts: UiFonts) {
+    CURRENT_UI_FONTS.with(|current| *current.borrow_mut() = Some(fonts));
 }
 
 fn modal_rect_for_viewport(viewport: Rectangle) -> Rectangle {
