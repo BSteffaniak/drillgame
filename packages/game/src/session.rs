@@ -7363,8 +7363,12 @@ impl GameSession {
     ) -> SessionAuthorityUpdateSummary {
         let save_load = self.handle_session_save_load_input(input);
         let input = Self::input_without_session_save_load(input);
-        let authoritative_input = self.legacy_presentation_input_from_authoritative_commands(input);
-        self.update_legacy(authoritative_input, delta_seconds);
+        let legacy_input = if self.game.run_mode == RunMode::Interior {
+            input
+        } else {
+            self.legacy_presentation_input_from_authoritative_commands(input)
+        };
+        self.update_legacy(legacy_input, delta_seconds);
         if save_load.acted() {
             self.push_event(WorldEvent::MessageChanged {
                 message: save_load.message,
@@ -7708,7 +7712,11 @@ impl GameSession {
         let fixed_steps = self.accumulate_frame_delta(delta_seconds);
         let _summary = self.advance_authoritative_world_ticks(fixed_steps);
         self.sync_client_settings_to_legacy_game();
-        let legacy_adapter_input = self.legacy_adapter_input(input);
+        let legacy_adapter_input = if self.game.run_mode == RunMode::Interior {
+            input
+        } else {
+            self.legacy_adapter_input(input)
+        };
         let previous_message = self.game.message.clone();
         let previous_player = self.game.player.clone();
         let previous_request_exit = self.game.request_exit;
@@ -12285,6 +12293,86 @@ mod tests {
             session.game().interior_zone,
             Some(crate::economy::SurfaceZone::Shop)
         );
+    }
+
+    #[test]
+    fn interior_shell_movement_ignores_stale_authoritative_idle_intent() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Interior;
+        session.game.interior_zone = Some(SurfaceZone::Shop);
+        session.game.interior_x = 100.0;
+        session.route_local_player_commands(vec![PlayerCommand::Movement {
+            horizontal: 0.0,
+            thrust: false,
+            drill_down: false,
+        }]);
+        let start_x = session.game.interior_x;
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                horizontal: 1.0,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(summary.legacy_bridge_active());
+        assert!(session.game().interior_x > start_x);
+    }
+
+    #[test]
+    fn window_close_requests_exit_prompt_without_immediate_shutdown() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.save_dirty = true;
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                exit_requested: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(
+            summary,
+            super::SessionAuthorityUpdateSummary {
+                used_legacy_presentation_adapter: false,
+                local_movement_authority: true,
+                command_adapter_count: 1,
+                current_tick: session.current_tick(),
+            }
+        );
+        assert_eq!(session.game().modal, Some(ModalScreen::UnsavedExitConfirm));
+        assert!(!session.should_exit());
+
+        let _confirmed = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(session.should_exit());
+    }
+
+    #[test]
+    fn clean_window_close_requests_confirm_prompt_without_immediate_shutdown() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.save_dirty = false;
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                exit_requested: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().modal, Some(ModalScreen::ExitConfirm));
+        assert!(!session.should_exit());
     }
 
     #[test]

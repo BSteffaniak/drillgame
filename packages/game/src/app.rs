@@ -522,19 +522,16 @@ pub fn run() {
             delta_seconds,
             mapped_input.player_commands.clone(),
         );
+        let immediate_client_actions = mapped_input
+            .client_actions
+            .iter()
+            .copied()
+            .filter(|action| !matches!(action, crate::multiplayer::ClientAction::ExitRequested))
+            .collect::<Vec<_>>();
         session.apply_client_actions(
             crate::multiplayer::LOCAL_CLIENT_ID,
-            &mapped_input.client_actions,
+            &immediate_client_actions,
         );
-        if mapped_input
-            .client_actions
-            .contains(&crate::multiplayer::ClientAction::ExitRequested)
-            && session
-                .game_mut()
-                .request_online_shutdown_from_gameplay_exit()
-        {
-            online_tasks.drain_and_execute(session.game_mut());
-        }
         if split_screen_active {
             let secondary_input = Some({
                 let keyboard = read_secondary_keyboard_input(&raylib);
@@ -563,6 +560,13 @@ pub fn run() {
         } else {
             session.update_frame_from_session_authority(authority_input, delta_seconds)
         };
+        if session.game().request_exit
+            && session
+                .game_mut()
+                .request_online_shutdown_from_gameplay_exit()
+        {
+            online_tasks.drain_and_execute(session.game_mut());
+        }
         if session.should_exit() {
             online_tasks.drain_and_execute(session.game_mut());
         }
