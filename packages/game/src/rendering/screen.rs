@@ -870,9 +870,10 @@ fn draw_online_multiplayer(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     );
 
     draw_online_connection_card(draw, game, 700, 190);
-    draw_online_lobby_card(draw, game, 700, 340);
-    draw_online_descriptor_inspection_card(draw, game, 700, 500);
-    draw_online_action_card(draw, game, 700, 610);
+    draw_online_lobby_card(draw, game, 700, 330);
+    draw_online_lifecycle_card(draw, game, 700, 470);
+    draw_online_descriptor_inspection_card(draw, game, 700, 585);
+    draw_online_action_card(draw, game, 700, 690);
 }
 
 fn draw_online_connection_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
@@ -955,6 +956,28 @@ fn draw_online_lobby_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: 
     draw.draw_text(&lobby.guidance, x, y + 126, 15, Color::LIGHTGRAY);
 }
 
+fn draw_online_lifecycle_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {
+    let lifecycle = game.online_session_lifecycle_presentation();
+    let border = if lifecycle.active {
+        Color::GREEN
+    } else {
+        Color::DARKGRAY
+    };
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 104, border);
+    draw.draw_text(&lifecycle.heading, x, y, 20, border);
+    draw.draw_text(&lifecycle.safe_exit_line, x, y + 26, 13, Color::RAYWHITE);
+    draw.draw_text(&lifecycle.remote_line, x, y + 46, 13, Color::LIGHTGRAY);
+    for (index, line) in lifecycle.boundary_lines.iter().take(2).enumerate() {
+        draw.draw_text(
+            line,
+            x,
+            y + 66 + i32::try_from(index).unwrap_or(i32::MAX) * 16,
+            11,
+            Color::GRAY,
+        );
+    }
+}
+
 fn draw_online_descriptor_inspection_card(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
@@ -968,9 +991,9 @@ fn draw_online_descriptor_inspection_card(
         crate::game_state::OnlineDescriptorInspectionSeverity::Warning => Color::YELLOW,
         crate::game_state::OnlineDescriptorInspectionSeverity::Error => Color::RED,
     };
-    draw.draw_rectangle_lines(x - 12, y - 12, 520, 122, border);
-    draw.draw_text(&inspection.heading, x, y, 22, border);
-    for (index, line) in inspection.lines.iter().take(4).enumerate() {
+    draw.draw_rectangle_lines(x - 12, y - 12, 520, 98, border);
+    draw.draw_text(&inspection.heading, x, y, 18, border);
+    for (index, line) in inspection.lines.iter().take(3).enumerate() {
         let color = if index == 0 {
             Color::RAYWHITE
         } else {
@@ -979,8 +1002,8 @@ fn draw_online_descriptor_inspection_card(
         draw.draw_text(
             line,
             x,
-            y + 32 + i32::try_from(index).unwrap_or(i32::MAX) * 18,
-            13,
+            y + 26 + i32::try_from(index).unwrap_or(i32::MAX) * 16,
+            12,
             color,
         );
     }
@@ -989,7 +1012,7 @@ fn draw_online_descriptor_inspection_card(
     } else {
         "Inspect a shared host descriptor before joining from this game window."
     };
-    draw.draw_text(join_hint, x, y + 96, 13, border);
+    draw.draw_text(join_hint, x, y + 78, 12, border);
 }
 
 fn draw_online_action_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x: i32, y: i32) {

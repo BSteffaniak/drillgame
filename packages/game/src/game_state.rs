@@ -1054,6 +1054,29 @@ pub struct OnlineTerrainSyncMarkerBatch {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSessionLifecyclePresentation {
+    pub active: bool,
+    pub heading: String,
+    pub safe_exit_line: String,
+    pub remote_line: String,
+    pub boundary_lines: Vec<String>,
+}
+
+impl OnlineSessionLifecyclePresentation {
+    #[must_use]
+    pub fn inactive() -> Self {
+        Self {
+            active: false,
+            heading: "Session lifecycle".to_owned(),
+            safe_exit_line: "No online session is active; exit/save follows normal local rules."
+                .to_owned(),
+            remote_line: "Remote: none".to_owned(),
+            boundary_lines: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlinePauseSessionPresentation {
     pub active: bool,
     pub heading: String,
@@ -4917,6 +4940,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_session_boundary_status: String,
     #[serde(default)]
+    pub online_session_boundary_history: Vec<String>,
+    #[serde(default)]
     pub online_last_failure_status: String,
     #[serde(default)]
     pub online_last_ownership_status: String,
@@ -5204,6 +5229,7 @@ impl GameState {
             online_last_correction_status: String::new(),
             online_last_sync_loop_status: String::new(),
             online_last_session_boundary_status: String::new(),
+            online_session_boundary_history: Vec::new(),
             online_last_failure_status: String::new(),
             online_last_ownership_status: String::new(),
             online_last_live_verification_status: String::new(),
@@ -5974,6 +6000,7 @@ impl GameState {
 
     pub fn apply_online_session_boundary_status(&mut self, status: &OnlineSessionBoundaryStatus) {
         self.online_last_session_boundary_status = status.status_line();
+        self.record_online_session_boundary_status();
         self.online_remote_player_connected = status.remote_connected;
         if !status.remote_connected {
             self.online_remote_player_ready = false;
@@ -5984,6 +6011,19 @@ impl GameState {
         self.message.clone_from(&self.online_session_status_message);
         self.surface_online_session_boundary_during_gameplay(status);
         self.refresh_online_runtime_statuses();
+    }
+
+    fn record_online_session_boundary_status(&mut self) {
+        const MAX_ONLINE_BOUNDARY_HISTORY: usize = 6;
+        if self.online_last_session_boundary_status.is_empty() {
+            return;
+        }
+        self.online_session_boundary_history
+            .push(self.online_last_session_boundary_status.clone());
+        if self.online_session_boundary_history.len() > MAX_ONLINE_BOUNDARY_HISTORY {
+            let excess = self.online_session_boundary_history.len() - MAX_ONLINE_BOUNDARY_HISTORY;
+            self.online_session_boundary_history.drain(0..excess);
+        }
     }
 
     pub fn apply_online_failure_status(&mut self, status: &OnlineFailureStatus) {
@@ -6597,6 +6637,66 @@ impl GameState {
             .to_owned(),
         );
         self.online_session_status_message = self.online_descriptor_inspection_status.clone();
+    }
+
+    #[must_use]
+    pub fn online_session_lifecycle_presentation(&self) -> OnlineSessionLifecyclePresentation {
+        if !self.online_session_active() && self.online_session_boundary_history.is_empty() {
+            return OnlineSessionLifecyclePresentation::inactive();
+        }
+        let active = self.online_session_active();
+        let heading = if active {
+            format!("Lifecycle: {:?}", self.online_session_state)
+        } else {
+            "Lifecycle: last online session".to_owned()
+        };
+        let safe_exit_line = if self.online_network_task_request
+            == Some(OnlineNetworkTaskRequest::Shutdown)
+        {
+            "Shutdown is queued; peer notification/transport close will be drained by the app loop."
+                .to_owned()
+        } else if active {
+            "Use Shutdown session or Exit to request a graceful peer notification before closing."
+                .to_owned()
+        } else if self.online_host_owns_save {
+            "Host save authority is local; normal save/exit is safe after shutdown completes."
+                .to_owned()
+        } else {
+            "Joined-client local saves remain blocked until the online session is fully closed."
+                .to_owned()
+        };
+        let remote_line = format!(
+            "Remote connected={} ready={} | local ready={} | save authority={}",
+            yes_no(self.online_remote_player_connected),
+            yes_no(self.online_remote_player_ready),
+            yes_no(self.online_local_ready),
+            if self.online_host_owns_save {
+                "local host"
+            } else {
+                "remote host"
+            }
+        );
+        let boundary_lines = if self.online_session_boundary_history.is_empty() {
+            if self.online_last_session_boundary_status.is_empty() {
+                vec!["No leave/end boundary event recorded yet.".to_owned()]
+            } else {
+                vec![self.online_last_session_boundary_status.clone()]
+            }
+        } else {
+            self.online_session_boundary_history
+                .iter()
+                .rev()
+                .take(4)
+                .cloned()
+                .collect()
+        };
+        OnlineSessionLifecyclePresentation {
+            active,
+            heading,
+            safe_exit_line,
+            remote_line,
+            boundary_lines,
+        }
     }
 
     #[must_use]
