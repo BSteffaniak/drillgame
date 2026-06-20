@@ -1,6 +1,7 @@
 use raylib::prelude::*;
 
 use super::terrain::{artifact_color, mineral_color};
+use super::ui::{UiContext, modal_rect};
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::{
     economy::{
@@ -782,6 +783,11 @@ pub(super) fn draw_modal(
     modal: ModalScreen,
     hud: Option<PerPlayerHudSnapshot>,
 ) {
+    if modal == ModalScreen::Depot {
+        draw_modal_depot_ui(draw, game);
+        return;
+    }
+
     draw.draw_rectangle(300, 120, 680, 440, Color::new(0, 0, 0, 220));
     draw.draw_rectangle_lines(300, 120, 680, 440, Color::RAYWHITE);
 
@@ -1749,6 +1755,126 @@ fn draw_town_development(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
         18,
         Color::LIGHTGRAY,
     );
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "depot panel combines sales, contracts, and receipt previews"
+)]
+fn draw_modal_depot_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(920, 560));
+    panel.begin_clip();
+    panel.title("Ore Depot");
+    panel.muted("Up/Down select | Enter/E confirm | Esc/Backspace close");
+    panel.separator();
+
+    let options = [
+        (
+            "Complete active contract",
+            format!(
+                "{}: {}/{} {} for {} credits",
+                game.contracts.active.title,
+                game.contracts.active.progress(&game.player),
+                game.contracts.active.required,
+                game.contracts.active.target.name(),
+                game.contracts.active.reward
+            ),
+        ),
+        (
+            "Sell loose cargo",
+            format!(
+                "Cargo manifest: {}/{} slots",
+                game.player.cargo_used(),
+                game.player.cargo_capacity
+            ),
+        ),
+        (
+            "Auto-sort low-grade cargo",
+            "Keep valuable ores while clearing cheap cargo from the hold.".to_owned(),
+        ),
+        (
+            "Sell scan data",
+            format!("Market: {}", game.active_world_event_summary()),
+        ),
+        (
+            "Receipt history",
+            format!("{} saved receipts", game.depot_receipts.len()),
+        ),
+    ];
+    for (index, (label, detail)) in options.iter().enumerate() {
+        panel.option(index == game.selected_menu_item, label, Some(detail));
+    }
+
+    panel.separator();
+    panel.heading("Current cargo");
+    if game.player.cargo_used() == 0 {
+        panel.muted("Cargo hold empty");
+    } else {
+        for (mineral, count) in &game.player.cargo {
+            panel.label(&format!(
+                "{} x{} = {} cr",
+                mineral.name(),
+                count,
+                mineral.value() * count
+            ));
+        }
+        for (artifact, count) in &game.player.artifacts {
+            panel.label(&format!(
+                "{} x{} = {} cr",
+                artifact.name(),
+                count,
+                artifact.value() * count
+            ));
+        }
+    }
+
+    panel.separator();
+    panel.heading("Market snapshot");
+    let minerals = [
+        MineralKind::Copper,
+        MineralKind::Iron,
+        MineralKind::Silver,
+        MineralKind::Gold,
+        MineralKind::Emerald,
+        MineralKind::Ruby,
+        MineralKind::Diamond,
+        MineralKind::Platinum,
+        MineralKind::Uranium,
+        MineralKind::Mythril,
+    ];
+    for mineral in minerals {
+        let current = game.mineral_market_factor(mineral);
+        let previous = game
+            .previous_mineral_market_factor(mineral)
+            .unwrap_or(current);
+        let trend = match current.cmp(&previous) {
+            std::cmp::Ordering::Greater => "↑",
+            std::cmp::Ordering::Less => "↓",
+            std::cmp::Ordering::Equal => "→",
+        };
+        let label = if current >= 120 {
+            "high"
+        } else if current <= 90 {
+            "low"
+        } else {
+            "avg"
+        };
+        panel.muted(&format!(
+            "{}: {} cr {trend} {label}",
+            mineral.name(),
+            game.mineral_market_value(mineral)
+        ));
+    }
+
+    if !game.last_depot_receipt.is_empty() {
+        panel.separator();
+        panel.heading("Last receipt");
+        for line in game.last_depot_receipt.lines().take(6) {
+            panel.muted(line);
+        }
+    }
 }
 
 #[allow(

@@ -11,6 +11,7 @@ use raylib::{ffi, prelude::*};
 mod interior;
 mod screen;
 mod terrain;
+mod ui;
 mod world;
 
 use interior::draw_interior;
