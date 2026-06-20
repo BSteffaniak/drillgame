@@ -76,7 +76,6 @@ pub(super) fn draw_world(
                 10.0 + pulse * 8.0,
                 Color::new(95, 230, 90, 80),
             );
-            draw.draw_text("GAS", x + 4, y + 4, 12, Color::GREEN);
         }
         let bar_width = (TILE_SIZE * progress) as i32;
         draw.draw_rectangle(
@@ -118,9 +117,7 @@ fn draw_online_terrain_sync_markers(
             Color::new(85, 220, 255, alpha),
         );
         draw.draw_circle_lines(center_x, center_y, radius, Color::new(120, 240, 255, alpha));
-        if intensity > 0.55 {
-            draw.draw_text("SYNC", center_x - 14, center_y - 5, 10, Color::SKYBLUE);
-        }
+        if intensity > 0.55 {}
     }
 }
 
@@ -129,14 +126,6 @@ fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: 
         let x = (item.position.x as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
         let y = (item.position.y as f32 * TILE_SIZE + TILE_SIZE * 0.5) as i32;
         let pulse = (game.update_ticks as f32 * 0.12).sin().abs();
-        let label = match item.kind {
-            crate::game_state::InfrastructureKind::SignalRelay => "R",
-            crate::game_state::InfrastructureKind::SurveyDrone => "D",
-            crate::game_state::InfrastructureKind::CargoLift => "L",
-            crate::game_state::InfrastructureKind::TunnelSupport => "S",
-            crate::game_state::InfrastructureKind::PumpStation => "P",
-            crate::game_state::InfrastructureKind::OreProcessor => "O",
-        };
         let color = match item.kind {
             crate::game_state::InfrastructureKind::SignalRelay => Color::SKYBLUE,
             crate::game_state::InfrastructureKind::SurveyDrone => Color::GREEN,
@@ -148,7 +137,6 @@ fn draw_infrastructure(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: 
         draw.draw_circle_lines(x, y, 11.0 + pulse * 3.0, color);
         draw.draw_rectangle(x - 4, y - 10, 8, 20, Color::DARKBLUE);
         draw.draw_line(x, y - 12, x, y - 22, Color::RAYWHITE);
-        draw.draw_text(label, x - 4, y - 5, 12, Color::RAYWHITE);
     }
 }
 
@@ -182,7 +170,7 @@ fn draw_building(
     tile_x: f32,
     tile_width: f32,
     color: Color,
-    label: &str,
+    kind: &str,
 ) {
     let x = tile_x * TILE_SIZE;
     let y = 3.0 * TILE_SIZE;
@@ -203,7 +191,7 @@ fn draw_building(
         Color::new(35, 25, 18, 255),
     );
     draw.draw_rectangle((x + 10.0) as i32, (y + 12.0) as i32, 22, 18, Color::SKYBLUE);
-    match label {
+    match kind {
         "FUEL" => draw.draw_circle(
             (x + width - 42.0) as i32,
             (y + 28.0) as i32,
@@ -246,7 +234,6 @@ fn draw_building(
             Color::MAGENTA,
         ),
     }
-    draw.draw_text(label, x as i32 + 16, y as i32 + 40, 20, Color::WHITE);
 }
 
 pub(super) fn draw_particles(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, game: &GameState) {
@@ -260,7 +247,6 @@ pub(super) fn draw_particles(draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>, 
             y as i32,
             Color::BROWN,
         );
-        draw.draw_text("LOST", (x + 8.0) as i32, (y - 8.0) as i32, 12, Color::GOLD);
     }
 
     for particle in &game.dust_particles {
@@ -316,13 +302,6 @@ pub(super) fn draw_placed_bombs(
         let y = bomb.y as i32;
         draw.draw_circle(x, y, 7.0, Color::BLACK);
         draw.draw_circle_lines(x, y, 8.0, Color::RED);
-        draw.draw_text(
-            &format!("{:.1}", bomb.timer_seconds.max(0.0)),
-            x - 11,
-            y - 24,
-            14,
-            Color::YELLOW,
-        );
     }
 }
 
@@ -474,12 +453,10 @@ fn draw_remote_player_status(
     draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
     player: &RenderWorldPlayerPresentation,
 ) {
-    let label = player.short_status_label();
     let label_x = (player.x - 42.0) as i32;
     let label_y = (player.y - 48.0) as i32;
     draw.draw_rectangle(label_x - 4, label_y - 4, 90, 38, Color::new(0, 0, 25, 170));
     draw.draw_rectangle_lines(label_x - 4, label_y - 4, 90, 38, Color::SKYBLUE);
-    draw.draw_text(&label, label_x, label_y, 10, Color::RAYWHITE);
     draw_remote_player_bar(
         draw,
         label_x,
@@ -510,7 +487,7 @@ fn draw_remote_player_bar(
     draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
     x: i32,
     y: i32,
-    label: &str,
+    _label: &str,
     value: f32,
     max_value: f32,
     good_color: Color,
@@ -522,7 +499,6 @@ fn draw_remote_player_bar(
     } else {
         good_color
     };
-    draw.draw_text(label, x, y - 1, 8, Color::LIGHTGRAY);
     draw.draw_rectangle(x + 28, y, 50, 6, Color::new(35, 35, 45, 220));
     draw.draw_rectangle(x + 28, y, (50.0 * ratio) as i32, 6, color);
     draw.draw_rectangle_lines(x + 28, y, 50, 6, Color::DARKGRAY);

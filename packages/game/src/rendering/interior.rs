@@ -1,6 +1,6 @@
 use raylib::prelude::*;
 
-use super::SCREEN_WIDTH;
+use super::{SCREEN_WIDTH, ui::UiContext};
 use crate::{
     economy::SurfaceZone,
     game_state::{GameState, ServiceAnimation},
@@ -13,30 +13,47 @@ pub(super) fn draw_interior(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     draw.draw_rectangle(0, 455, SCREEN_WIDTH, 265, Color::new(38, 32, 28, 255));
     draw.draw_rectangle(35, 130, 1210, 380, Color::new(18, 18, 24, 220));
     draw.draw_rectangle_lines(35, 130, 1210, 380, trim);
-    draw.draw_text(title, 65, 150, 30, Color::RAYWHITE);
-    draw.draw_text(npc_line(zone, game), 65, 188, 18, Color::LIGHTGRAY);
 
     draw.draw_rectangle(58, 338, 48, 118, Color::new(55, 32, 20, 255));
     draw.draw_rectangle_lines(58, 338, 48, 118, Color::GOLD);
-    draw.draw_text("EXIT", 55, 310, 18, Color::GOLD);
 
     draw_interior_props(draw, zone);
     draw_service_animation(draw, game, zone);
     let service_x = interior_screen_x(interior_service_x_render(zone));
-    draw.draw_text("Press E", (service_x - 42.0) as i32, 292, 18, Color::YELLOW);
 
     let player_x = interior_screen_x(game.interior_x);
     draw.draw_rectangle((player_x - 11.0) as i32, 402, 22, 38, Color::GOLD);
     draw.draw_circle(player_x as i32, 392, 10.0, Color::SKYBLUE);
     let visor_offset = if game.interior_facing >= 0.0 { 5 } else { -13 };
     draw.draw_rectangle(player_x as i32 + visor_offset, 389, 8, 5, Color::DARKBLUE);
-    draw.draw_text(
-        "A/D walk | E use counter/door | Backspace/Esc exits",
-        375,
-        650,
-        20,
-        Color::LIGHTGRAY,
-    );
+
+    let mut ui = UiContext::new(draw);
+    let mut header = ui.panel(Rectangle {
+        x: 55.0,
+        y: 145.0,
+        width: 610.0,
+        height: 100.0,
+    });
+    header.heading(title);
+    header.muted(npc_line(zone, game));
+    drop(header);
+
+    let mut prompt = ui.panel(Rectangle {
+        x: 350.0,
+        y: 620.0,
+        width: 580.0,
+        height: 74.0,
+    });
+    prompt.muted("A/D walk | E use counter/door | Esc exits");
+    drop(prompt);
+
+    let mut interact = ui.panel(Rectangle {
+        x: service_x - 78.0,
+        y: 258.0,
+        width: 156.0,
+        height: 64.0,
+    });
+    interact.heading("Press E");
 }
 
 fn npc_line(zone: SurfaceZone, game: &GameState) -> &'static str {
@@ -75,11 +92,9 @@ fn draw_service_animation(draw: &mut RaylibDrawHandle<'_>, game: &GameState, zon
                 Color::YELLOW,
             );
             draw.draw_circle(620, 420, 10.0 + (pulse.rem_euclid(6)) as f32, Color::GOLD);
-            draw.draw_text("FUELING", 610, 365, 24, Color::GOLD);
         }
         ServiceAnimation::Repair if zone == SurfaceZone::Repair => {
             draw.draw_rectangle(672, 392 - pulse.rem_euclid(12), 235, 8, Color::ORANGE);
-            draw.draw_text("REPAIR CREW", 615, 365, 24, Color::ORANGE);
         }
         _ => {}
     }
@@ -91,49 +106,41 @@ fn draw_interior_props(draw: &mut RaylibDrawHandle<'_>, zone: SurfaceZone) {
             draw.draw_rectangle(760, 330, 70, 120, Color::DARKBLUE);
             draw.draw_circle(795, 350, 18.0, Color::GOLD);
             draw.draw_line(830, 370, 900, 420, Color::BLACK);
-            draw.draw_text("PUMPS", 742, 300, 22, Color::GOLD);
         }
         SurfaceZone::Repair => {
             draw.draw_rectangle(690, 418, 190, 18, Color::MAROON);
             draw.draw_rectangle(725, 350, 18, 82, Color::GRAY);
             draw.draw_rectangle(825, 350, 18, 82, Color::GRAY);
-            draw.draw_text("LIFT", 742, 300, 22, Color::ORANGE);
         }
         SurfaceZone::Depot => {
             draw.draw_rectangle(800, 385, 125, 55, Color::BROWN);
             draw.draw_rectangle_lines(800, 385, 125, 55, Color::GOLD);
             draw.draw_rectangle(690, 345, 95, 95, Color::DARKGREEN);
-            draw.draw_text("SCALE", 692, 315, 22, Color::GOLD);
         }
         SurfaceZone::Headquarters => {
             draw.draw_rectangle(690, 310, 300, 90, Color::new(18, 24, 42, 255));
             draw.draw_rectangle_lines(690, 310, 300, 90, Color::SKYBLUE);
             draw.draw_circle(735, 355, 26.0, Color::DARKBLUE);
-            draw.draw_text("RADIO / CONTRACTS", 705, 275, 22, Color::SKYBLUE);
         }
         SurfaceZone::Shop => {
             draw.draw_rectangle(675, 300, 320, 35, Color::PURPLE);
             for index in 0..6 {
                 draw.draw_rectangle(695 + index * 48, 352, 28, 70, Color::DARKPURPLE);
             }
-            draw.draw_text("UPGRADE WALL", 705, 265, 22, Color::MAGENTA);
         }
         SurfaceZone::Bank => {
             draw.draw_rectangle(690, 315, 260, 95, Color::new(20, 70, 45, 255));
             draw.draw_rectangle_lines(690, 315, 260, 95, Color::GOLD);
-            draw.draw_text("CREDIT / DEBT", 715, 278, 22, Color::GOLD);
         }
         SurfaceZone::Explosives => {
             draw.draw_rectangle(690, 330, 280, 85, Color::MAROON);
             for index in 0..4 {
                 draw.draw_circle(725 + index * 55, 372, 16.0, Color::BLACK);
             }
-            draw.draw_text("TIMED CHARGES", 708, 292, 22, Color::RED);
         }
         SurfaceZone::Salvage => {
             draw.draw_rectangle(675, 390, 320, 25, Color::GRAY);
             draw.draw_rectangle(735, 325, 120, 70, Color::BROWN);
-            draw.draw_text("SCRAP / RECOVERY", 690, 288, 22, Color::LIME);
         }
     }
 }
