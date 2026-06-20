@@ -20,7 +20,7 @@ use crate::{
     contract::ContractLog,
     economy::{
         DeepClaimStatus, PurchaseError, SurfaceZone, TownBuilding, TownDevelopment, buy_upgrade,
-        sell_cargo, upgrade_offers, upgrade_tier_name,
+        upgrade_offers, upgrade_tier_name,
     },
     input::PlayerInput,
     multiplayer::{PlayerCommand, QuinnSessionTickSummary, SocketDrivenCorrectionSummary},
@@ -1956,6 +1956,7 @@ pub enum SessionSlotIoRequest {
 pub enum SessionServiceRequest {
     Refuel { menu_item: usize },
     Repair { menu_item: usize },
+    SellCargo,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -10034,11 +10035,16 @@ impl GameState {
                 self.try_complete_side_contract();
                 self.confirm_complete_contract();
             }
-            1 => self.confirm_sell_cargo(),
+            1 => self.queue_sell_cargo(),
             2 => self.auto_sort_low_grade_cargo(),
             3 => self.sell_scan_data(),
             _ => self.modal = Some(ModalScreen::DepotReceiptHistory),
         }
+    }
+
+    fn queue_sell_cargo(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::SellCargo);
+        "Cargo sale queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn confirm_complete_contract(&mut self) {
@@ -10070,98 +10076,6 @@ impl GameState {
             }
         } else {
             "Contract target not ready.".clone_into(&mut self.message);
-        }
-    }
-
-    fn confirm_sell_cargo(&mut self) {
-        self.last_depot_receipt.clear();
-        for (mineral, count) in &self.player.cargo {
-            let _ = writeln!(
-                &mut self.last_depot_receipt,
-                "{} x{} = {} cr",
-                mineral.name(),
-                count,
-                mineral.value() * count
-            );
-        }
-        for (artifact, count) in &self.player.artifacts {
-            let _ = writeln!(
-                &mut self.last_depot_receipt,
-                "{} x{} = {} cr",
-                artifact.name(),
-                count,
-                artifact.value() * count
-            );
-        }
-
-        let depot_bonus = u32::from(self.town_development.depot_level) * 3;
-        let mut adjusted = self
-            .player
-            .cargo
-            .iter()
-            .map(|(mineral, count)| {
-                mineral.value() * count * (self.mineral_market_factor(*mineral) + depot_bonus) / 100
-            })
-            .sum::<u32>()
-            + self
-                .player
-                .artifacts
-                .iter()
-                .map(|(artifact, count)| artifact.value() * count)
-                .sum::<u32>();
-        let cargo_count = self.player.cargo_used();
-        let bulk_bonus = self.town_development.depot_level >= 2 && cargo_count >= 8;
-        if bulk_bonus {
-            adjusted += adjusted / 10;
-        }
-        let diverse_bonus = self.has_equipped_part(RigPartKind::SortedCargoRack)
-            && self
-                .player
-                .cargo
-                .len()
-                .saturating_add(self.player.artifacts.len())
-                >= 4;
-        if diverse_bonus {
-            adjusted += adjusted / 8;
-        }
-        let payout = sell_cargo(&mut self.player);
-        if adjusted != payout {
-            self.player.credits = self
-                .player
-                .credits
-                .saturating_sub(payout)
-                .saturating_add(adjusted);
-        }
-        self.market_salt = self.market_salt.wrapping_add(1);
-        if adjusted > 0 {
-            self.total_earnings += adjusted;
-            let _ = writeln!(
-                &mut self.last_depot_receipt,
-                "MARKET mineral pricing applied{}{}",
-                if bulk_bonus { " + bulk-sale bonus" } else { "" },
-                if diverse_bonus {
-                    " + sorted-rack diversity bonus"
-                } else {
-                    ""
-                }
-            );
-            let _ = writeln!(&mut self.last_depot_receipt, "TOTAL = {adjusted} cr");
-            self.depot_receipts.push(self.last_depot_receipt.clone());
-            if self.depot_receipts.len() > 5 {
-                self.depot_receipts.remove(0);
-            }
-        }
-        if adjusted == 0 {
-            "No cargo to sell.".clone_into(&mut self.message);
-        } else {
-            self.sound_cues.push(SoundCue::Sell);
-            self.message = if diverse_bonus {
-                format!("Sold cargo for {adjusted} credits with sorted-rack diversity bonus.")
-            } else if bulk_bonus {
-                format!("Sold cargo for {adjusted} credits with depot bulk-sale bonus.")
-            } else {
-                format!("Sold cargo for {adjusted} credits at current mineral markets.")
-            };
         }
     }
 
@@ -17094,16 +17008,23 @@ mod tests {
     }
 
     #[test]
-    fn cargo_and_economy_regression_sells_loaded_ore() {
+    fn cargo_and_economy_regression_queues_loaded_ore_sale_for_authoritative_session() {
         let mut game = GameState::new();
-        let initial_credits = game.player.credits;
         assert!(game.player.add_cargo(MineralKind::Copper));
+        game.modal = Some(ModalScreen::Depot);
+        game.selected_menu_item = 1;
 
-        let earnings = sell_cargo(&mut game.player);
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
 
-        assert!(earnings > 0);
-        assert!(game.player.credits > initial_credits);
-        assert_eq!(game.player.cargo_used(), 0);
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::SellCargo)
+        );
+        assert_eq!(game.player.cargo_used(), 1);
+        assert!(game.message.contains("authoritative session"));
     }
 
     #[test]

@@ -4962,6 +4962,7 @@ impl GameSession {
         let command = match request {
             crate::game_state::SessionServiceRequest::Refuel { .. } => PlayerCommand::Refuel,
             crate::game_state::SessionServiceRequest::Repair { .. } => PlayerCommand::Repair,
+            crate::game_state::SessionServiceRequest::SellCargo => PlayerCommand::SellCargo,
         };
         let outcome = self.world.apply_player_command(player_id, &command);
         if matches!(outcome, PlayerScopedCommandOutcome::Applied) {
@@ -4975,6 +4976,7 @@ impl GameSession {
                     self.game.service_animation = Some(crate::game_state::ServiceAnimation::Repair);
                     self.game.service_animation_seconds = 1.4;
                 }
+                crate::game_state::SessionServiceRequest::SellCargo => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -4994,6 +4996,16 @@ impl GameSession {
                 }
                 crate::game_state::SessionServiceRequest::Repair { .. } => {
                     format!("Hull repaired for {spent} credits.")
+                }
+                crate::game_state::SessionServiceRequest::SellCargo => {
+                    let earned = after.0.saturating_sub(before.0);
+                    if earned == 0 {
+                        "No cargo to sell.".to_owned()
+                    } else {
+                        self.game.total_earnings = self.game.total_earnings.saturating_add(earned);
+                        self.game.sound_cues.push(SoundCue::Sell);
+                        format!("Sold cargo for {earned} credits.")
+                    }
                 }
             };
         } else {
@@ -10837,6 +10849,46 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_service_modal_sells_cargo_from_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.credits = 100;
+            assert!(player.add_cargo(crate::terrain::MineralKind::Copper));
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+        session.game.modal = Some(crate::game_state::ModalScreen::Depot);
+        session.game.selected_menu_item = 1;
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().player.cargo_used(), 0);
+        assert!(session.game().player.credits > 100);
+        let world_player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert_eq!(world_player.cargo_used(), 0);
+        assert!(world_player.credits > 100);
+        assert!(
+            session.game().message.contains("Sold cargo"),
+            "{}",
+            session.game().message
+        );
     }
 
     #[test]
