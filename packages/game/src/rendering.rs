@@ -30,6 +30,7 @@ use world::{
 
 use crate::{
     game_state::{GameState, RunMode},
+    input::PlayerInput,
     session::{
         ClientView, LiveRenderFrameOutput, RenderViewportPlan, SplitScreenLayout, WorldDelta,
         WorldEvent, split_screen_layout,
@@ -153,6 +154,27 @@ impl GameRenderer {
             self.terrain.mark_tile_dirty(tile);
         }
         self.terrain.sync(raylib, thread, game);
+    }
+
+    #[allow(
+        dead_code,
+        reason = "legacy compatibility renderer path kept during live render output migration"
+    )]
+    pub fn apply_ui_input(&self, input: PlayerInput) {
+        const MODAL_SCROLL_STEP: f32 = 48.0;
+        const MODAL_SCROLL_LIMIT: f32 = 10_000.0;
+        if input.ui_scroll.abs() > f32::EPSILON {
+            self.ui_state.borrow_mut().scroll_by(
+                layout::widgets::WidgetId("modal-content"),
+                -input.ui_scroll * MODAL_SCROLL_STEP,
+                MODAL_SCROLL_LIMIT,
+            );
+        }
+        if input.menu_up || input.menu_down || input.confirm {
+            self.ui_state
+                .borrow_mut()
+                .set_focused(layout::widgets::WidgetId("modal-content"));
+        }
     }
 
     #[allow(

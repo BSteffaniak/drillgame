@@ -43,6 +43,7 @@ pub struct PlayerInput {
     pub exit_requested: bool,
     pub text_input: Option<char>,
     pub text_backspace: bool,
+    pub ui_scroll: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -158,6 +159,7 @@ pub fn combine_player_input(primary: PlayerInput, secondary: PlayerInput) -> Pla
         exit_requested: primary.exit_requested || secondary.exit_requested,
         text_input: primary.text_input.or(secondary.text_input),
         text_backspace: primary.text_backspace || secondary.text_backspace,
+        ui_scroll: primary.ui_scroll + secondary.ui_scroll,
     }
 }
 
@@ -231,6 +233,7 @@ fn read_primary_keyboard_input_with_options(
         exit_requested: false,
         text_input,
         text_backspace: raylib.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
+        ui_scroll: raylib.get_mouse_wheel_move(),
     }
 }
 

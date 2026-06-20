@@ -764,7 +764,7 @@ pub(super) mod widgets {
     use std::collections::BTreeMap;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-    pub(in crate::rendering) struct WidgetId(pub(super) &'static str);
+    pub(in crate::rendering) struct WidgetId(pub(in crate::rendering) &'static str);
 
     #[derive(Clone, Debug, Default)]
     pub(in crate::rendering) struct UiState {
@@ -777,7 +777,7 @@ pub(super) mod widgets {
             self.focused
         }
 
-        pub(super) const fn set_focused(&mut self, id: WidgetId) {
+        pub(in crate::rendering) const fn set_focused(&mut self, id: WidgetId) {
             self.focused = Some(id);
         }
 
@@ -789,7 +789,12 @@ pub(super) mod widgets {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
 
-        pub(super) fn scroll_by(&mut self, id: WidgetId, delta: f32, max_offset: f32) {
+        pub(in crate::rendering) fn scroll_by(
+            &mut self,
+            id: WidgetId,
+            delta: f32,
+            max_offset: f32,
+        ) {
             let next = (self.scroll_offset(id) + delta).clamp(0.0, max_offset.max(0.0));
             self.scroll_offsets.insert(id, next);
         }

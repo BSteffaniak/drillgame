@@ -497,6 +497,7 @@ pub fn run() {
             read_input_with_arrow_aliases(&mut raylib, exit_requested)
         };
         let mapped_input = map_local_input(input);
+        renderer.apply_ui_input(input);
         if mapped_input
             .client_actions
             .contains(&crate::multiplayer::ClientAction::ToggleLocalMultiplayer)
