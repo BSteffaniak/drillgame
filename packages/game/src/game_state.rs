@@ -1099,6 +1099,79 @@ impl OnlinePauseSessionPresentation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OnlineGameplayEntrySource {
+    #[default]
+    None,
+    HostUiRequested,
+    HostStartSent,
+    HostStartReceived,
+}
+
+impl OnlineGameplayEntrySource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::HostUiRequested => "host-ui-requested",
+            Self::HostStartSent => "host-start-sent",
+            Self::HostStartReceived => "host-start-received",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplayEntryPresentation {
+    pub entered_gameplay: bool,
+    pub source: OnlineGameplayEntrySource,
+    pub authoritative_tick: Option<crate::multiplayer::SimulationTick>,
+    pub host_authoritative: bool,
+    pub status: String,
+}
+
+impl OnlineGameplayEntryPresentation {
+    #[must_use]
+    pub fn from_game(game: &GameState) -> Self {
+        let entered_gameplay = game.run_mode == RunMode::Playing
+            && game.modal.is_none()
+            && game.online_session_state == OnlineSessionUxState::Connected;
+        let host_authoritative = game.online_host_owns_save && game.online_player_slot == Some(1);
+        let authoritative_tick = game.online_gameplay_entry_authoritative_tick;
+        let source = game.online_gameplay_entry_source;
+        let status = format!(
+            "Gameplay entry: entered={} source={} authoritative_tick={} host_authoritative={} role={} slot={}",
+            yes_no(entered_gameplay),
+            source.label(),
+            authoritative_tick.map_or_else(|| "pending".to_owned(), |tick| tick.get().to_string()),
+            yes_no(host_authoritative),
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
+        );
+        Self {
+            entered_gameplay,
+            source,
+            authoritative_tick,
+            host_authoritative,
+            status,
+        }
+    }
+
+    #[must_use]
+    pub fn hud_line(&self) -> String {
+        format!(
+            "Gameplay entry: {} via {} at tick {}",
+            if self.entered_gameplay {
+                "active"
+            } else {
+                "waiting"
+            },
+            self.source.label(),
+            self.authoritative_tick
+                .map_or_else(|| "pending".to_owned(), |tick| tick.get().to_string())
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineGameplayHudPresentation {
     pub visible: bool,
@@ -1109,6 +1182,7 @@ pub struct OnlineGameplayHudPresentation {
     pub remote_ready_label: &'static str,
     pub save_policy_label: String,
     pub session_label: String,
+    pub gameplay_entry_label: String,
     pub replication_label: String,
     pub terrain_label: String,
     pub authority_label: String,
@@ -1131,6 +1205,7 @@ impl OnlineGameplayHudPresentation {
             ),
             self.save_policy_label.clone(),
             self.session_label.clone(),
+            self.gameplay_entry_label.clone(),
             self.replication_label.clone(),
             self.terrain_label.clone(),
             self.authority_label.clone(),
@@ -5055,6 +5130,12 @@ pub struct GameState {
     #[serde(default, skip)]
     pub online_start_session_requested: bool,
     #[serde(default)]
+    pub online_gameplay_entry_source: OnlineGameplayEntrySource,
+    #[serde(default)]
+    pub online_gameplay_entry_authoritative_tick: Option<crate::multiplayer::SimulationTick>,
+    #[serde(default)]
+    pub online_last_gameplay_entry_status: String,
+    #[serde(default)]
     pub local_multiplayer_requested: bool,
     #[serde(default)]
     pub local_multiplayer_active: bool,
@@ -5331,6 +5412,9 @@ impl GameState {
             online_local_ready: false,
             online_network_task_request: None,
             online_start_session_requested: false,
+            online_gameplay_entry_source: OnlineGameplayEntrySource::None,
+            online_gameplay_entry_authoritative_tick: None,
+            online_last_gameplay_entry_status: String::new(),
             local_multiplayer_requested: false,
             local_multiplayer_active: false,
             local_multiplayer_player_slots: 1,
@@ -5861,6 +5945,20 @@ impl GameState {
 
     pub fn take_online_start_session_request(&mut self) -> bool {
         mem::take(&mut self.online_start_session_requested)
+    }
+
+    pub fn note_online_host_start_sent(
+        &mut self,
+        authoritative_tick: crate::multiplayer::SimulationTick,
+    ) {
+        self.online_gameplay_entry_source = OnlineGameplayEntrySource::HostStartSent;
+        self.online_gameplay_entry_authoritative_tick = Some(authoritative_tick);
+        self.refresh_online_gameplay_entry_status();
+    }
+
+    pub fn refresh_online_gameplay_entry_status(&mut self) {
+        self.online_last_gameplay_entry_status =
+            OnlineGameplayEntryPresentation::from_game(self).status;
     }
 
     #[allow(
@@ -6455,6 +6553,11 @@ impl GameState {
         } else {
             self.online_last_playable_session_status.clone()
         });
+        lines.push(if self.online_last_gameplay_entry_status.is_empty() {
+            OnlineGameplayEntryPresentation::from_game(self).status
+        } else {
+            self.online_last_gameplay_entry_status.clone()
+        });
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
@@ -6929,6 +7032,7 @@ impl GameState {
                 "waiting for remote"
             }
         );
+        let gameplay_entry_label = OnlineGameplayEntryPresentation::from_game(self).hud_line();
         let replication_label = if self.online_last_replicated_player_status.is_empty() {
             "Player sync: waiting for replicated player state.".to_owned()
         } else {
@@ -6974,6 +7078,7 @@ impl GameState {
             },
             save_policy_label,
             session_label,
+            gameplay_entry_label,
             replication_label,
             terrain_label,
             authority_label,
@@ -7068,6 +7173,9 @@ impl GameState {
             .clone_into(&mut self.online_session_status_message);
         if gate.ready {
             self.online_start_session_requested = true;
+            self.online_gameplay_entry_source = OnlineGameplayEntrySource::HostUiRequested;
+            self.online_gameplay_entry_authoritative_tick = None;
+            self.refresh_online_gameplay_entry_status();
             self.enter_online_playing_session();
         } else if gate.blocker == Some(OnlineGameplayStartBlocker::HostAuthorityRequired) {
             self.online_start_session_requested = false;
@@ -7086,7 +7194,10 @@ impl GameState {
             "Host started online gameplay at authoritative tick {}.",
             authoritative_tick.get()
         );
+        self.online_gameplay_entry_source = OnlineGameplayEntrySource::HostStartReceived;
+        self.online_gameplay_entry_authoritative_tick = Some(authoritative_tick);
         self.enter_online_playing_session();
+        self.refresh_online_gameplay_entry_status();
         self.refresh_online_playable_session_status();
     }
 

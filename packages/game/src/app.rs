@@ -415,6 +415,9 @@ impl OnlineTaskDispatcher {
                 );
                 return;
             }
+            session.game_mut().note_online_host_start_sent(
+                crate::multiplayer::SimulationTick::new(u64::from(self.live_tick_sequence)),
+            );
         }
         let result = match mode_label {
             "descriptor-host-accepted" => runtime.block_on(
