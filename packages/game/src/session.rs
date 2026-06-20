@@ -3250,6 +3250,7 @@ pub enum RenderPlayerPresentationSource {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderWorldPlayerPresentation {
     pub player_id: PlayerId,
+    pub display_name: Option<String>,
     pub x: f32,
     pub y: f32,
     pub velocity_x: f32,
@@ -3265,6 +3266,7 @@ pub struct RenderWorldPlayerPresentation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OnlineRemoteWorldPresentation {
     pub player_id: PlayerId,
+    pub display_name: Option<String>,
     pub x: f32,
     pub y: f32,
     pub velocity_x: f32,
@@ -3277,9 +3279,10 @@ pub struct OnlineRemoteWorldPresentation {
 
 impl OnlineRemoteWorldPresentation {
     #[must_use]
-    pub const fn as_render_player(&self) -> RenderWorldPlayerPresentation {
+    pub fn as_render_player(&self) -> RenderWorldPlayerPresentation {
         RenderWorldPlayerPresentation {
             player_id: self.player_id,
+            display_name: self.display_name.clone(),
             x: self.x,
             y: self.y,
             velocity_x: self.velocity_x,
@@ -3299,7 +3302,9 @@ impl RenderWorldPlayerPresentation {
     pub fn short_status_label(&self) -> String {
         format!(
             "P{} F{:.0} H{:.0} C{}",
-            self.player_id.get(),
+            self.display_name
+                .as_deref()
+                .map_or_else(|| self.player_id.get().to_string(), str::to_owned),
             self.fuel.max(0.0),
             self.hull.max(0.0),
             self.cargo_used
@@ -3519,6 +3524,7 @@ impl RenderFramePlan {
                     .filter(|movement| movement.player_id == player.player_id);
                 RenderWorldPlayerPresentation {
                     player_id: player.player_id,
+                    display_name: None,
                     x: predicted.map_or(player.x, |movement| movement.x),
                     y: predicted.map_or(player.y, |movement| movement.y),
                     velocity_x: player.velocity_x,

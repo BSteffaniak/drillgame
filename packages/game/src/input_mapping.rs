@@ -4,6 +4,7 @@
 )]
 
 use crate::{
+    game_state::session_gameplay_commands_from_input,
     input::PlayerInput,
     multiplayer::{ClientAction, ClientId, CommandSource, PlayerCommand},
 };
@@ -79,12 +80,18 @@ pub const fn online_commands(commands: Vec<PlayerCommand>) -> CommandProducer {
 
 #[must_use]
 pub fn local_keyboard_commands(input: PlayerInput) -> CommandProducer {
-    CommandProducer::new(CommandSource::Keyboard, map_player_commands(input))
+    CommandProducer::new(
+        CommandSource::Keyboard,
+        session_gameplay_commands_from_input(input),
+    )
 }
 
 #[must_use]
 pub fn split_screen_keyboard_commands(input: PlayerInput) -> CommandProducer {
-    CommandProducer::new(CommandSource::SplitScreenClient, map_player_commands(input))
+    CommandProducer::new(
+        CommandSource::SplitScreenClient,
+        session_gameplay_commands_from_input(input),
+    )
 }
 
 #[must_use]
@@ -111,32 +118,8 @@ pub fn local_split_screen_inputs(
 pub fn map_local_input(input: PlayerInput) -> MappedInput {
     MappedInput {
         client_actions: map_client_actions(input),
-        player_commands: map_player_commands(input),
+        player_commands: session_gameplay_commands_from_input(input),
     }
-}
-
-fn map_player_commands(input: PlayerInput) -> Vec<PlayerCommand> {
-    let mut commands = vec![PlayerCommand::Movement {
-        horizontal: input.horizontal,
-        thrust: input.thrust,
-        drill_down: input.drill_down,
-    }];
-
-    push_if(&mut commands, input.interact, PlayerCommand::Interact);
-    push_if(&mut commands, input.scan, PlayerCommand::UseScanner);
-    push_if(&mut commands, input.bomb, PlayerCommand::PlaceBomb);
-
-    for (pressed, slot) in infrastructure_slots(input) {
-        if pressed {
-            commands.push(PlayerCommand::PlaceInfrastructure { slot });
-        }
-    }
-
-    if let Some(index) = input.selected_upgrade {
-        commands.push(PlayerCommand::SelectUpgrade { index });
-    }
-
-    commands
 }
 
 fn map_client_actions(input: PlayerInput) -> Vec<ClientAction> {
@@ -181,17 +164,6 @@ fn push_if<T>(items: &mut Vec<T>, condition: bool, item: T) {
     }
 }
 
-const fn infrastructure_slots(input: PlayerInput) -> [(bool, u8); 6] {
-    [
-        (input.place_relay, 0),
-        (input.place_drone, 1),
-        (input.place_lift, 2),
-        (input.place_support, 3),
-        (input.place_pump, 4),
-        (input.place_processor, 5),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -206,7 +178,7 @@ mod tests {
     };
 
     #[test]
-    fn maps_movement_every_frame() {
+    fn maps_movement_when_pressed() {
         let input = PlayerInput {
             horizontal: 1.0,
             thrust: true,
@@ -224,6 +196,13 @@ mod tests {
                 drill_down: true,
             }
         );
+    }
+
+    #[test]
+    fn does_not_emit_idle_movement_commands() {
+        let mapped = map_local_input(PlayerInput::default());
+
+        assert!(mapped.player_commands.is_empty());
     }
 
     #[test]

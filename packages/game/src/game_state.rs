@@ -7647,6 +7647,15 @@ impl GameState {
             .iter()
             .map(|remote| crate::session::OnlineRemoteWorldPresentation {
                 player_id: remote.player_id,
+                display_name: if remote.player_id.get() == 1 {
+                    Some(
+                        self.online_remote_player_name
+                            .clone()
+                            .unwrap_or_else(|| "Host".to_owned()),
+                    )
+                } else {
+                    self.online_remote_player_name.clone()
+                },
                 x: remote.x,
                 y: remote.y,
                 velocity_x: remote.velocity_x,
@@ -16151,6 +16160,7 @@ mod tests {
         );
         assert!(!render_player.local_to_view);
         assert_eq!(render_player.cargo_used, 3);
+        assert_eq!(render_player.display_name.as_deref(), Some("Host"));
         assert!(
             game.online_last_sync_loop_status
                 .contains("snapshot applied")

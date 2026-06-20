@@ -221,7 +221,11 @@ pub(super) fn draw_minimap_for_view(
             );
         }
         draw.draw_text(
-            &format!("P{}", remote.player_id.get()),
+            remote
+                .display_name
+                .as_deref()
+                .map_or_else(|| format!("P{}", remote.player_id.get()), ToOwned::to_owned)
+                .as_str(),
             remote_x + 4,
             remote_y - 4,
             10,
