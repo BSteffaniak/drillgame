@@ -7649,6 +7649,8 @@ impl GameState {
                 player_id: remote.player_id,
                 x: remote.x,
                 y: remote.y,
+                velocity_x: remote.velocity_x,
+                velocity_y: remote.velocity_y,
                 fuel: remote.fuel,
                 hull: remote.hull,
                 credits: remote.credits,

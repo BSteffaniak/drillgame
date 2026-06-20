@@ -205,6 +205,21 @@ pub(super) fn draw_minimap_for_view(
         let remote_x = x + remote_tile_x * width / terrain_width;
         let remote_y = y + (remote_tile_y - origin_y) * height / visible_height;
         draw.draw_circle(remote_x, remote_y, 3.0, Color::ORANGE);
+        if remote.velocity_x.abs() > f32::EPSILON || remote.velocity_y.abs() > f32::EPSILON {
+            let speed = (remote
+                .velocity_x
+                .mul_add(remote.velocity_x, remote.velocity_y * remote.velocity_y))
+            .sqrt();
+            let direction_x = remote.velocity_x / speed;
+            let direction_y = remote.velocity_y / speed;
+            draw.draw_line(
+                remote_x,
+                remote_y,
+                remote_x + (direction_x * 8.0) as i32,
+                remote_y + (direction_y * 8.0) as i32,
+                Color::GOLD,
+            );
+        }
         draw.draw_text(
             &format!("P{}", remote.player_id.get()),
             remote_x + 4,

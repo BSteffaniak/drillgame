@@ -374,6 +374,14 @@ pub(super) fn draw_remote_player(
     player: &RenderWorldPlayerPresentation,
 ) {
     draw_remote_player_at(draw, player.x, player.y, player.danger_level());
+    draw_remote_player_motion_indicator(
+        draw,
+        player.x,
+        player.y,
+        player.danger_level(),
+        player.velocity_x,
+        player.velocity_y,
+    );
     draw_remote_player_status(draw, player);
 }
 
@@ -430,6 +438,36 @@ pub(super) fn draw_remote_player_at(
         3.0,
         Color::DARKBLUE,
     );
+    draw_remote_player_motion_indicator(draw, player_x, player_y, danger_level, 0.0, 0.0);
+}
+
+pub(super) fn draw_remote_player_motion_indicator(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    player_x: f32,
+    player_y: f32,
+    danger_level: RemotePlayerDangerLevel,
+    velocity_x: f32,
+    velocity_y: f32,
+) {
+    let speed = (velocity_x.mul_add(velocity_x, velocity_y * velocity_y)).sqrt();
+    if speed <= f32::EPSILON {
+        return;
+    }
+    let direction_x = velocity_x / speed;
+    let direction_y = velocity_y / speed;
+    let trail_color = match danger_level {
+        RemotePlayerDangerLevel::Nominal => Color::new(120, 220, 255, 150),
+        RemotePlayerDangerLevel::Warning => Color::new(255, 190, 40, 170),
+        RemotePlayerDangerLevel::Critical => Color::new(255, 70, 70, 190),
+    };
+    let trail_length = (speed * 0.12).clamp(12.0, 34.0);
+    let start = Vector2::new(player_x - direction_x * 18.0, player_y - direction_y * 18.0);
+    let end = Vector2::new(
+        player_x - direction_x * (18.0 + trail_length),
+        player_y - direction_y * (18.0 + trail_length),
+    );
+    draw.draw_line_ex(start, end, 4.0, trail_color);
+    draw.draw_circle_v(end, 3.0, trail_color);
 }
 
 fn draw_remote_player_status(
