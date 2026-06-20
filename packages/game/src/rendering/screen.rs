@@ -79,14 +79,7 @@ pub(super) fn draw_hud_for_view(
     game: &GameState,
     view: &ClientView,
 ) {
-    draw_hud(draw, game);
-    draw.draw_text(
-        &format!("P{}", view.controlled_player_id.get()),
-        view.viewport.x + view.viewport.width - 64,
-        view.viewport.y + 48,
-        18,
-        Color::LIGHTGRAY,
-    );
+    draw_view_hud_panel(draw, game, view, None);
 }
 
 pub(super) fn draw_hud_snapshot_for_view(
@@ -95,47 +88,59 @@ pub(super) fn draw_hud_snapshot_for_view(
     view: &ClientView,
     hud: PerPlayerHudSnapshot,
 ) {
-    draw_hud(draw, game);
-    let x = view.viewport.x + 18;
-    let y = view.viewport.y + 42;
-    draw.draw_rectangle(x - 8, y - 8, 230, 96, Color::new(20, 24, 32, 190));
-    draw.draw_text(
-        &format!("P{}", hud.player_id.get()),
-        x,
-        y,
-        20,
-        Color::RAYWHITE,
-    );
-    draw.draw_text(
-        &format!("Credits {}", hud.credits),
-        x,
-        y + 22,
-        16,
-        Color::GOLD,
-    );
-    draw.draw_text(
-        &format!("Cargo {}", hud.cargo_used),
-        x,
-        y + 40,
-        16,
-        Color::LIGHTGRAY,
-    );
-    draw.draw_text(
-        &format!("Fuel {:.0} Hull {:.0}", hud.fuel, hud.hull),
-        x,
-        y + 58,
-        16,
-        Color::LIGHTGRAY,
-    );
-    if hud.scanner_cooldown_seconds > 0.0 {
-        draw.draw_text(
-            &format!("Scan {:.1}s", hud.scanner_cooldown_seconds),
-            x,
-            y + 76,
-            16,
-            Color::SKYBLUE,
-        );
+    draw_view_hud_panel(draw, game, view, Some(hud));
+}
+
+fn draw_view_hud_panel(
+    draw: &mut RaylibDrawHandle<'_>,
+    game: &GameState,
+    view: &ClientView,
+    hud: Option<PerPlayerHudSnapshot>,
+) {
+    let mut ui = UiContext::new(draw);
+    let panel_width = view.viewport.width.clamp(260, 430) as f32;
+    let panel_height = if view.viewport.height < 420 {
+        150.0
+    } else {
+        210.0
+    };
+    let mut panel = ui.panel(Rectangle {
+        x: view.viewport.x as f32 + 12.0,
+        y: view.viewport.y as f32 + 12.0,
+        width: panel_width,
+        height: panel_height,
+    });
+    panel.begin_clip();
+    panel.heading(&format!("Pilot {}", view.controlled_player_id.get()));
+    if let Some(hud) = hud {
+        panel.label(&format!(
+            "Hull {:.0}/{:.0} | Fuel {:.0}/{:.0} | Credits {}",
+            hud.hull, hud.max_hull, hud.fuel, hud.fuel_capacity, hud.credits
+        ));
+        panel.muted(&format!("Cargo {}", hud.cargo_used));
+    } else {
+        panel.label(&format!(
+            "Hull {:.0}/{:.0} | Fuel {:.0}/{:.0} | Credits {}",
+            game.player.hull,
+            game.player.max_hull(),
+            game.player.fuel,
+            game.player.fuel_capacity,
+            game.player.credits
+        ));
+        panel.muted(&format!(
+            "Cargo {}/{} | Depth {}m",
+            game.player.cargo_used(),
+            game.player.cargo_capacity,
+            (game.player.y / TILE_SIZE).max(0.0) as i32
+        ));
     }
+    panel.muted(&format!(
+        "Objective: {} {}/{} {}",
+        game.contracts.active.title,
+        game.contracts.active.progress(&game.player),
+        game.contracts.active.required,
+        game.contracts.active.target.name()
+    ));
 }
 
 pub(super) fn draw_minimap_for_view(
@@ -878,6 +883,12 @@ fn draw_modal_ui(
 ) -> bool {
     match modal {
         ModalScreen::Depot => draw_modal_depot_ui(draw, game),
+        ModalScreen::DepotReceiptHistory => draw_depot_receipt_history_ui(draw, game),
+        ModalScreen::ShopConfirm => draw_confirm_modal_ui(
+            draw,
+            "Confirm Upgrade Purchase",
+            "Enter/E buys the selected upgrade. Esc returns to the shop.",
+        ),
         ModalScreen::Fuel => draw_service_modal_ui(draw, game, hud, "Fuel Station", "fuel"),
         ModalScreen::Repair => draw_service_modal_ui(draw, game, hud, "Repair Garage", "hull"),
         ModalScreen::FuelConfirm => draw_confirm_modal_ui(
@@ -992,7 +1003,6 @@ fn draw_modal_ui(
         ModalScreen::OnlineMultiplayer => draw_online_multiplayer_ui(draw, game),
         ModalScreen::Map => draw_map_ui(draw, game),
         ModalScreen::Help => draw_help_ui(draw),
-        _ => return false,
     }
     true
 }
@@ -1133,6 +1143,27 @@ fn draw_generic_options_ui(
         panel.option(index == game.selected_menu_item, option, None);
     }
 }
+fn draw_depot_receipt_history_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
+    let mut ui = UiContext::new(draw);
+    ui.draw_dimmed_backdrop();
+    let mut panel = ui.panel(modal_rect(780, 520));
+    panel.begin_clip();
+    panel.title("Depot Receipts");
+    panel.muted("Recent sales and contract payouts. Esc closes.");
+    panel.separator();
+    if game.depot_receipts.is_empty() {
+        panel.label("No depot receipts yet.");
+    } else {
+        for (index, receipt) in game.depot_receipts.iter().rev().take(10).enumerate() {
+            panel.heading(&format!("Receipt {}", index + 1));
+            for line in receipt.lines().take(5) {
+                panel.muted(line);
+            }
+            panel.separator();
+        }
+    }
+}
+
 fn draw_research_log_ui(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     let mut ui = UiContext::new(draw);
     ui.draw_dimmed_backdrop();
