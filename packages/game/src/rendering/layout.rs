@@ -52,6 +52,13 @@ impl Constraints {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum FontRole {
+    Title,
+    Heading,
+    Small,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum TextKind {
     Title,
     Heading,
@@ -460,18 +467,27 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         let Ok(cstring) = CString::new(text) else {
             return;
         };
-        let size = font_metrics(kind).font_size;
+        let metrics = font_metrics(kind);
+        let size = metrics.font_size;
+        let spacing = metrics.spacing;
         unsafe {
-            let font = ffi::GetFontDefault();
+            let font = font_for_role(font_role(kind));
             ffi::DrawTextEx(
                 font,
                 cstring.as_ptr(),
                 Vector2::new(x + 1.0, y + 1.0),
                 size,
-                1.0,
+                spacing,
                 Color::new(0, 0, 0, 180),
             );
-            ffi::DrawTextEx(font, cstring.as_ptr(), Vector2::new(x, y), size, 1.0, color);
+            ffi::DrawTextEx(
+                font,
+                cstring.as_ptr(),
+                Vector2::new(x, y),
+                size,
+                spacing,
+                color,
+            );
         }
     }
 }
@@ -651,12 +667,24 @@ fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
     };
     unsafe {
         ffi::MeasureTextEx(
-            ffi::GetFontDefault(),
+            font_for_role(font_role(kind)),
             cstring.as_ptr(),
             font_metrics(kind).font_size,
             font_metrics(kind).spacing,
         )
         .x
+    }
+}
+
+fn font_for_role(_role: FontRole) -> ffi::Font {
+    unsafe { ffi::GetFontDefault() }
+}
+
+const fn font_role(kind: TextKind) -> FontRole {
+    match kind {
+        TextKind::Title => FontRole::Title,
+        TextKind::Heading => FontRole::Heading,
+        TextKind::Small => FontRole::Small,
     }
 }
 
