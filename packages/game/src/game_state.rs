@@ -2589,6 +2589,81 @@ impl OnlineNetworkTaskOrchestrationStatus {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineShutdownSummary {
+    pub role_label: String,
+    pub peer_notification_attempted: bool,
+    pub peer_notified: bool,
+    pub warning: Option<String>,
+    pub save_policy_line: String,
+}
+
+impl OnlineShutdownSummary {
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "used by shutdown reducer tests without requiring a live controller"
+    )]
+    pub fn offline() -> Self {
+        Self {
+            role_label: "offline".to_owned(),
+            peer_notification_attempted: false,
+            peer_notified: false,
+            warning: None,
+            save_policy_line: "No online peer was active; local save policy unchanged.".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_notification(
+        role_label: impl Into<String>,
+        peer_notification_attempted: bool,
+        peer_notified: bool,
+        warning: Option<String>,
+        host_owns_save: bool,
+    ) -> Self {
+        Self {
+            role_label: role_label.into(),
+            peer_notification_attempted,
+            peer_notified,
+            warning,
+            save_policy_line: if host_owns_save {
+                "Host-owned save remains local and may be saved after shutdown.".to_owned()
+            } else {
+                "Joined-client local save writes remain blocked until the session closes."
+                    .to_owned()
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        let notification = if self.peer_notification_attempted {
+            if self.peer_notified {
+                "peer notified"
+            } else {
+                "peer notification failed"
+            }
+        } else {
+            "no peer notification needed"
+        };
+        self.warning.as_ref().map_or_else(
+            || {
+                format!(
+                    "Shutdown summary: role={} {notification}; {}",
+                    self.role_label, self.save_policy_line
+                )
+            },
+            |warning| {
+                format!(
+                    "Shutdown summary: role={} {notification}; {}; warning={warning}",
+                    self.role_label, self.save_policy_line
+                )
+            },
+        )
+    }
+}
+
 #[allow(
     dead_code,
     reason = "online task reducer is exercised by tests until desktop event-loop ownership calls it"
@@ -2600,7 +2675,7 @@ pub enum OnlineNetworkTaskResult {
     Connected(RealOnlineSessionUxSnapshot),
     Reconnected(RealOnlineSessionUxSnapshot),
     Failed(String),
-    Shutdown,
+    Shutdown(OnlineShutdownSummary),
 }
 
 #[allow(
@@ -4940,6 +5015,8 @@ pub struct GameState {
     #[serde(default)]
     pub online_last_session_boundary_status: String,
     #[serde(default)]
+    pub online_last_shutdown_summary: String,
+    #[serde(default)]
     pub online_session_boundary_history: Vec<String>,
     #[serde(default)]
     pub online_last_failure_status: String,
@@ -5229,6 +5306,7 @@ impl GameState {
             online_last_correction_status: String::new(),
             online_last_sync_loop_status: String::new(),
             online_last_session_boundary_status: String::new(),
+            online_last_shutdown_summary: String::new(),
             online_session_boundary_history: Vec::new(),
             online_last_failure_status: String::new(),
             online_last_ownership_status: String::new(),
@@ -5809,7 +5887,7 @@ impl GameState {
                 self.apply_online_failure_status(&failure_status);
                 OnlineTaskResultTransitionKind::Failed
             }
-            OnlineNetworkTaskResult::Shutdown => {
+            OnlineNetworkTaskResult::Shutdown(summary) => {
                 self.online_session_state = OnlineSessionUxState::Shutdown;
                 self.online_network_task_request = None;
                 self.online_local_ready = false;
@@ -5817,6 +5895,7 @@ impl GameState {
                 self.online_remote_player_connected = false;
                 self.modal = None;
                 self.clear_online_diagnostics();
+                self.online_last_shutdown_summary = summary.status_line();
                 self.apply_online_session_boundary_status(
                     &OnlineSessionBoundaryStatus::shutdown_acknowledged(),
                 );
@@ -6686,10 +6765,15 @@ impl GameState {
             self.online_session_boundary_history
                 .iter()
                 .rev()
-                .take(4)
+                .take(3)
                 .cloned()
                 .collect()
         };
+        let mut boundary_lines = boundary_lines;
+        if !self.online_last_shutdown_summary.is_empty() {
+            boundary_lines.insert(0, self.online_last_shutdown_summary.clone());
+            boundary_lines.truncate(4);
+        }
         OnlineSessionLifecyclePresentation {
             active,
             heading,
@@ -6779,6 +6863,9 @@ impl GameState {
                 "Boundary: {}",
                 self.online_last_session_boundary_status
             ));
+        }
+        if !self.online_last_shutdown_summary.is_empty() {
+            lines.push(format!("Shutdown: {}", self.online_last_shutdown_summary));
         }
         OnlinePauseSessionPresentation {
             active: true,
@@ -12806,7 +12893,9 @@ mod tests {
         assert_eq!(game.online_network_task_request, None);
         assert!(game.message.contains("direct Quinn connection task failed"));
 
-        let shutdown = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        let shutdown = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::offline(),
+        ));
         assert_eq!(shutdown.kind, OnlineTaskResultTransitionKind::Shutdown);
         assert_eq!(game.online_session_state, OnlineSessionUxState::Shutdown);
     }
@@ -13221,7 +13310,9 @@ mod tests {
         game.online_host_owns_save = true;
         game.online_session_state = OnlineSessionUxState::Connected;
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::offline(),
+        ));
 
         let lines = game.online_multiplayer_status_lines();
         assert!(lines.iter().any(|line| {
@@ -14410,7 +14501,9 @@ mod tests {
         assert!(game.online_last_ownership_status.contains("Joined Miner"));
         assert!(game.online_last_ownership_status.contains("RemoteHost"));
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::offline(),
+        ));
         assert!(
             game.online_last_session_boundary_status
                 .contains("ShutdownAcknowledged")
@@ -14607,7 +14700,9 @@ mod tests {
         game.online_remote_player_ready = true;
         game.online_remote_player_connected = true;
 
-        let transition = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        let transition = game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::offline(),
+        ));
 
         assert_eq!(transition.kind, OnlineTaskResultTransitionKind::Shutdown);
         assert!(game.online_last_replication_status.is_empty());
@@ -14693,7 +14788,9 @@ mod tests {
             Some(OnlineNetworkTaskRequest::Shutdown)
         );
 
-        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+        game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(
+            OnlineShutdownSummary::offline(),
+        ));
         assert!(game.save_dirty);
         assert_eq!(game.online_network_task_request, None);
         assert_eq!(game.modal, None);

@@ -3,7 +3,8 @@ use std::sync::mpsc;
 use crate::{
     audio::AudioBus,
     game_state::{
-        GameState, OnlineNetworkTaskRequest, OnlineNetworkTaskResult, RealOnlineSessionController,
+        GameState, OnlineNetworkTaskRequest, OnlineNetworkTaskResult, OnlineShutdownSummary,
+        RealOnlineSessionController,
     },
     input::{
         combine_player_input, read_gamepad_input, read_input, read_input_with_arrow_aliases,
@@ -288,27 +289,50 @@ impl OnlineTaskDispatcher {
                 }
             }
             OnlineNetworkTaskRequest::Shutdown => {
+                let host_owns_save = game.online_host_owns_save;
+                let mut role_label = game.online_role_label().to_owned();
+                let mut attempted = false;
+                let mut notified = false;
+                let mut warning = None;
                 if let (Some(runtime), Some(controller)) = (&self.runtime, &mut self.controller) {
                     match controller.mode_label() {
                         "descriptor-host-accepted" => {
-                            let _ignored = runtime.block_on(
+                            "descriptor host".clone_into(&mut role_label);
+                            attempted = true;
+                            match runtime.block_on(
                                 controller
                                     .descriptor_host_send_session_ended("host ended the session"),
-                            );
+                            ) {
+                                Ok(()) => notified = true,
+                                Err(error) => warning = Some(format!("{error:?}")),
+                            }
                         }
                         "descriptor-client-connected" => {
-                            let _ignored =
-                                runtime.block_on(controller.descriptor_client_send_session_ended(
-                                    "joined client left the session",
-                                ));
+                            "descriptor client".clone_into(&mut role_label);
+                            attempted = true;
+                            match runtime.block_on(controller.descriptor_client_send_session_ended(
+                                "joined client left the session",
+                            )) {
+                                Ok(()) => notified = true,
+                                Err(error) => warning = Some(format!("{error:?}")),
+                            }
                         }
-                        _ => {}
+                        other => {
+                            other.clone_into(&mut role_label);
+                        }
                     }
                 }
+                let summary = OnlineShutdownSummary::from_notification(
+                    role_label,
+                    attempted,
+                    notified,
+                    warning,
+                    host_owns_save,
+                );
                 self.controller = None;
                 self.pending_completion = None;
                 self.pending_descriptor_accept = None;
-                game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown);
+                game.apply_online_network_task_result(OnlineNetworkTaskResult::Shutdown(summary));
             }
         }
     }
