@@ -19,6 +19,8 @@ name = "drillgame"
 path = "src/main.rs"
 
 [dependencies]
+hostname   = { workspace = true }
+mdns-sd    = { workspace = true }
 quinn      = { workspace = true }
 raylib     = { workspace = true }
 rcgen      = { workspace = true }

@@ -1993,6 +1993,7 @@ pub enum OnlineNetworkTaskRequest {
     HostDirectConnect,
     JoinDirectConnect,
     HostDescriptorFile { path: PathBuf },
+    HostLanGame { path: PathBuf },
     JoinDescriptorFile { path: PathBuf },
     ReconnectDirectConnect,
     Shutdown,
@@ -3428,12 +3429,16 @@ pub enum RealOnlineSessionMode {
         listener: crate::multiplayer::QuinnHostListener,
         descriptor_path: PathBuf,
         descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
+        lan_descriptor_server: Option<crate::lan_discovery::LanDescriptorServer>,
+        lan_publisher: Option<crate::lan_discovery::LanDiscoveryPublisher>,
     },
     DescriptorHostAccepted {
         host_runtime: crate::multiplayer::HostSessionRuntime,
         host_io: crate::multiplayer::QuinnPacketIo,
         descriptor_path: PathBuf,
         descriptor: crate::multiplayer::QuinnHostConnectionDescriptor,
+        lan_descriptor_server: Option<crate::lan_discovery::LanDescriptorServer>,
+        lan_publisher: Option<crate::lan_discovery::LanDiscoveryPublisher>,
     },
     DescriptorClientConnected {
         client_runtime: crate::multiplayer::ClientSessionRuntime,
@@ -3523,6 +3528,21 @@ impl RealOnlineSessionController {
         game: &mut GameState,
         path: &Path,
     ) -> Result<Self, crate::multiplayer::QuinnOnlineSessionError> {
+        Self::host_descriptor_file_pending_with_lan(game, path, false)
+    }
+
+    pub fn host_lan_game_pending(
+        game: &mut GameState,
+        path: &Path,
+    ) -> Result<Self, crate::multiplayer::QuinnOnlineSessionError> {
+        Self::host_descriptor_file_pending_with_lan(game, path, true)
+    }
+
+    fn host_descriptor_file_pending_with_lan(
+        game: &mut GameState,
+        path: &Path,
+        publish_lan: bool,
+    ) -> Result<Self, crate::multiplayer::QuinnOnlineSessionError> {
         let listener = crate::multiplayer::QuinnHostListener::bind_localhost(
             crate::multiplayer::QuinnEndpointConfig {
                 bind_addr: game.online_host_bind_addr,
@@ -3536,11 +3556,40 @@ impl RealOnlineSessionController {
             crate::multiplayer::QuinnOnlineSessionError::Accept(error.to_string())
         })?;
         write_online_descriptor_file(path, &json)?;
+        let (lan_descriptor_server, lan_publisher) = if publish_lan {
+            let descriptor_server = crate::lan_discovery::LanDescriptorServer::serve(
+                crate::lan_discovery::localhost_descriptor_bind_addr(),
+                &descriptor,
+            )
+            .map_err(|error| {
+                crate::multiplayer::QuinnOnlineSessionError::Accept(format!(
+                    "LAN descriptor server failed: {error}"
+                ))
+            })?;
+            let descriptor_addr = SocketAddr::new(
+                descriptor.host_addr.ip(),
+                descriptor_server.local_addr().port(),
+            );
+            let advertisement =
+                crate::lan_discovery::LanGameAdvertisement::from_descriptor(&descriptor)
+                    .with_descriptor_addr(descriptor_addr);
+            let publisher = crate::lan_discovery::LanDiscoveryPublisher::publish(&advertisement)
+                .map_err(|error| {
+                    crate::multiplayer::QuinnOnlineSessionError::Accept(format!(
+                        "LAN mDNS publish failed: {error}"
+                    ))
+                })?;
+            (Some(descriptor_server), Some(publisher))
+        } else {
+            (None, None)
+        };
         let controller = Self {
             mode: RealOnlineSessionMode::DescriptorHostPending {
                 listener,
                 descriptor_path: path.to_path_buf(),
                 descriptor,
+                lan_descriptor_server,
+                lan_publisher,
             },
             player_slot: Some(1),
             next_sequence: 30,
@@ -3621,6 +3670,8 @@ impl RealOnlineSessionController {
             listener,
             descriptor_path,
             descriptor,
+            lan_descriptor_server,
+            lan_publisher,
         } = &mut self.mode
         else {
             return Err(
@@ -3674,11 +3725,15 @@ impl RealOnlineSessionController {
             .await?;
         let descriptor_path = descriptor_path.clone();
         let descriptor = descriptor.clone();
+        let lan_descriptor_server = lan_descriptor_server.take();
+        let lan_publisher = lan_publisher.take();
         self.mode = RealOnlineSessionMode::DescriptorHostAccepted {
             host_runtime,
             host_io,
             descriptor_path,
             descriptor,
+            lan_descriptor_server,
+            lan_publisher,
         };
         game.apply_real_online_session_ux(
             RealOnlineSessionUxSnapshot::from_descriptor_host_accepted(self.player_slot),
@@ -8342,10 +8397,9 @@ impl GameState {
                 }
                 self.apply_online_descriptor_input_status(&descriptor_status);
                 self.online_session_state = OnlineSessionUxState::Hosting;
-                self.online_network_task_request =
-                    Some(OnlineNetworkTaskRequest::HostDescriptorFile {
-                        path: self.online_descriptor_path.clone(),
-                    });
+                self.online_network_task_request = Some(OnlineNetworkTaskRequest::HostLanGame {
+                    path: self.online_descriptor_path.clone(),
+                });
                 self.online_host_owns_save = true;
                 self.online_player_slot = Some(1);
                 self.online_local_ready = false;
@@ -8353,8 +8407,8 @@ impl GameState {
                 self.online_remote_player_ready = false;
                 self.online_remote_player_connected = false;
                 self.online_session_status_message = format!(
-                    "Hosting direct-connect descriptor at {}. Host owns save/session authority.",
-                    self.online_descriptor_path.display()
+                    "Hosting LAN game as {}. Host owns save/session authority.",
+                    crate::lan_discovery::local_machine_name()
                 );
             }
             1 => {
@@ -12737,7 +12791,7 @@ mod tests {
         );
         assert_eq!(
             game.take_online_network_task_request(),
-            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            Some(OnlineNetworkTaskRequest::HostLanGame {
                 path: default_online_descriptor_path()
             })
         );
@@ -13544,7 +13598,7 @@ mod tests {
         );
         assert_eq!(
             game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::HostDescriptorFile {
+            Some(OnlineNetworkTaskRequest::HostLanGame {
                 path: default_online_descriptor_path()
             })
         );
@@ -14295,7 +14349,7 @@ mod tests {
         host_game.confirm_online_multiplayer();
         assert!(matches!(
             host_game.online_network_task_request,
-            Some(OnlineNetworkTaskRequest::HostDescriptorFile { .. })
+            Some(OnlineNetworkTaskRequest::HostLanGame { .. })
         ));
         assert!(
             host_game

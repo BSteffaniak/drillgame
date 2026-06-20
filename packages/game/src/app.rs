@@ -180,6 +180,7 @@ impl OnlineTaskDispatcher {
         path: std::path::PathBuf,
         bind_addr: std::net::SocketAddr,
         advertise_addr: std::net::SocketAddr,
+        publish_lan: bool,
     ) {
         let Some(runtime) = &self.runtime else {
             return;
@@ -190,9 +191,12 @@ impl OnlineTaskDispatcher {
             let mut game = GameState::new();
             game.online_host_bind_addr = bind_addr;
             game.online_host_advertise_addr = advertise_addr;
-            let result =
+            let result = if publish_lan {
+                RealOnlineSessionController::host_lan_game_pending(&mut game, &path)
+            } else {
                 RealOnlineSessionController::host_descriptor_file_pending(&mut game, &path)
-                    .map_err(|error| format!("{error:?}"));
+            }
+            .map_err(|error| format!("{error:?}"));
             let _ignored = sender.send(OnlineTaskCompletion::Hosted(result));
         });
     }
@@ -273,6 +277,19 @@ impl OnlineTaskDispatcher {
                     path,
                     game.online_host_bind_addr,
                     game.online_host_advertise_addr,
+                    false,
+                );
+            }
+            OnlineNetworkTaskRequest::HostLanGame { path } => {
+                game.online_session_status_message = format!(
+                    "Hosting LAN game through mDNS at {}; waiting for remote miner.",
+                    game.online_host_advertise_addr
+                );
+                self.spawn_host_descriptor(
+                    path,
+                    game.online_host_bind_addr,
+                    game.online_host_advertise_addr,
+                    true,
                 );
             }
             OnlineNetworkTaskRequest::JoinDescriptorFile { path } => {

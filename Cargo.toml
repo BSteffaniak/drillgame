@@ -11,6 +11,8 @@ repository = "https://github.com/BSteffaniak/drillgame"
 version    = "0.0.1-alpha.0"
 
 [workspace.dependencies]
+hostname = "0.4.2"
+mdns-sd = "0.18.2"
 quinn = { version = "0.11.9", default-features = false, features = [
     "rustls",
     "ring",
