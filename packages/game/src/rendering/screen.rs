@@ -1019,7 +1019,7 @@ fn draw_online_action_card(draw: &mut RaylibDrawHandle<'_>, game: &GameState, x:
     draw.draw_rectangle_lines(x - 12, y - 12, 520, 106, Color::DARKPURPLE);
     draw.draw_text("What to do next", x, y, 22, Color::VIOLET);
     draw.draw_text(
-        online_selected_action_help(game.selected_menu_item),
+        online_selected_action_help(game, game.selected_menu_item),
         x,
         y + 34,
         16,
@@ -1070,7 +1070,7 @@ const fn online_save_authority_label(authority: OnlineSaveAuthority) -> &'static
     }
 }
 
-const fn online_selected_action_help(selected: usize) -> &'static str {
+const fn online_selected_action_help(game: &GameState, selected: usize) -> &'static str {
     match selected {
         0 => "Host: write descriptor, keep this window open, then wait for the other player.",
         1 => "Join: point at the host's descriptor file, then connect as the joined client.",
@@ -1082,7 +1082,13 @@ const fn online_selected_action_help(selected: usize) -> &'static str {
         7 => "Client bind: local socket address the joined client uses.",
         8 => "Gameplay ticks: length for command-line smoke gameplay tasks.",
         12 => "Ready: toggle this player ready once the remote player is connected.",
-        13 => "Start: enter gameplay only when both players are connected and ready.",
+        13 => {
+            if game.online_host_owns_save {
+                "Start: host enters gameplay and sends the authoritative start signal."
+            } else {
+                "Start: clients wait here; only the host can begin the authoritative session."
+            }
+        }
         14 => "Back: return to the previous menu without changing the current session.",
         _ => "This action is for diagnostics or session lifecycle control.",
     }

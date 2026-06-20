@@ -537,7 +537,8 @@ impl OnlineLiveVerificationStatus {
                     OnlineGameplayStartBlocker::NotConnected
                         | OnlineGameplayStartBlocker::RemoteNotConnected
                         | OnlineGameplayStartBlocker::LocalNotReady
-                        | OnlineGameplayStartBlocker::RemoteNotReady,
+                        | OnlineGameplayStartBlocker::RemoteNotReady
+                        | OnlineGameplayStartBlocker::HostAuthorityRequired,
                 )
             );
         let session_boundary_visible = !game.online_last_session_boundary_status.is_empty();
@@ -2316,9 +2317,11 @@ impl OnlineReadyStartTransitionStatus {
                         | OnlineGameplayStartBlocker::LocalNotReady
                         | OnlineGameplayStartBlocker::RemoteNotConnected
                         | OnlineGameplayStartBlocker::RemoteNotReady
+                        | OnlineGameplayStartBlocker::HostAuthorityRequired
                 )
             );
         let start_message_sendable = start_gate.ready
+            && game.online_host_owns_save
             && game.online_remote_player_connected
             && game.online_remote_player_ready;
         let host_enters_gameplay_from_ui = game.online_host_owns_save
@@ -2326,7 +2329,8 @@ impl OnlineReadyStartTransitionStatus {
             && matches!(game.online_session_state, OnlineSessionUxState::Connected);
         let joined_enters_gameplay_from_ui = !game.online_host_owns_save
             && (game.run_mode == RunMode::Playing)
-            && matches!(game.online_session_state, OnlineSessionUxState::Connected);
+            && matches!(game.online_session_state, OnlineSessionUxState::Connected)
+            && !game.online_start_session_requested;
         let modal_closes_only_when_playing =
             game.run_mode == RunMode::Playing || game.modal.is_some();
         let save_boundary = OnlineSaveBoundaryStatus::from_game(game);
@@ -2335,10 +2339,15 @@ impl OnlineReadyStartTransitionStatus {
                 && save_boundary.save_authority == OnlineSaveAuthority::LocalPlayer)
                 || (!game.online_host_owns_save
                     && save_boundary.save_authority == OnlineSaveAuthority::RemoteHost));
+        let start_transition_complete = if game.online_host_owns_save {
+            start_message_sendable
+        } else {
+            joined_enters_gameplay_from_ui
+        };
         let transition_ready = local_ready_sent
             && remote_ready_received
             && start_gated_on_connected_ready
-            && start_message_sendable
+            && start_transition_complete
             && modal_closes_only_when_playing
             && role_slot_save_authority_preserved;
         let status = format!(
@@ -2375,6 +2384,7 @@ pub enum OnlineGameplayStartBlocker {
     LocalNotReady,
     RemoteNotConnected,
     RemoteNotReady,
+    HostAuthorityRequired,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6591,8 +6601,10 @@ impl GameState {
             "blocked: local player not ready"
         } else if !self.online_remote_player_ready {
             "blocked: remote player not ready"
+        } else if !self.online_host_owns_save {
+            "blocked: host must start gameplay"
         } else {
-            "ready: both players can start gameplay"
+            "ready: authoritative host can start gameplay"
         };
         format!(
             "Start readiness: {start_state} | local_ready={} remote_ready={} remote_connected={}",
@@ -7040,6 +7052,11 @@ impl GameState {
                 OnlineGameplayStartBlocker::RemoteNotReady,
                 "Start blocked: waiting for the remote player to toggle ready.",
             )
+        } else if !self.online_host_owns_save {
+            OnlineGameplayStartGate::blocked(
+                OnlineGameplayStartBlocker::HostAuthorityRequired,
+                "Start blocked: only the authoritative host can start online gameplay; wait for the host start signal.",
+            )
         } else {
             OnlineGameplayStartGate::ready()
         }
@@ -7050,8 +7067,11 @@ impl GameState {
         gate.message
             .clone_into(&mut self.online_session_status_message);
         if gate.ready {
-            self.online_start_session_requested = self.online_host_owns_save;
+            self.online_start_session_requested = true;
             self.enter_online_playing_session();
+        } else if gate.blocker == Some(OnlineGameplayStartBlocker::HostAuthorityRequired) {
+            self.online_start_session_requested = false;
+            self.refresh_online_lobby_status();
         }
         self.refresh_online_playable_session_status();
     }
@@ -12810,9 +12830,10 @@ mod tests {
         );
 
         game.online_remote_player_ready = true;
+        game.online_host_owns_save = true;
         assert!(
             game.online_start_readiness_line()
-                .contains("ready: both players can start gameplay")
+                .contains("ready: authoritative host can start gameplay")
         );
     }
 
@@ -12987,6 +13008,7 @@ mod tests {
         );
 
         game.online_remote_player_ready = true;
+        game.online_host_owns_save = true;
         let ready = game.online_gameplay_start_gate();
         assert!(ready.ready);
         assert_eq!(ready.blocker, None);
@@ -12994,6 +13016,33 @@ mod tests {
         assert_eq!(game.run_mode, RunMode::Playing);
         assert_eq!(game.modal, None);
         assert!(game.message.contains("Starting online gameplay"));
+    }
+
+    #[test]
+    fn joined_client_cannot_start_authoritative_online_gameplay_from_ui() {
+        let mut client = GameState::new();
+        client.online_session_state = OnlineSessionUxState::Connected;
+        client.online_host_owns_save = false;
+        client.online_player_slot = Some(2);
+        client.online_local_ready = true;
+        client.online_remote_player_connected = true;
+        client.online_remote_player_ready = true;
+
+        let gate = client.online_gameplay_start_gate();
+        assert!(!gate.ready);
+        assert_eq!(
+            gate.blocker,
+            Some(OnlineGameplayStartBlocker::HostAuthorityRequired)
+        );
+        client.request_online_gameplay_start();
+
+        assert_eq!(client.run_mode, RunMode::Title);
+        assert!(!client.online_start_session_requested);
+        assert!(
+            client
+                .online_session_status_message
+                .contains("only the authoritative host")
+        );
     }
 
     #[test]
@@ -13550,10 +13599,14 @@ mod tests {
 
         client.online_remote_player_ready = true;
         let ready = OnlinePlayableSessionStatus::from_game(&client);
-        assert_eq!(ready.phase, OnlinePlayableSessionPhase::ReadyToStart);
-        assert!(ready.status.contains("start_ready=yes"));
+        assert_eq!(ready.phase, OnlinePlayableSessionPhase::JoinedWaiting);
+        assert!(ready.status.contains("start_ready=no"));
+        assert_eq!(
+            ready.blocker,
+            Some(OnlineGameplayStartBlocker::HostAuthorityRequired)
+        );
 
-        client.request_online_gameplay_start();
+        client.apply_online_start_session_from_host(crate::multiplayer::SimulationTick::new(9));
         let playing = OnlinePlayableSessionStatus::from_game(&client);
         assert_eq!(playing.phase, OnlinePlayableSessionPhase::Playing);
         assert!(playing.both_entered_gameplay);
@@ -14427,6 +14480,7 @@ mod tests {
         assert!(blocked.ready_start_visible);
         assert!(blocked.status.contains("ready_start=yes"));
 
+        game.online_host_owns_save = true;
         game.online_local_ready = true;
         let ready = OnlineLiveVerificationStatus::from_game(&game);
         assert!(ready.ready_start_visible);
@@ -15267,7 +15321,11 @@ mod tests {
             presentation.remote.save_authority,
             OnlineSaveAuthority::LocalPlayer
         );
-        assert!(presentation.start_gate.ready);
+        assert!(!presentation.start_gate.ready);
+        assert_eq!(
+            presentation.start_gate.blocker,
+            Some(OnlineGameplayStartBlocker::HostAuthorityRequired)
+        );
         assert!(presentation.guidance.contains("toggle ready"));
 
         let lines = presentation.lines();
