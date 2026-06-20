@@ -39,6 +39,7 @@ const SCREEN_HEIGHT: i32 = 720;
 
 pub struct GameRenderer {
     terrain: TerrainRenderer,
+    ui_fonts: layout::UiFonts,
 }
 
 fn centered_camera_for_player(
@@ -97,6 +98,7 @@ impl GameRenderer {
     pub fn new(raylib: &mut RaylibHandle, thread: &RaylibThread, game: &GameState) -> Self {
         Self {
             terrain: TerrainRenderer::new(raylib, thread, game),
+            ui_fonts: layout::UiFonts::raylib_default(),
         }
     }
 
@@ -242,6 +244,7 @@ impl GameRenderer {
         world_players: &[crate::session::RenderWorldPlayerPresentation],
         hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
+        let _default_ui_font = self.ui_fonts.font(layout::FontRole::small());
         draw.clear_background(Color::new(105, 190, 235, 255));
 
         let camera = view.camera;

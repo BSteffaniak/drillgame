@@ -52,10 +52,16 @@ impl Constraints {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum FontRole {
+pub(super) enum FontRole {
     Title,
     Heading,
     Small,
+}
+
+impl FontRole {
+    pub(super) const fn small() -> Self {
+        Self::Small
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -713,14 +719,14 @@ fn measure_text_uncached(text: &str, kind: TextKind) -> f32 {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct UiFonts {
+pub(super) struct UiFonts {
     title: ffi::Font,
     heading: ffi::Font,
     small: ffi::Font,
 }
 
 impl UiFonts {
-    fn raylib_default() -> Self {
+    pub(super) fn raylib_default() -> Self {
         let font = unsafe { ffi::GetFontDefault() };
         Self {
             title: font,
@@ -729,7 +735,7 @@ impl UiFonts {
         }
     }
 
-    const fn font(self, role: FontRole) -> ffi::Font {
+    pub(super) const fn font(self, role: FontRole) -> ffi::Font {
         match role {
             FontRole::Title => self.title,
             FontRole::Heading => self.heading,
