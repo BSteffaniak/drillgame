@@ -4983,7 +4983,8 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
             | crate::game_state::SessionServiceRequest::SalvagePatchHull
             | crate::game_state::SessionServiceRequest::Finance
-            | crate::game_state::SessionServiceRequest::BuyInsurance => None,
+            | crate::game_state::SessionServiceRequest::BuyInsurance
+            | crate::game_state::SessionServiceRequest::CraftRecipe { .. } => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5008,7 +5009,8 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::ClaimFreeTestCharge
                 | crate::game_state::SessionServiceRequest::SalvagePatchHull
                 | crate::game_state::SessionServiceRequest::Finance
-                | crate::game_state::SessionServiceRequest::BuyInsurance => {}
+                | crate::game_state::SessionServiceRequest::BuyInsurance
+                | crate::game_state::SessionServiceRequest::CraftRecipe { .. } => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5094,6 +5096,10 @@ impl GameSession {
                         self.game.player.insurance_tier
                     )
                 }
+                crate::game_state::SessionServiceRequest::CraftRecipe { recipe } => {
+                    self.game.sound_cues.push(SoundCue::Upgrade);
+                    format!("Crafted {}: {}.", recipe.name(), recipe.description())
+                }
             };
         } else {
             "Service unavailable for current player.".clone_into(&mut self.game.message);
@@ -5101,6 +5107,10 @@ impl GameSession {
         Some(SessionSaveLoadSummary::saved(self.game.message.clone()))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "direct session-owned service mutations are replacing removed GameState gameplay mutations"
+    )]
     fn apply_direct_session_service_request(
         &mut self,
         player_id: PlayerId,
@@ -5169,6 +5179,52 @@ impl GameSession {
                 player.credits -= cost;
                 player.insured = true;
                 player.insurance_tier = next_tier;
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::CraftRecipe { recipe } => {
+                for (material, required) in recipe.cost() {
+                    if player.materials.get(material).copied().unwrap_or(0) < *required {
+                        return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                    }
+                }
+                for (material, required) in recipe.cost() {
+                    if let Some(count) = player.materials.get_mut(material) {
+                        *count = count.saturating_sub(*required);
+                    }
+                }
+                player.materials.retain(|_, count| *count > 0);
+                match recipe {
+                    crate::game_state::RecipeKind::ReinforcedBulkhead => {
+                        player.crafted_bulkheads = player.crafted_bulkheads.saturating_add(1);
+                        player.hull = player.max_hull();
+                    }
+                    crate::game_state::RecipeKind::AuxiliaryTank => {
+                        player.fuel_capacity += 20.0;
+                        player.fuel = player.fuel_capacity;
+                    }
+                    crate::game_state::RecipeKind::ExpandedSorter => {
+                        player.crafted_sorters = player.crafted_sorters.saturating_add(1);
+                        player.cargo_capacity = player.cargo_capacity.saturating_add(4);
+                    }
+                    crate::game_state::RecipeKind::SignalRelayKit => {
+                        player.signal_relay_kits = player.signal_relay_kits.saturating_add(1);
+                    }
+                    crate::game_state::RecipeKind::SurveyDroneKit => {
+                        player.survey_drone_kits = player.survey_drone_kits.saturating_add(1);
+                    }
+                    crate::game_state::RecipeKind::CargoLiftKit => {
+                        player.cargo_lift_kits = player.cargo_lift_kits.saturating_add(1);
+                    }
+                    crate::game_state::RecipeKind::TunnelSupportKit => {
+                        player.tunnel_support_kits = player.tunnel_support_kits.saturating_add(1);
+                    }
+                    crate::game_state::RecipeKind::PumpStationKit => {
+                        player.pump_station_kits = player.pump_station_kits.saturating_add(1);
+                    }
+                    crate::game_state::RecipeKind::OreProcessorKit => {
+                        player.ore_processor_kits = player.ore_processor_kits.saturating_add(1);
+                    }
+                }
                 PlayerScopedCommandOutcome::Applied
             }
             crate::game_state::SessionServiceRequest::Refuel { .. }
@@ -11016,6 +11072,43 @@ mod tests {
             std::env::remove_var("DRILLGAME_STATE_DIR");
         }
         let _ignored = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_crafting_service_mutates_authoritative_world() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = Some(crate::game_state::ModalScreen::Crafting);
+        session.game.selected_menu_item = 0;
+        {
+            let player = session
+                .world_mut()
+                .player_mut(LOCAL_PLAYER_ID)
+                .expect("local player exists");
+            player.add_material(crate::terrain::StrategicResourceKind::AncientAlloy, 2);
+            player.hull = 1.0;
+        }
+        session.sync_legacy_player_from_world(LOCAL_PLAYER_ID);
+
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert!(!summary.legacy_bridge_active());
+        assert!(session.game().message.contains("Crafted"));
+        assert_eq!(session.game().player.crafted_bulkheads, 1);
+        assert!(session.game().player.hull > 1.0);
+        let player = session
+            .world()
+            .player(LOCAL_PLAYER_ID)
+            .expect("local player exists");
+        assert_eq!(player.crafted_bulkheads, 1);
+        assert!(player.hull > 1.0);
+        assert!(player.materials.is_empty());
     }
 
     #[test]

@@ -1961,6 +1961,7 @@ pub enum SessionServiceRequest {
     SalvagePatchHull,
     Finance,
     BuyInsurance,
+    CraftRecipe { recipe: RecipeKind },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9426,53 +9427,11 @@ impl GameState {
 
     fn confirm_crafting(&mut self) {
         let recipe = RecipeKind::ALL[self.selected_menu_item.min(RecipeKind::ALL.len() - 1)];
-        for (material, required) in recipe.cost() {
-            if self.player.materials.get(material).copied().unwrap_or(0) < *required {
-                self.message =
-                    format!("Need {required} {} for {}.", material.name(), recipe.name());
-                return;
-            }
-        }
-        for (material, required) in recipe.cost() {
-            if let Some(count) = self.player.materials.get_mut(material) {
-                *count = count.saturating_sub(*required);
-            }
-        }
-        self.player.materials.retain(|_, count| *count > 0);
-        match recipe {
-            RecipeKind::ReinforcedBulkhead => {
-                self.player.crafted_bulkheads = self.player.crafted_bulkheads.saturating_add(1);
-                self.player.hull = self.player.max_hull();
-            }
-            RecipeKind::AuxiliaryTank => {
-                self.player.fuel_capacity += 20.0;
-                self.player.fuel = self.player.fuel_capacity;
-            }
-            RecipeKind::ExpandedSorter => {
-                self.player.crafted_sorters = self.player.crafted_sorters.saturating_add(1);
-                self.player.cargo_capacity = self.player.cargo_capacity.saturating_add(4);
-            }
-            RecipeKind::SignalRelayKit => {
-                self.player.signal_relay_kits = self.player.signal_relay_kits.saturating_add(1);
-            }
-            RecipeKind::SurveyDroneKit => {
-                self.player.survey_drone_kits = self.player.survey_drone_kits.saturating_add(1);
-            }
-            RecipeKind::CargoLiftKit => {
-                self.player.cargo_lift_kits = self.player.cargo_lift_kits.saturating_add(1);
-            }
-            RecipeKind::TunnelSupportKit => {
-                self.player.tunnel_support_kits = self.player.tunnel_support_kits.saturating_add(1);
-            }
-            RecipeKind::PumpStationKit => {
-                self.player.pump_station_kits = self.player.pump_station_kits.saturating_add(1);
-            }
-            RecipeKind::OreProcessorKit => {
-                self.player.ore_processor_kits = self.player.ore_processor_kits.saturating_add(1);
-            }
-        }
-        self.message = format!("Crafted {}: {}.", recipe.name(), recipe.description());
-        self.sound_cues.push(SoundCue::Upgrade);
+        self.session_service_request = Some(SessionServiceRequest::CraftRecipe { recipe });
+        self.message = format!(
+            "Crafting {} queued for authoritative session.",
+            recipe.name()
+        );
     }
 
     fn confirm_town_development(&mut self) {
@@ -16933,6 +16892,32 @@ mod tests {
             Some(TileKind::Air)
         ));
         assert!(game.player.cargo_used() > 0);
+    }
+
+    #[test]
+    fn crafting_menu_queues_authoritative_session_service() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = Some(ModalScreen::Crafting);
+        game.selected_menu_item = 0;
+        game.player
+            .add_material(StrategicResourceKind::AncientAlloy, 2);
+        let materials_before = game.player.materials.clone();
+
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::CraftRecipe {
+                recipe: RecipeKind::ReinforcedBulkhead
+            })
+        );
+        assert_eq!(game.player.materials, materials_before);
+        assert_eq!(game.player.crafted_bulkheads, 0);
+        assert!(game.message.contains("authoritative session"));
     }
 
     #[test]
