@@ -346,6 +346,12 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
         };
         let mut node = modal_content_node(content, body.width);
         node.layout(body);
+        if let widgets::UiNode::Scroll(scroll) = &node {
+            set_current_scroll_limit(
+                widgets::WidgetId("modal-content"),
+                (scroll.content_height - body.height).max(0.0),
+            );
+        }
         let plan = node.render_plan();
         self.render_plan(&plan);
     }
@@ -770,6 +776,7 @@ pub(super) mod widgets {
     pub(in crate::rendering) struct UiState {
         focused: Option<WidgetId>,
         scroll_offsets: BTreeMap<WidgetId, f32>,
+        scroll_limits: BTreeMap<WidgetId, f32>,
     }
 
     impl UiState {
@@ -786,7 +793,22 @@ pub(super) mod widgets {
         }
 
         pub(super) fn set_scroll_offset(&mut self, id: WidgetId, offset: f32) {
-            self.scroll_offsets.insert(id, offset.max(0.0));
+            let limit = self.scroll_limit(id);
+            self.scroll_offsets.insert(id, offset.clamp(0.0, limit));
+        }
+
+        pub(in crate::rendering) fn set_scroll_limit(&mut self, id: WidgetId, max_offset: f32) {
+            let max_offset = max_offset.max(0.0);
+            self.scroll_limits.insert(id, max_offset);
+            let offset = self.scroll_offset(id).min(max_offset);
+            self.scroll_offsets.insert(id, offset);
+        }
+
+        pub(super) fn scroll_limit(&self, id: WidgetId) -> f32 {
+            self.scroll_limits
+                .get(&id)
+                .copied()
+                .unwrap_or(f32::MAX / 4.0)
         }
 
         pub(in crate::rendering) fn scroll_by(
@@ -795,7 +817,8 @@ pub(super) mod widgets {
             delta: f32,
             max_offset: f32,
         ) {
-            let next = (self.scroll_offset(id) + delta).clamp(0.0, max_offset.max(0.0));
+            let limit = self.scroll_limit(id).min(max_offset.max(0.0));
+            let next = (self.scroll_offset(id) + delta).clamp(0.0, limit);
             self.scroll_offsets.insert(id, next);
         }
     }
@@ -1488,6 +1511,18 @@ pub(super) fn set_current_ui_state(state: widgets::UiState) {
     CURRENT_UI_STATE.with(|current| *current.borrow_mut() = Some(state));
 }
 
+pub(super) fn take_current_ui_state() -> Option<widgets::UiState> {
+    CURRENT_UI_STATE.with(|current| current.borrow_mut().take())
+}
+
+fn set_current_scroll_limit(id: widgets::WidgetId, max_offset: f32) {
+    CURRENT_UI_STATE.with(|current| {
+        if let Some(state) = current.borrow_mut().as_mut() {
+            state.set_scroll_limit(id, max_offset);
+        }
+    });
+}
+
 fn current_scroll_offset(id: widgets::WidgetId) -> f32 {
     CURRENT_UI_STATE.with(|current| {
         current
@@ -1680,9 +1715,10 @@ mod tests {
         state.set_focused(inventory);
         assert_eq!(state.focused(), Some(inventory));
         state.set_scroll_offset(inventory, 12.0);
+        state.set_scroll_limit(inventory, 15.0);
         state.scroll_by(inventory, 10.0, 18.0);
         state.scroll_by(depot, -10.0, 100.0);
-        assert_near(state.scroll_offset(inventory), 18.0);
+        assert_near(state.scroll_offset(inventory), 15.0);
         assert_near(state.scroll_offset(depot), 0.0);
     }
 

@@ -359,6 +359,9 @@ impl GameRenderer {
         if game.won_game {
             draw_ending(draw, game);
         }
+        if let Some(ui_state) = layout::take_current_ui_state() {
+            *self.ui_state.borrow_mut() = ui_state;
+        }
     }
 }
 
