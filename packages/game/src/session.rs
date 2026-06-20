@@ -12384,7 +12384,48 @@ mod tests {
         let _summary = session.update_frame_from_session_authority(
             PlayerInput {
                 cancel: true,
-                pause: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().run_mode, RunMode::Playing);
+        assert_eq!(session.game().modal, None);
+    }
+
+    #[test]
+    fn gameplay_escape_cancel_opens_pause_without_stale_command_replay() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = None;
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                cancel: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+
+        assert_eq!(session.game().run_mode, RunMode::Paused);
+        assert_eq!(session.game().modal, None);
+        assert_eq!(session.latest_local_authoritative_commands.len(), 1);
+
+        let _next = session
+            .update_frame_from_session_authority(PlayerInput::default(), FIXED_DELTA_SECONDS);
+
+        assert_eq!(session.game().run_mode, RunMode::Paused);
+    }
+
+    #[test]
+    fn modal_escape_cancel_closes_shop_without_opening_pause() {
+        let mut session = GameSession::new();
+        session.game.run_mode = RunMode::Playing;
+        session.game.modal = Some(ModalScreen::Shop);
+
+        let _summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                cancel: true,
                 ..PlayerInput::default()
             },
             FIXED_DELTA_SECONDS,
@@ -12443,12 +12484,11 @@ mod tests {
 
         assert_eq!(session.game().run_mode, RunMode::Paused);
         assert_eq!(session.game().modal, None);
-        assert_eq!(session.latest_local_authoritative_commands.len(), 2);
-        assert!(
-            session
-                .latest_local_authoritative_commands
-                .contains(&PlayerCommand::Cancel)
-        );
+        assert_eq!(session.latest_local_authoritative_commands.len(), 1);
+        assert!(matches!(
+            session.latest_local_authoritative_commands.as_slice(),
+            [PlayerCommand::Movement { horizontal, .. }] if (*horizontal - 1.0).abs() < f32::EPSILON
+        ));
     }
 
     #[test]
