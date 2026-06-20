@@ -1173,6 +1173,124 @@ impl OnlineGameplayEntryPresentation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineGameplayClarityPresentation {
+    pub visible: bool,
+    pub local_player_line: String,
+    pub remote_player_lines: Vec<String>,
+    pub session_state_line: String,
+    pub hud_clear_enough: bool,
+    pub status: String,
+}
+
+impl OnlineGameplayClarityPresentation {
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "HUD depth and cargo summaries intentionally display compact integral values"
+    )]
+    pub fn from_game(game: &GameState) -> Self {
+        let visible = matches!(
+            game.online_session_state,
+            OnlineSessionUxState::Hosting
+                | OnlineSessionUxState::Joining
+                | OnlineSessionUxState::Connected
+                | OnlineSessionUxState::Reconnecting
+                | OnlineSessionUxState::Timeout
+                | OnlineSessionUxState::Error
+                | OnlineSessionUxState::Shutdown
+        );
+        let local_depth = (game.player.y / TILE_SIZE).floor() as i32;
+        let local_player_line = format!(
+            "Local {} p{} depth={} fuel={:.0}/{:.0} hull={:.0}/{:.0} credits={} cargo={}/{}",
+            game.online_role_label(),
+            game.online_player_slot
+                .map_or_else(|| "?".to_owned(), |slot| slot.to_string()),
+            local_depth,
+            game.player.fuel,
+            game.player.fuel_capacity,
+            game.player.hull,
+            game.player.max_hull(),
+            game.player.credits,
+            game.player.cargo_used(),
+            game.player.cargo_capacity
+        );
+        let remote_player_lines = if game.online_remote_player_snapshots.is_empty() {
+            vec![if game.online_remote_player_connected {
+                "Remote player connected; waiting for replicated snapshot.".to_owned()
+            } else {
+                "Remote player not connected yet.".to_owned()
+            }]
+        } else {
+            game.online_remote_player_snapshots
+                .iter()
+                .take(2)
+                .map(|remote| {
+                    let depth = (remote.y / TILE_SIZE).floor() as i32;
+                    format!(
+                        "Remote p{} depth={} fuel={:.0} hull={:.0} credits={} cargo={}",
+                        remote.player_id.get(),
+                        depth,
+                        remote.fuel,
+                        remote.hull,
+                        remote.credits,
+                        remote.cargo_used
+                    )
+                })
+                .collect()
+        };
+        let save_policy = game.online_save_exit_policy();
+        let session_state_line = format!(
+            "Session {:?} | ready local={} remote={} | save_dirty={} local_save={} | {}",
+            game.online_session_state,
+            yes_no(game.online_local_ready),
+            yes_no(game.online_remote_player_ready),
+            yes_no(game.save_dirty),
+            yes_no(save_policy.local_save_allowed),
+            game.online_gameplay_entry_source.label()
+        );
+        let remote_state_clear = game.online_remote_player_connected
+            && (!game.online_remote_player_snapshots.is_empty()
+                || game.online_session_state != OnlineSessionUxState::Connected);
+        let hud_clear_enough = visible
+            && game.online_player_slot.is_some()
+            && game.player.fuel.is_finite()
+            && game.player.hull.is_finite()
+            && remote_state_clear;
+        let status = format!(
+            "Online gameplay HUD clarity: clear={} visible={} local_slot={} remote_connected={} remote_snapshots={} save_dirty={} local_save={} role={}",
+            yes_no(hud_clear_enough),
+            yes_no(visible),
+            game.online_player_slot
+                .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string()),
+            yes_no(game.online_remote_player_connected),
+            game.online_remote_player_snapshots.len(),
+            yes_no(game.save_dirty),
+            yes_no(save_policy.local_save_allowed),
+            game.online_role_label()
+        );
+        Self {
+            visible,
+            local_player_line,
+            remote_player_lines,
+            session_state_line,
+            hud_clear_enough,
+            status,
+        }
+    }
+
+    #[must_use]
+    pub fn hud_lines(&self) -> Vec<String> {
+        if !self.visible {
+            return Vec::new();
+        }
+        let mut lines = vec![self.local_player_line.clone()];
+        lines.extend(self.remote_player_lines.iter().cloned());
+        lines.push(self.session_state_line.clone());
+        lines
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnlineGameplayHudPresentation {
     pub visible: bool,
     pub role_label: &'static str,
@@ -1187,6 +1305,7 @@ pub struct OnlineGameplayHudPresentation {
     pub replication_label: String,
     pub terrain_label: String,
     pub authority_label: String,
+    pub clarity_lines: Vec<String>,
 }
 
 impl OnlineGameplayHudPresentation {
@@ -1195,7 +1314,7 @@ impl OnlineGameplayHudPresentation {
         if !self.visible {
             return Vec::new();
         }
-        vec![
+        let mut lines = vec![
             format!(
                 "Online {} slot {} | local {} | remote {} {}",
                 self.role_label,
@@ -1211,7 +1330,9 @@ impl OnlineGameplayHudPresentation {
             self.replication_label.clone(),
             self.terrain_label.clone(),
             self.authority_label.clone(),
-        ]
+        ];
+        lines.extend(self.clarity_lines.iter().cloned());
+        lines
     }
 }
 
@@ -2143,6 +2264,7 @@ impl OnlineManualWorkingGameGateStatus {
             || game.online_last_failure_status.contains("Online failure:")
             || game.online_last_failure_status.contains("category=");
         let directional = OnlineDirectionalGameplaySyncStatus::from_game(game);
+        let clarity = OnlineGameplayClarityPresentation::from_game(game);
         let ready = two_instances_ready
             && ui_host_join_ready
             && ui_ready_start_ready
@@ -2151,9 +2273,10 @@ impl OnlineManualWorkingGameGateStatus {
             && survival_observable
             && shutdown_safe
             && failures_triaged
-            && directional.both_directions_visible;
+            && directional.both_directions_visible
+            && clarity.hud_clear_enough;
         let status = format!(
-            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} directional={} role={} slot={}",
+            "Online manual working-game gate: ready={} two_instances={} ui_host_join={} ui_ready_start={} movement={} mining={} survival={} shutdown_safe={} failures_triaged={} directional={} hud_clear={} role={} slot={}",
             yes_no(ready),
             yes_no(two_instances_ready),
             yes_no(ui_host_join_ready),
@@ -2164,6 +2287,7 @@ impl OnlineManualWorkingGameGateStatus {
             yes_no(shutdown_safe),
             yes_no(failures_triaged),
             yes_no(directional.both_directions_visible),
+            yes_no(clarity.hud_clear_enough),
             game.online_role_label(),
             game.online_player_slot
                 .map_or_else(|| "unassigned".to_owned(), |slot| slot.to_string())
@@ -6661,6 +6785,7 @@ impl GameState {
             self.online_last_gameplay_entry_status.clone()
         });
         lines.push(OnlineDirectionalGameplaySyncStatus::from_game(self).status);
+        lines.push(OnlineGameplayClarityPresentation::from_game(self).status);
         lines.push(OnlineSustainedMiningSessionStatus::from_game(self).status);
         lines.push(OnlineManualWorkingGameGateStatus::from_game(self).status);
         lines.push(OnlineReconnectPolicyStatus::from_game(self).status_line());
@@ -7166,6 +7291,7 @@ impl GameState {
         } else {
             self.online_last_correction_status.clone()
         };
+        let clarity_lines = OnlineGameplayClarityPresentation::from_game(self).hud_lines();
         OnlineGameplayHudPresentation {
             visible,
             role_label: self.online_role_label(),
@@ -7188,6 +7314,7 @@ impl GameState {
             replication_label,
             terrain_label,
             authority_label,
+            clarity_lines,
         }
     }
 
@@ -14383,6 +14510,55 @@ mod tests {
         assert!(manual_status.status.contains("ready=yes"));
         assert!(game.online_multiplayer_status_lines().iter().any(|line| {
             line.contains("Online manual working-game gate") && line.contains("ready=yes")
+        }));
+    }
+
+    #[test]
+    fn gameplay_clarity_presentation_summarizes_local_remote_session_and_save_state() {
+        let mut game = GameState::new();
+        game.run_mode = RunMode::Playing;
+        game.modal = None;
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_player_slot = Some(1);
+        game.online_local_ready = true;
+        game.online_remote_player_ready = true;
+        game.online_remote_player_connected = true;
+        game.player.y = TILE_SIZE * 12.0;
+        game.player.fuel = 77.0;
+        game.player.hull = 88.0;
+        game.player.credits = 123;
+        game.player.cargo.insert(MineralKind::Copper, 2);
+        game.online_remote_player_snapshots
+            .push(OnlineRemotePlayerPresentation {
+                player_id: crate::multiplayer::PlayerId::new(2),
+                x: 5.0,
+                y: TILE_SIZE * 18.0,
+                velocity_x: 0.0,
+                velocity_y: 0.0,
+                fuel: 66.0,
+                hull: 99.0,
+                credits: 44,
+                cargo_used: 3,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+            });
+
+        let clarity = OnlineGameplayClarityPresentation::from_game(&game);
+        let hud_lines = game.online_gameplay_hud_presentation().lines();
+
+        assert!(clarity.visible);
+        assert!(clarity.hud_clear_enough);
+        assert!(clarity.local_player_line.contains("fuel=77"));
+        assert!(clarity.local_player_line.contains("cargo=2"));
+        assert!(clarity.remote_player_lines[0].contains("Remote p2"));
+        assert!(clarity.session_state_line.contains("local_save=yes"));
+        assert!(clarity.status.contains("clear=yes"));
+        assert!(hud_lines.iter().any(|line| line.contains("Local host p1")));
+        assert!(hud_lines.iter().any(|line| line.contains("Remote p2")));
+        assert!(game.online_multiplayer_status_lines().iter().any(|line| {
+            line.contains("Online gameplay HUD clarity") && line.contains("clear=yes")
         }));
     }
 

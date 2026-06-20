@@ -307,20 +307,20 @@ fn draw_online_gameplay_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
     if lines.is_empty() {
         return;
     }
-    let panel_x = SCREEN_WIDTH - 430;
+    let panel_x = SCREEN_WIDTH - 520;
     let panel_y = 64;
     let panel_height = 34 + i32::try_from(lines.len()).unwrap_or(i32::MAX) * 22;
     draw.draw_rectangle(
         panel_x - 12,
         panel_y - 12,
-        408,
+        498,
         panel_height,
         Color::new(0, 0, 35, 190),
     );
     draw.draw_rectangle_lines(
         panel_x - 12,
         panel_y - 12,
-        408,
+        498,
         panel_height,
         Color::SKYBLUE,
     );
@@ -330,8 +330,11 @@ fn draw_online_gameplay_hud(draw: &mut RaylibDrawHandle<'_>, game: &GameState) {
             0 => Color::RAYWHITE,
             1 if line.contains("blocked") => Color::YELLOW,
             1 => Color::LIME,
-            2 if line.contains("waiting") => Color::YELLOW,
-            3 | 4 if line.contains("waiting") => Color::GRAY,
+            2 | 3 if line.contains("waiting") => Color::YELLOW,
+            4..=6 if line.contains("waiting") => Color::GRAY,
+            _ if line.contains("Local") => Color::RAYWHITE,
+            _ if line.contains("Remote") && line.contains("not connected") => Color::YELLOW,
+            _ if line.contains("Remote") => Color::LIGHTGRAY,
             _ => Color::LIGHTGRAY,
         };
         draw.draw_text(
