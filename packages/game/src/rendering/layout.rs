@@ -608,7 +608,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
         }
     }
     widgets::UiNode::Scroll(widgets::ScrollNode::vertical(
-        0.0,
+        current_scroll_offset(widgets::WidgetId("modal-content")),
         widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, sections)),
     ))
 }
@@ -758,16 +758,16 @@ const fn font_role(kind: TextKind) -> FontRole {
     dead_code,
     reason = "formal widget tree foundation is being introduced before screen call sites are migrated to it"
 )]
-mod widgets {
+pub(super) mod widgets {
     use super::{Insets, Size, TextKind, inset};
     use raylib::prelude::{Color, Rectangle};
     use std::collections::BTreeMap;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-    pub(super) struct WidgetId(pub(super) &'static str);
+    pub(in crate::rendering) struct WidgetId(pub(super) &'static str);
 
     #[derive(Clone, Debug, Default)]
-    pub(super) struct UiState {
+    pub(in crate::rendering) struct UiState {
         focused: Option<WidgetId>,
         scroll_offsets: BTreeMap<WidgetId, f32>,
     }
@@ -1472,10 +1472,24 @@ struct TextMeasureKey {
 thread_local! {
     static TEXT_MEASURE_CACHE: RefCell<BTreeMap<TextMeasureKey, f32>> = const { RefCell::new(BTreeMap::new()) };
     static CURRENT_UI_FONTS: RefCell<Option<UiFonts>> = const { RefCell::new(None) };
+    static CURRENT_UI_STATE: RefCell<Option<widgets::UiState>> = const { RefCell::new(None) };
 }
 
 pub(super) fn set_current_fonts(fonts: UiFonts) {
     CURRENT_UI_FONTS.with(|current| *current.borrow_mut() = Some(fonts));
+}
+
+pub(super) fn set_current_ui_state(state: widgets::UiState) {
+    CURRENT_UI_STATE.with(|current| *current.borrow_mut() = Some(state));
+}
+
+fn current_scroll_offset(id: widgets::WidgetId) -> f32 {
+    CURRENT_UI_STATE.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .map_or(0.0, |state| state.scroll_offset(id))
+    })
 }
 
 fn modal_rect_for_viewport(viewport: Rectangle) -> Rectangle {

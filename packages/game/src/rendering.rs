@@ -6,6 +6,8 @@
     reason = "rendering APIs use integer pixels while camera math uses floats"
 )]
 
+use std::cell::RefCell;
+
 use raylib::{ffi, prelude::*};
 
 mod interior;
@@ -40,6 +42,7 @@ const SCREEN_HEIGHT: i32 = 720;
 pub struct GameRenderer {
     terrain: TerrainRenderer,
     ui_fonts: layout::UiFonts,
+    ui_state: RefCell<layout::widgets::UiState>,
 }
 
 fn centered_camera_for_player(
@@ -99,6 +102,7 @@ impl GameRenderer {
         Self {
             terrain: TerrainRenderer::new(raylib, thread, game),
             ui_fonts: layout::UiFonts::raylib_default(),
+            ui_state: RefCell::new(layout::widgets::UiState::default()),
         }
     }
 
@@ -245,6 +249,7 @@ impl GameRenderer {
         hud: Option<crate::session::PerPlayerHudSnapshot>,
     ) {
         layout::set_current_fonts(self.ui_fonts);
+        layout::set_current_ui_state(self.ui_state.borrow().clone());
         draw.clear_background(Color::new(105, 190, 235, 255));
 
         let camera = view.camera;
