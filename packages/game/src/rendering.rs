@@ -56,6 +56,15 @@ fn centered_camera_for_player(
     )
 }
 
+fn draw_online_remote_players_from_legacy_snapshots(
+    draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
+    game: &GameState,
+) {
+    for remote in game.online_remote_world_presentations() {
+        world::draw_remote_player(draw, &remote.as_render_player());
+    }
+}
+
 fn draw_local_player_override(
     draw: &mut RaylibMode2D<'_, RaylibDrawHandle<'_>>,
     game: &GameState,
@@ -68,6 +77,9 @@ fn draw_local_player_override(
     }
     for player in world_players.iter().filter(|player| !player.local_to_view) {
         world::draw_remote_player(draw, player);
+    }
+    if world_players.is_empty() {
+        draw_online_remote_players_from_legacy_snapshots(draw, game);
     }
 }
 
@@ -271,7 +283,18 @@ impl GameRenderer {
         }
         if view.run_mode != RunMode::Interior {
             draw_depth_ruler_for_view(draw, game, view);
-            draw_minimap_for_view(draw, game, view);
+            let legacy_remote_players;
+            let minimap_remote_players = if world_players.is_empty() {
+                legacy_remote_players = game
+                    .online_remote_world_presentations()
+                    .into_iter()
+                    .map(|remote| remote.as_render_player())
+                    .collect::<Vec<_>>();
+                legacy_remote_players.as_slice()
+            } else {
+                world_players
+            };
+            draw_minimap_for_view(draw, game, view, minimap_remote_players);
         }
 
         if view.run_mode == RunMode::Title {

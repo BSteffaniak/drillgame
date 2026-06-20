@@ -7640,6 +7640,24 @@ impl GameState {
     }
 
     #[must_use]
+    pub fn online_remote_world_presentations(
+        &self,
+    ) -> Vec<crate::session::OnlineRemoteWorldPresentation> {
+        self.online_remote_player_snapshots
+            .iter()
+            .map(|remote| crate::session::OnlineRemoteWorldPresentation {
+                player_id: remote.player_id,
+                x: remote.x,
+                y: remote.y,
+                fuel: remote.fuel,
+                hull: remote.hull,
+                credits: remote.credits,
+                cargo_used: remote.cargo_used,
+            })
+            .collect()
+    }
+
+    #[must_use]
     pub fn online_gameplay_hud_presentation(&self) -> OnlineGameplayHudPresentation {
         let visible = matches!(
             self.online_session_state,
@@ -16004,6 +16022,21 @@ mod tests {
         assert!(game.online_remote_player_connected);
         assert_eq!(game.online_remote_player_snapshots.len(), 1);
         assert_eq!(game.online_remote_player_snapshots[0].cargo_used, 3);
+        let world_players = game.online_remote_world_presentations();
+        assert_eq!(world_players.len(), 1);
+        assert_eq!(
+            world_players[0].player_id,
+            crate::multiplayer::PlayerId::new(1)
+        );
+        assert!((world_players[0].x - 12.0).abs() < f32::EPSILON);
+        assert!((world_players[0].y - 34.0).abs() < f32::EPSILON);
+        let render_player = world_players[0].as_render_player();
+        assert_eq!(
+            render_player.player_id,
+            crate::multiplayer::PlayerId::new(1)
+        );
+        assert!(!render_player.local_to_view);
+        assert_eq!(render_player.cargo_used, 3);
         assert!(
             game.online_last_sync_loop_status
                 .contains("snapshot applied")

@@ -3260,6 +3260,34 @@ pub struct RenderWorldPlayerPresentation {
     pub cargo_used: u32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnlineRemoteWorldPresentation {
+    pub player_id: PlayerId,
+    pub x: f32,
+    pub y: f32,
+    pub fuel: f32,
+    pub hull: f32,
+    pub credits: u32,
+    pub cargo_used: u32,
+}
+
+impl OnlineRemoteWorldPresentation {
+    #[must_use]
+    pub const fn as_render_player(&self) -> RenderWorldPlayerPresentation {
+        RenderWorldPlayerPresentation {
+            player_id: self.player_id,
+            x: self.x,
+            y: self.y,
+            local_to_view: false,
+            source: RenderPlayerPresentationSource::AuthoritativeWorld,
+            fuel: self.fuel,
+            hull: self.hull,
+            credits: self.credits,
+            cargo_used: self.cargo_used,
+        }
+    }
+}
+
 impl RenderWorldPlayerPresentation {
     #[must_use]
     pub fn short_status_label(&self) -> String {

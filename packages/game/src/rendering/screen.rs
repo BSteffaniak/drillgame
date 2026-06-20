@@ -136,6 +136,7 @@ pub(super) fn draw_minimap_for_view(
     draw: &mut RaylibDrawHandle<'_>,
     game: &GameState,
     view: &ClientView,
+    remote_players: &[crate::session::RenderWorldPlayerPresentation],
 ) {
     let width = (view.viewport.width / 6).clamp(86, 130);
     let height = (view.viewport.height / 8).clamp(64, 96);
@@ -195,6 +196,23 @@ pub(super) fn draw_minimap_for_view(
     let player_x = x + ((view.camera.x / TILE_SIZE) as i32) * width / terrain_width;
     let player_y = y + (((view.camera.y / TILE_SIZE) as i32) - origin_y) * height / visible_height;
     draw.draw_circle(player_x, player_y, 3.0, Color::SKYBLUE);
+    for remote in remote_players {
+        let remote_tile_x = (remote.x / TILE_SIZE) as i32;
+        let remote_tile_y = (remote.y / TILE_SIZE) as i32;
+        if remote_tile_y < origin_y || remote_tile_y >= origin_y + visible_height {
+            continue;
+        }
+        let remote_x = x + remote_tile_x * width / terrain_width;
+        let remote_y = y + (remote_tile_y - origin_y) * height / visible_height;
+        draw.draw_circle(remote_x, remote_y, 3.0, Color::ORANGE);
+        draw.draw_text(
+            &format!("P{}", remote.player_id.get()),
+            remote_x + 4,
+            remote_y - 4,
+            10,
+            Color::ORANGE,
+        );
+    }
 }
 
 pub(super) fn draw_depth_ruler_for_view(
