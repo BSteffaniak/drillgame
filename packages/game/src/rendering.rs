@@ -215,7 +215,11 @@ impl GameRenderer {
                 MODAL_SCROLL_LIMIT,
             );
         }
-        if input.menu_up || input.menu_down || input.confirm {
+        if input.menu_up {
+            self.ui_state.borrow_mut().focus_previous();
+        } else if input.menu_down {
+            self.ui_state.borrow_mut().focus_next();
+        } else if input.confirm {
             self.ui_state
                 .borrow_mut()
                 .set_focused(layout::widgets::WidgetId::new("modal-content"));

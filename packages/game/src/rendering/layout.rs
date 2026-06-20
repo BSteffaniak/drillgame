@@ -585,6 +585,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
     let mut sections = Vec::new();
     let focused_id = current_focused_id();
     let mut selectable_index = 0_usize;
+    let mut focus_order = Vec::new();
     for section in &content.sections {
         sections.push(widgets::UiNode::Text(widgets::TextNode::colored(
             &section.title,
@@ -617,6 +618,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
                 SectionItem::Stat(stat) if is_selectable_stat(stat) => {
                     let id = widgets::WidgetId::new(format!("modal-option-{selectable_index}"));
                     selectable_index += 1;
+                    focus_order.push(id.clone());
                     let selected = stat.label.trim_start().starts_with('>');
                     if selected {
                         set_current_focused_id(id.clone());
@@ -648,6 +650,7 @@ fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
             }
         }
     }
+    set_current_focus_order(focus_order);
     widgets::UiNode::Scroll(widgets::ScrollNode::vertical(
         current_scroll_offset(&widgets::WidgetId::new("modal-content")),
         widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, sections)),
@@ -831,6 +834,7 @@ pub(super) mod widgets {
         focused: Option<WidgetId>,
         scroll_offsets: BTreeMap<WidgetId, f32>,
         scroll_limits: BTreeMap<WidgetId, f32>,
+        focus_order: Vec<WidgetId>,
     }
 
     impl UiState {
@@ -840,6 +844,41 @@ pub(super) mod widgets {
 
         pub(in crate::rendering) fn set_focused(&mut self, id: WidgetId) {
             self.focused = Some(id);
+        }
+
+        pub(in crate::rendering) fn set_focus_order(&mut self, order: Vec<WidgetId>) {
+            self.focus_order = order;
+            if let Some(focused) = &self.focused
+                && !self.focus_order.iter().any(|id| id == focused)
+            {
+                self.focused = self.focus_order.first().cloned();
+            }
+        }
+
+        pub(in crate::rendering) fn focus_next(&mut self) {
+            self.move_focus(1);
+        }
+
+        pub(in crate::rendering) fn focus_previous(&mut self) {
+            self.move_focus(-1);
+        }
+
+        fn move_focus(&mut self, direction: i32) {
+            if self.focus_order.is_empty() {
+                return;
+            }
+            let current = self
+                .focused
+                .as_ref()
+                .and_then(|focused| self.focus_order.iter().position(|id| id == focused))
+                .unwrap_or(0);
+            let len = self.focus_order.len();
+            let next = if direction.is_negative() {
+                current.checked_sub(1).unwrap_or(len - 1)
+            } else {
+                (current + 1) % len
+            };
+            self.focused = Some(self.focus_order[next].clone());
         }
 
         pub(super) fn scroll_offset(&self, id: &WidgetId) -> f32 {
@@ -1621,6 +1660,14 @@ fn set_current_scroll_limit(id: widgets::WidgetId, max_offset: f32) {
     });
 }
 
+fn set_current_focus_order(order: Vec<widgets::WidgetId>) {
+    CURRENT_UI_STATE.with(|current| {
+        if let Some(state) = current.borrow_mut().as_mut() {
+            state.set_focus_order(order);
+        }
+    });
+}
+
 fn set_current_focused_id(id: widgets::WidgetId) {
     CURRENT_UI_STATE.with(|current| {
         if let Some(state) = current.borrow_mut().as_mut() {
@@ -1912,6 +1959,11 @@ mod tests {
         let mut state = UiState::default();
         assert_eq!(state.focused(), None);
         state.set_focused(inventory.clone());
+        assert_eq!(state.focused(), Some(inventory.clone()));
+        state.set_focus_order(vec![inventory.clone(), depot.clone()]);
+        state.focus_next();
+        assert_eq!(state.focused(), Some(depot.clone()));
+        state.focus_previous();
         assert_eq!(state.focused(), Some(inventory.clone()));
         state.set_scroll_offset(inventory.clone(), 12.0);
         state.set_scroll_limit(inventory.clone(), 15.0);
