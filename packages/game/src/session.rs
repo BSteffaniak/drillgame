@@ -4993,7 +4993,8 @@ impl GameSession {
             | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
             | crate::game_state::SessionServiceRequest::SellScanData
             | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo
-            | crate::game_state::SessionServiceRequest::CompleteDepotWork => None,
+            | crate::game_state::SessionServiceRequest::CompleteDepotWork
+            | crate::game_state::SessionServiceRequest::StartSideContract => None,
         };
         let outcome = if let Some(command) = command {
             self.world.apply_player_command(player_id, &command)
@@ -5028,7 +5029,8 @@ impl GameSession {
                 | crate::game_state::SessionServiceRequest::SalvageSellScrapTip
                 | crate::game_state::SessionServiceRequest::SellScanData
                 | crate::game_state::SessionServiceRequest::AutoSortLowGradeCargo
-                | crate::game_state::SessionServiceRequest::CompleteDepotWork => {}
+                | crate::game_state::SessionServiceRequest::CompleteDepotWork
+                | crate::game_state::SessionServiceRequest::StartSideContract => {}
             }
             self.game.sound_cues.push(SoundCue::Upgrade);
             let after = self
@@ -5160,6 +5162,10 @@ impl GameSession {
                 }
                 crate::game_state::SessionServiceRequest::CompleteDepotWork => {
                     self.game.sound_cues.push(SoundCue::Sell);
+                    self.game.message.clone()
+                }
+                crate::game_state::SessionServiceRequest::StartSideContract => {
+                    self.game.sound_cues.push(SoundCue::Ui);
                     self.game.message.clone()
                 }
             };
@@ -5590,6 +5596,74 @@ impl GameSession {
                         "{} complete! Bonus paid: {} credits + {escrow_bonus} escrow. {story}",
                         completion.completed_title, completion.reward
                     );
+                }
+                PlayerScopedCommandOutcome::Applied
+            }
+            crate::game_state::SessionServiceRequest::StartSideContract => {
+                if self.game.active_side_contracts.len() >= 3 {
+                    return PlayerScopedCommandOutcome::IgnoredUnavailable;
+                }
+                self.game.side_contract_active = true;
+                self.game.side_contract_kind = match self.game.town_event_day % 4 {
+                    0 => crate::game_state::SideContractKind::Cargo,
+                    1 => crate::game_state::SideContractKind::DepthSurvey,
+                    2 => crate::game_state::SideContractKind::HazardScan,
+                    _ => crate::game_state::SideContractKind::Rush,
+                };
+                self.game.side_contract_target = Some(match self.game.side_contract_kind {
+                    crate::game_state::SideContractKind::Cargo => {
+                        TileKind::Ore(crate::terrain::MineralKind::Gold)
+                    }
+                    crate::game_state::SideContractKind::DepthSurvey => {
+                        TileKind::Ore(crate::terrain::MineralKind::Platinum)
+                    }
+                    crate::game_state::SideContractKind::HazardScan => TileKind::Gas,
+                    crate::game_state::SideContractKind::Rush => {
+                        TileKind::Ore(crate::terrain::MineralKind::Ruby)
+                    }
+                });
+                self.game.side_contract_required = match self.game.side_contract_kind {
+                    crate::game_state::SideContractKind::Cargo => 2,
+                    crate::game_state::SideContractKind::DepthSurvey => 65,
+                    crate::game_state::SideContractKind::HazardScan => 3,
+                    crate::game_state::SideContractKind::Rush => 1,
+                };
+                self.game.message = match self.game.side_contract_kind {
+                    crate::game_state::SideContractKind::Cargo => format!(
+                        "Side contract posted: deliver {} x{} for bonus pay.",
+                        self.game
+                            .side_contract_target
+                            .map_or("sample", TileKind::name),
+                        self.game.side_contract_required
+                    ),
+                    crate::game_state::SideContractKind::DepthSurvey => format!(
+                        "Side contract posted: reach {}m and report to depot.",
+                        self.game.side_contract_required
+                    ),
+                    crate::game_state::SideContractKind::HazardScan => format!(
+                        "Side contract posted: scan {} hazards and report to depot.",
+                        self.game.side_contract_required
+                    ),
+                    crate::game_state::SideContractKind::Rush => format!(
+                        "Rush contract posted: deliver {} x{} before day {}.",
+                        self.game
+                            .side_contract_target
+                            .map_or("sample", TileKind::name),
+                        self.game.side_contract_required,
+                        self.game.town_event_day + 2
+                    ),
+                };
+                if let Some(target) = self.game.side_contract_target {
+                    self.game
+                        .active_side_contracts
+                        .push(crate::game_state::SideContract {
+                            kind: self.game.side_contract_kind,
+                            target,
+                            required: self.game.side_contract_required,
+                            expires_day: (self.game.side_contract_kind
+                                == crate::game_state::SideContractKind::Rush)
+                                .then_some(self.game.town_event_day + 2),
+                        });
                 }
                 PlayerScopedCommandOutcome::Applied
             }
@@ -11593,6 +11667,19 @@ mod tests {
             .expect("local player exists");
         assert!(player.insured);
         assert_eq!(player.insurance_tier, 1);
+
+        session.game.modal = Some(crate::game_state::ModalScreen::Bank);
+        session.game.selected_menu_item = 2;
+        let summary = session.update_frame_from_session_authority(
+            PlayerInput {
+                confirm: true,
+                ..PlayerInput::default()
+            },
+            FIXED_DELTA_SECONDS,
+        );
+        assert!(!summary.legacy_bridge_active());
+        assert_eq!(session.game().active_side_contracts.len(), 1);
+        assert!(session.game().message.contains("contract posted"));
     }
 
     #[test]

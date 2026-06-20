@@ -1971,6 +1971,7 @@ pub enum SessionServiceRequest {
     SellScanData,
     AutoSortLowGradeCargo,
     CompleteDepotWork,
+    StartSideContract,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -9566,7 +9567,7 @@ impl GameState {
         match self.selected_menu_item {
             0 => self.queue_finance(),
             1 => self.queue_insurance(),
-            _ => self.start_side_contract(),
+            _ => self.queue_start_side_contract(),
         }
     }
 
@@ -9646,152 +9647,9 @@ impl GameState {
         "Insurance purchase queued for authoritative session.".clone_into(&mut self.message);
     }
 
-    fn start_side_contract(&mut self) {
-        if self.active_side_contracts.len() >= 3 {
-            "Bank board only allows three active side contracts.".clone_into(&mut self.message);
-            return;
-        }
-        self.side_contract_active = true;
-        self.side_contract_kind = match self.town_event_day % 4 {
-            0 => SideContractKind::Cargo,
-            1 => SideContractKind::DepthSurvey,
-            2 => SideContractKind::HazardScan,
-            _ => SideContractKind::Rush,
-        };
-        self.side_contract_target = Some(match self.side_contract_kind {
-            SideContractKind::Cargo => TileKind::Ore(MineralKind::Gold),
-            SideContractKind::DepthSurvey => TileKind::Ore(MineralKind::Platinum),
-            SideContractKind::HazardScan => TileKind::Gas,
-            SideContractKind::Rush => TileKind::Ore(MineralKind::Ruby),
-        });
-        self.side_contract_required = match self.side_contract_kind {
-            SideContractKind::Cargo => 2,
-            SideContractKind::DepthSurvey => 65,
-            SideContractKind::HazardScan => 3,
-            SideContractKind::Rush => 1,
-        };
-        self.message = match self.side_contract_kind {
-            SideContractKind::Cargo => format!(
-                "Side contract posted: deliver {} x{} for bonus pay.",
-                self.side_contract_target.map_or("sample", TileKind::name),
-                self.side_contract_required
-            ),
-            SideContractKind::DepthSurvey => format!(
-                "Side contract posted: reach {}m and report to depot.",
-                self.side_contract_required
-            ),
-            SideContractKind::HazardScan => format!(
-                "Side contract posted: scan {} hazards and report to depot.",
-                self.side_contract_required
-            ),
-            SideContractKind::Rush => format!(
-                "Rush contract posted: deliver {} x{} before day {}.",
-                self.side_contract_target.map_or("sample", TileKind::name),
-                self.side_contract_required,
-                self.town_event_day + 2
-            ),
-        };
-        if let Some(target) = self.side_contract_target {
-            self.active_side_contracts.push(SideContract {
-                kind: self.side_contract_kind,
-                target,
-                required: self.side_contract_required,
-                expires_day: (self.side_contract_kind == SideContractKind::Rush)
-                    .then_some(self.town_event_day + 2),
-            });
-        }
-    }
-
-    fn try_complete_side_contract(&mut self) {
-        if !self.active_side_contracts.is_empty() {
-            let mut completed_index = None;
-            let mut completed_reward = 0;
-            for (index, contract) in self.active_side_contracts.iter().enumerate() {
-                if side_contract_satisfied(*contract, self) {
-                    completed_index = Some(index);
-                    completed_reward = 420 + contract.required.min(10) * 80;
-                    break;
-                }
-            }
-            if let Some(index) = completed_index {
-                let contract = self.active_side_contracts.remove(index);
-                if matches!(
-                    contract.kind,
-                    SideContractKind::Cargo | SideContractKind::Rush
-                ) {
-                    consume_side_contract_cargo(contract, &mut self.player);
-                }
-                self.player.credits += completed_reward;
-                self.total_earnings += completed_reward;
-                self.side_contract_active = !self.active_side_contracts.is_empty();
-                self.message =
-                    format!("Side contract fulfilled: {completed_reward} credits bonus.");
-                self.sound_cues.push(SoundCue::Sell);
-                return;
-            }
-        }
-        if !self.side_contract_active {
-            return;
-        }
-        let Some(target) = self.side_contract_target else {
-            return;
-        };
-        let satisfied = match self.side_contract_kind {
-            SideContractKind::Cargo | SideContractKind::Rush => match target {
-                TileKind::Ore(mineral) => {
-                    self.player.cargo.get(&mineral).copied().unwrap_or(0)
-                        >= self.side_contract_required
-                }
-                TileKind::Artifact(artifact) => {
-                    self.player.artifacts.get(&artifact).copied().unwrap_or(0)
-                        >= self.side_contract_required
-                }
-                _ => false,
-            },
-            SideContractKind::DepthSurvey => {
-                u32::try_from(self.deepest_tile_reached).unwrap_or(0) >= self.side_contract_required
-            }
-            SideContractKind::HazardScan => {
-                self.scan_markers
-                    .iter()
-                    .filter(|marker| {
-                        matches!(
-                            marker.kind,
-                            TileKind::Gas
-                                | TileKind::Lava
-                                | TileKind::MagmaVent
-                                | TileKind::ExplosivePocket
-                                | TileKind::PressurePocket
-                        )
-                    })
-                    .count()
-                    >= usize::try_from(self.side_contract_required).unwrap_or(usize::MAX)
-            }
-        };
-        if !satisfied {
-            return;
-        }
-        if self.side_contract_kind == SideContractKind::Cargo {
-            match target {
-                TileKind::Ore(mineral) => consume_side_count(
-                    &mut self.player.cargo,
-                    &mineral,
-                    self.side_contract_required,
-                ),
-                TileKind::Artifact(artifact) => consume_side_count(
-                    &mut self.player.artifacts,
-                    &artifact,
-                    self.side_contract_required,
-                ),
-                _ => {}
-            }
-        }
-        let reward = 420 + self.side_contract_required * 80;
-        self.player.credits += reward;
-        self.total_earnings += reward;
-        self.side_contract_active = false;
-        self.message = format!("Side contract fulfilled: {reward} credits bonus.");
-        self.sound_cues.push(SoundCue::Sell);
+    fn queue_start_side_contract(&mut self) {
+        self.session_service_request = Some(SessionServiceRequest::StartSideContract);
+        "Side contract request queued for authoritative session.".clone_into(&mut self.message);
     }
 
     fn confirm_depot(&mut self) {
@@ -11236,7 +11094,7 @@ impl GameState {
                 });
             }
             WorldEventKind::MeteorShower => {
-                self.start_side_contract();
+                self.queue_start_side_contract();
                 self.contracts.active.reward = self.contracts.active.reward.saturating_add(75);
             }
             WorldEventKind::RivalClaims => {
@@ -16807,7 +16665,17 @@ mod tests {
             game.take_session_service_request(),
             Some(SessionServiceRequest::BuyInsurance)
         );
-        assert!(!game.player.insured);
+        game.modal = Some(ModalScreen::Bank);
+        game.selected_menu_item = 2;
+        game.handle_modal(PlayerInput {
+            confirm: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(
+            game.take_session_service_request(),
+            Some(SessionServiceRequest::StartSideContract)
+        );
+        assert!(game.active_side_contracts.is_empty());
     }
 
     #[test]
