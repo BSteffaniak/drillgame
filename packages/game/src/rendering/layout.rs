@@ -305,8 +305,13 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 widgets::RenderCommand::Panel { rect } => {
                     self.draw_panel(*rect, PanelKind::Overlay);
                 }
-                widgets::RenderCommand::Text { rect, text, kind } => {
-                    Self::draw_text(text, rect.x, rect.y, *kind, Color::RAYWHITE);
+                widgets::RenderCommand::Text {
+                    rect,
+                    text,
+                    kind,
+                    color,
+                } => {
+                    Self::draw_text(text, rect.x, rect.y, *kind, *color);
                 }
                 widgets::RenderCommand::Meter { rect, ratio } => {
                     self.draw_bar(
@@ -352,6 +357,55 @@ impl<'draw, 'handle> UiLayout<'draw, 'handle> {
                 },
             }
         }
+    }
+
+    pub(super) fn modal_with_render_plan(
+        &mut self,
+        title: &str,
+        subtitle: &str,
+        content: &ModalContent,
+    ) {
+        self.draw.draw_rectangle(
+            self.viewport.x as i32,
+            self.viewport.y as i32,
+            self.viewport.width as i32,
+            self.viewport.height as i32,
+            Color::new(0, 0, 0, 120),
+        );
+        let rect = modal_rect_for_viewport(self.viewport);
+        self.draw_panel(rect, PanelKind::Modal);
+        let content_rect = inset(rect, Insets::all(18.0));
+        Self::draw_text(
+            title,
+            content_rect.x,
+            content_rect.y,
+            TextKind::Title,
+            Color::GOLD,
+        );
+        Self::draw_text(
+            subtitle,
+            content_rect.x,
+            content_rect.y + 35.0,
+            TextKind::Small,
+            Color::LIGHTGRAY,
+        );
+        self.draw.draw_line(
+            content_rect.x as i32,
+            (content_rect.y + 60.0) as i32,
+            (content_rect.x + content_rect.width) as i32,
+            (content_rect.y + 60.0) as i32,
+            Color::new(110, 120, 130, 180),
+        );
+        let body = Rectangle {
+            x: content_rect.x,
+            y: content_rect.y + 72.0,
+            width: content_rect.width,
+            height: (content_rect.height - 72.0).max(0.0),
+        };
+        let mut node = modal_content_node(content, body.width);
+        node.layout(body);
+        let plan = node.render_plan();
+        self.render_plan(&plan);
     }
 
     fn draw_modal_content(&mut self, rect: Rectangle, content: &ModalContent) {
@@ -673,6 +727,51 @@ impl SectionItem {
     }
 }
 
+fn modal_content_node(content: &ModalContent, width: f32) -> widgets::UiNode {
+    let mut sections = Vec::new();
+    for section in &content.sections {
+        sections.push(widgets::UiNode::Text(widgets::TextNode::colored(
+            &section.title,
+            TextKind::Heading,
+            width,
+            section.color,
+        )));
+        for item in &section.items {
+            match item {
+                SectionItem::Meter {
+                    label, value, max, ..
+                } => {
+                    sections.push(widgets::UiNode::Text(widgets::TextNode::label(
+                        label,
+                        TextKind::Small,
+                        width,
+                    )));
+                    sections.push(widgets::UiNode::Meter(widgets::MeterNode::new(
+                        ratio(*value, *max),
+                        width,
+                        10.0,
+                    )));
+                }
+                SectionItem::Stat(stat) => {
+                    sections.push(widgets::UiNode::Text(widgets::TextNode::colored(
+                        format!("{} {}", stat.label, stat.value),
+                        TextKind::Small,
+                        width,
+                        stat.color,
+                    )));
+                }
+                SectionItem::Text(text) => sections.push(widgets::UiNode::Text(
+                    widgets::TextNode::label(text, TextKind::Small, width),
+                )),
+            }
+        }
+    }
+    widgets::UiNode::Scroll(widgets::ScrollNode::vertical(
+        0.0,
+        widgets::UiNode::Stack(widgets::StackNode::vertical(8.0, sections)),
+    ))
+}
+
 fn inset(rect: Rectangle, insets: Insets) -> Rectangle {
     Rectangle {
         x: rect.x + insets.left,
@@ -820,7 +919,7 @@ const fn font_role(kind: TextKind) -> FontRole {
 )]
 mod widgets {
     use super::{Insets, Size, TextKind, inset};
-    use raylib::prelude::Rectangle;
+    use raylib::prelude::{Color, Rectangle};
     use std::collections::BTreeMap;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -899,6 +998,7 @@ mod widgets {
             rect: Rectangle,
             text: String,
             kind: TextKind,
+            color: Color,
         },
         Meter {
             rect: Rectangle,
@@ -1006,6 +1106,7 @@ mod widgets {
                     rect: node.rect,
                     text: node.text.clone(),
                     kind: node.kind,
+                    color: node.color,
                 }),
                 Self::Meter(node) => plan.push(RenderCommand::Meter {
                     rect: node.rect,
@@ -1051,6 +1152,7 @@ mod widgets {
     pub(super) struct TextNode {
         pub(super) text: String,
         pub(super) kind: TextKind,
+        pub(super) color: Color,
         pub(super) width: f32,
         pub(super) height: f32,
         pub(super) rect: Rectangle,
@@ -1058,11 +1160,21 @@ mod widgets {
 
     impl TextNode {
         pub(super) fn label(text: impl Into<String>, kind: TextKind, width: f32) -> Self {
+            Self::colored(text, kind, width, Color::RAYWHITE)
+        }
+
+        pub(super) fn colored(
+            text: impl Into<String>,
+            kind: TextKind,
+            width: f32,
+            color: Color,
+        ) -> Self {
             let text = text.into();
             let height = super::wrapped_height(&text, width, kind);
             Self {
                 text,
                 kind,
+                color,
                 width,
                 height,
                 rect: zero_rect(),
@@ -1073,6 +1185,7 @@ mod widgets {
             Self {
                 text: String::new(),
                 kind: TextKind::Small,
+                color: Color::RAYWHITE,
                 width,
                 height,
                 rect: zero_rect(),

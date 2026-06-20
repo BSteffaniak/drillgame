@@ -460,7 +460,7 @@ fn draw_service_modal_ui(
             },
         ));
     }
-    UiLayout::screen(draw).modal(
+    UiLayout::screen(draw).modal_with_render_plan(
         title,
         "Up/Down: small/half/full | Enter/E buy selected | Esc close",
         &ModalContent::new(vec![Section::new("Service", Color::SKYBLUE, items)]),
