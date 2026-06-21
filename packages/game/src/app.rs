@@ -444,6 +444,10 @@ impl OnlineTaskDispatcher {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "unit tests inspect tick payload construction directly"
+    )]
     fn live_session_tick_input(
         &mut self,
         session: &mut GameSession,
@@ -466,6 +470,10 @@ impl OnlineTaskDispatcher {
             .input
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "online host/client tick sequencing is kept together while transport ownership is being split"
+    )]
     fn drive_scheduled_tick(
         &mut self,
         session: &mut GameSession,
@@ -484,7 +492,6 @@ impl OnlineTaskDispatcher {
         let start_session_requested = session.game_mut().take_online_start_session_request();
         let local_player_commands =
             Self::gameplay_commands_for_network_tick(session.game(), local_player_commands);
-        let input = self.live_session_tick_input(session, local_player_commands);
         let Some(controller) = &mut self.controller else {
             return;
         };
@@ -516,12 +523,63 @@ impl OnlineTaskDispatcher {
             );
         }
         let result = match mode_label {
-            "descriptor-host-accepted" => runtime.block_on(
-                controller.drive_descriptor_host_outbound_tick(session.game_mut(), input),
-            ),
-            "descriptor-client-connected" => runtime.block_on(
-                controller.drive_descriptor_client_outbound_tick(session.game_mut(), input),
-            ),
+            "descriptor-host-accepted" => {
+                let command_summary =
+                    match runtime.block_on(controller.descriptor_host_try_receive_command_packet(
+                        std::time::Duration::from_millis(1),
+                    )) {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            session.game_mut().apply_online_network_task_result(
+                                OnlineNetworkTaskResult::Failed(format!("{error:?}")),
+                            );
+                            return;
+                        }
+                    };
+                if command_summary.is_some() {
+                    let pre_replication_summary = crate::multiplayer::QuinnSessionTickSummary {
+                        command_summary: command_summary.clone(),
+                        snapshot_replicated: false,
+                        delta_replicated: false,
+                        terrain_chunk_response: None,
+                        correction_summary: None,
+                    };
+                    let _application =
+                        session.apply_online_tick_summary(mode_label, &pre_replication_summary);
+                }
+                let identity = session.prepare_online_tick_identity(false);
+                let sequence = self.live_tick_sequence;
+                self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
+                let input = session
+                    .live_session_tick_input_with_provenance(
+                        identity.client_id,
+                        identity.player_id,
+                        sequence,
+                        local_player_commands,
+                    )
+                    .input;
+                runtime.block_on(controller.drive_descriptor_host_replication_tick(
+                    session.game_mut(),
+                    input,
+                    command_summary,
+                ))
+            }
+            "descriptor-client-connected" => {
+                let identity = session.prepare_online_tick_identity(true);
+                let sequence = self.live_tick_sequence;
+                self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
+                let input = session
+                    .live_session_tick_input_with_provenance(
+                        identity.client_id,
+                        identity.player_id,
+                        sequence,
+                        local_player_commands,
+                    )
+                    .input;
+                runtime.block_on(
+                    controller.drive_descriptor_client_outbound_tick(session.game_mut(), input),
+                )
+            }
             "descriptor-host-pending" => Ok(crate::multiplayer::QuinnSessionTickSummary {
                 command_summary: None,
                 snapshot_replicated: false,
@@ -529,9 +587,23 @@ impl OnlineTaskDispatcher {
                 terrain_chunk_response: None,
                 correction_summary: None,
             }),
-            _ => runtime
-                .block_on(controller.drive_tick_input(session.game_mut(), input))
-                .map(|telemetry| telemetry.summary),
+            _ => {
+                let descriptor_client_connected = mode_label == "descriptor-client-connected";
+                let identity = session.prepare_online_tick_identity(descriptor_client_connected);
+                let sequence = self.live_tick_sequence;
+                self.live_tick_sequence = self.live_tick_sequence.wrapping_add(1);
+                let input = session
+                    .live_session_tick_input_with_provenance(
+                        identity.client_id,
+                        identity.player_id,
+                        sequence,
+                        local_player_commands,
+                    )
+                    .input;
+                runtime
+                    .block_on(controller.drive_tick_input(session.game_mut(), input))
+                    .map(|telemetry| telemetry.summary)
+            }
         };
         match result {
             Ok(summary) => {
@@ -616,11 +688,6 @@ pub fn run() {
                 .mark_local_multiplayer_active(player_slots);
         }
         online_tasks.drain_and_execute(session.game_mut());
-        online_tasks.drive_scheduled_tick(
-            &mut session,
-            delta_seconds,
-            mapped_input.player_commands.clone(),
-        );
         let online_authority_mode = online_tasks.controller_mode_label();
         let immediate_client_actions = mapped_input
             .client_actions
@@ -678,6 +745,11 @@ pub fn run() {
             online_tasks.drain_and_execute(session.game_mut());
         }
         let _legacy_bridge_active = authority_update.legacy_bridge_active();
+        online_tasks.drive_scheduled_tick(
+            &mut session,
+            delta_seconds,
+            mapped_input.player_commands.clone(),
+        );
         let world_delta = session.drain_world_delta();
         let _world_delta_is_empty = world_delta.is_empty();
         if input.fullscreen {

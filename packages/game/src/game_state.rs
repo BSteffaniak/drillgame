@@ -3785,6 +3785,19 @@ impl RealOnlineSessionController {
         let command_summary = self
             .descriptor_host_try_receive_command_packet(Duration::from_millis(1))
             .await?;
+        self.drive_descriptor_host_replication_tick(game, input, command_summary)
+            .await
+    }
+
+    pub async fn drive_descriptor_host_replication_tick(
+        &mut self,
+        game: &mut GameState,
+        input: crate::multiplayer::QuinnSessionTickInput,
+        command_summary: Option<crate::multiplayer::CommandPacketExchangeSummary>,
+    ) -> Result<
+        crate::multiplayer::QuinnSessionTickSummary,
+        crate::multiplayer::QuinnOnlineSessionError,
+    > {
         self.descriptor_host_send_player_identity(&game.online_player_name)
             .await?;
         self.descriptor_host_send_ready_state(game.online_local_ready)
