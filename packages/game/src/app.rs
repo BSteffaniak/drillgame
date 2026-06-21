@@ -676,7 +676,7 @@ pub fn run() {
             "large frame delta detected before fixed-tick simulation migration"
         );
         let exit_requested = raylib.window_should_close();
-        let split_screen_active = session.client_count() > 1;
+        let split_screen_active = session.local_split_screen_active();
         let input = if split_screen_active {
             read_input(&mut raylib, exit_requested)
         } else {
@@ -690,7 +690,8 @@ pub fn run() {
         {
             let enabled_split_screen = session.enable_default_local_split_screen();
             if enabled_split_screen {
-                let player_slots = u8::try_from(session.client_count()).unwrap_or(u8::MAX);
+                let player_slots =
+                    u8::try_from(session.local_input_client_count()).unwrap_or(u8::MAX);
                 session
                     .game_mut()
                     .mark_local_multiplayer_active(player_slots);
@@ -698,7 +699,7 @@ pub fn run() {
         }
         if session.game_mut().take_local_multiplayer_request() {
             let _ = session.enable_default_local_split_screen();
-            let player_slots = u8::try_from(session.client_count()).unwrap_or(u8::MAX);
+            let player_slots = u8::try_from(session.local_input_client_count()).unwrap_or(u8::MAX);
             session
                 .game_mut()
                 .mark_local_multiplayer_active(player_slots);

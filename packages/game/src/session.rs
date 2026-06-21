@@ -4722,6 +4722,7 @@ pub struct GameSession {
     game: GameState,
     world: WorldState,
     clients: BTreeMap<ClientId, ClientState>,
+    local_input_client_ids: BTreeSet<ClientId>,
     local_client_id: ClientId,
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
@@ -5852,6 +5853,7 @@ impl GameSession {
             game,
             world,
             clients: BTreeMap::from([(LOCAL_CLIENT_ID, local_client)]),
+            local_input_client_ids: BTreeSet::from([LOCAL_CLIENT_ID]),
             local_client_id: LOCAL_CLIENT_ID,
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
@@ -6208,6 +6210,16 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn local_input_client_count(&self) -> usize {
+        self.local_input_client_ids.len()
+    }
+
+    #[must_use]
+    pub fn local_split_screen_active(&self) -> bool {
+        self.local_input_client_count() > 1
+    }
+
+    #[must_use]
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -6219,13 +6231,22 @@ impl GameSession {
 
     #[must_use]
     pub fn secondary_local_client_id(&self) -> Option<ClientId> {
-        self.clients
-            .keys()
+        self.local_input_client_ids
+            .iter()
             .copied()
             .find(|client_id| *client_id != self.local_client_id)
     }
 
-    pub fn add_local_client_player(&mut self, client_id: ClientId, player_id: PlayerId) -> bool {
+    fn assign_local_split_screen_viewports(&mut self) {
+        let viewports = split_screen_viewports(self.local_input_client_count());
+        for (client_id, viewport) in self.local_input_client_ids.iter().copied().zip(viewports) {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.view.viewport = viewport;
+            }
+        }
+    }
+
+    fn insert_client_player(&mut self, client_id: ClientId, player_id: PlayerId) -> bool {
         if self.clients.contains_key(&client_id) || self.world.player(player_id).is_some() {
             return false;
         }
@@ -6237,15 +6258,25 @@ impl GameSession {
         self.world.insert_player(player_id, player);
         let mut client = ClientState::new(client_id, player_id);
         client.sync_presentation_from_legacy_game(&self.game);
-        client.view.viewport = split_screen_viewports(self.clients.len() + 1)
-            .pop()
-            .expect("split screen layout returns viewport for added client");
         self.clients.insert(client_id, client);
-        let viewports = split_screen_viewports(self.clients.len());
-        for (client, viewport) in self.clients.values_mut().zip(viewports) {
-            client.view.viewport = viewport;
-        }
         true
+    }
+
+    pub fn add_local_client_player(&mut self, client_id: ClientId, player_id: PlayerId) -> bool {
+        if !self.insert_client_player(client_id, player_id) {
+            return false;
+        }
+        self.local_input_client_ids.insert(client_id);
+        self.assign_local_split_screen_viewports();
+        true
+    }
+
+    pub fn add_online_remote_client_player(
+        &mut self,
+        client_id: ClientId,
+        player_id: PlayerId,
+    ) -> bool {
+        self.insert_client_player(client_id, player_id)
     }
 
     #[must_use]
@@ -6380,7 +6411,7 @@ impl GameSession {
         SnapshotChunkRecoveryPlan,
         PredictionPresentationPlan,
     ) {
-        let _added = self.add_local_client_player(remote_client_id, remote_player_id);
+        let _added = self.add_online_remote_client_player(remote_client_id, remote_player_id);
         let join_in_progress = ProtocolExchangeBatch {
             kind: ProtocolExchangeKind::JoinHandshake,
             messages: vec![
@@ -6750,8 +6781,8 @@ impl GameSession {
         let mut created = false;
         for participant in roster.participants() {
             if !self.has_client(participant.client_id) {
-                created |=
-                    self.add_local_client_player(participant.client_id, participant.player_id);
+                created |= self
+                    .add_online_remote_client_player(participant.client_id, participant.player_id);
             }
             if self.world.player(participant.player_id).is_none() {
                 let mut player = self.game.player.clone();
@@ -7066,7 +7097,8 @@ impl GameSession {
             if player_snapshot.player_id != local_player_id {
                 let client_id = ClientId::new(player_snapshot.player_id.get());
                 if !self.has_client(client_id) {
-                    let _added = self.add_local_client_player(client_id, player_snapshot.player_id);
+                    let _added =
+                        self.add_online_remote_client_player(client_id, player_snapshot.player_id);
                     clients_created += 1;
                 }
             }
@@ -7257,7 +7289,7 @@ impl GameSession {
             return 0;
         };
         if !self.has_client(remote_client_id) {
-            let _added = self.add_local_client_player(remote_client_id, player_id);
+            let _added = self.add_online_remote_client_player(remote_client_id, player_id);
         }
         let accepted: Vec<SequencedPlayerCommand> = summary
             .accepted_commands
