@@ -6123,16 +6123,13 @@ impl GameSession {
         remote_alpha: f32,
         remote_stall_seconds: f32,
     ) -> PredictionPresentationPlan {
-        let authoritative_snapshot = self
-            .world
-            .player(self.local_client().controlled_player_id)
-            .map(|player| {
-                PlayerSnapshot::from_world_player(
-                    self.local_client().controlled_player_id,
-                    player,
-                    &self.world,
-                )
-            });
+        let controlled_player_id = self.game.online_player_slot.map_or_else(
+            || self.local_client().controlled_player_id,
+            |slot| PlayerId::new(u64::from(slot)),
+        );
+        let authoritative_snapshot = self.world.player(controlled_player_id).map(|player| {
+            PlayerSnapshot::from_world_player(controlled_player_id, player, &self.world)
+        });
         self.prediction_presentation_plan(
             authoritative_snapshot.as_ref(),
             delta_seconds,
@@ -6142,7 +6139,10 @@ impl GameSession {
     }
 
     pub fn observe_live_remote_player_snapshots(&mut self) {
-        let local_player_id = self.local_client().controlled_player_id;
+        let local_player_id = self.game.online_player_slot.map_or_else(
+            || self.local_client().controlled_player_id,
+            |slot| PlayerId::new(u64::from(slot)),
+        );
         let remote_snapshots: Vec<PlayerSnapshot> = self
             .world
             .player_ids()
