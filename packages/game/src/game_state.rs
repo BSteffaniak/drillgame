@@ -4347,11 +4347,11 @@ impl RealOnlineSessionController {
                             }
                             crate::multiplayer::NetworkDeltaPayload::Players { players } => {
                                 let visible_updates =
-                                    apply_network_player_delta_to_remote_presentations_adapter(
+                                    apply_network_player_snapshots_to_remote_presentations_adapter(
                                         game, players,
                                     );
                                 format!(
-                                    "tick {tick_value}: {} player delta(s), {visible_updates} visible remote update(s)",
+                                    "tick {tick_value}: {} authoritative player update(s), {visible_updates} visible remote update(s)",
                                     players.len()
                                 )
                             }
@@ -4794,7 +4794,7 @@ impl RealOnlineSessionController {
                 delta: Some((
                     crate::multiplayer::SimulationTick::new(tick + 2),
                     crate::multiplayer::NetworkDeltaPayload::Players {
-                        players: vec![player_id],
+                        players: vec![live_player.clone()],
                     },
                 )),
                 terrain_chunk_request: Some(terrain_request),
@@ -5027,21 +5027,53 @@ fn apply_network_snapshot_remote_players_presentation_adapter(
     ));
 }
 
-fn apply_network_player_delta_to_remote_presentations_adapter(
+fn apply_network_player_snapshots_to_remote_presentations_adapter(
     game: &mut GameState,
-    players: &[crate::multiplayer::PlayerId],
+    players: &[crate::multiplayer::NetworkPlayerSnapshot],
 ) -> usize {
+    let local_player_id = game
+        .online_player_slot
+        .map(|slot| crate::multiplayer::PlayerId::new(u64::from(slot)));
     let mut visible_updates = 0;
-    for player_id in players {
+    for player in players {
+        if Some(player.player_id) == local_player_id {
+            apply_network_player_snapshot_to_game(game, player);
+            continue;
+        }
         if let Some(remote) = game
             .online_remote_player_snapshots
             .iter_mut()
-            .find(|remote| remote.player_id == *player_id)
+            .find(|remote| remote.player_id == player.player_id)
         {
-            remote.x += remote.velocity_x;
-            remote.y += remote.velocity_y;
-            visible_updates += 1;
+            remote.x = player.x;
+            remote.y = player.y;
+            remote.velocity_x = player.velocity_x;
+            remote.velocity_y = player.velocity_y;
+            remote.fuel = player.fuel;
+            remote.hull = player.hull;
+            remote.credits = player.credits;
+            remote.cargo_used = player.cargo_used;
+            remote.cargo.clone_from(&player.cargo);
+            remote.artifacts.clone_from(&player.artifacts);
+            remote.materials.clone_from(&player.materials);
+        } else {
+            game.online_remote_player_snapshots
+                .push(OnlineRemotePlayerPresentation {
+                    player_id: player.player_id,
+                    x: player.x,
+                    y: player.y,
+                    velocity_x: player.velocity_x,
+                    velocity_y: player.velocity_y,
+                    fuel: player.fuel,
+                    hull: player.hull,
+                    credits: player.credits,
+                    cargo_used: player.cargo_used,
+                    cargo: player.cargo.clone(),
+                    artifacts: player.artifacts.clone(),
+                    materials: player.materials.clone(),
+                });
         }
+        visible_updates += 1;
     }
     if !players.is_empty() {
         game.online_remote_player_connected = true;
@@ -12883,7 +12915,7 @@ mod tests {
             crate::multiplayer::SimulationTick::new(302),
         );
         host_controller
-            .descriptor_host_send_snapshot(snapshot)
+            .descriptor_host_send_snapshot(snapshot.clone())
             .await
             .expect("host sends descriptor snapshot");
         let snapshot_message = client_controller
@@ -12899,7 +12931,7 @@ mod tests {
             .descriptor_host_send_world_delta(
                 crate::multiplayer::SimulationTick::new(303),
                 crate::multiplayer::NetworkDeltaPayload::Players {
-                    players: vec![crate::multiplayer::PlayerId::new(2)],
+                    players: snapshot.players.clone(),
                 },
             )
             .await
@@ -16139,8 +16171,9 @@ mod tests {
     }
 
     #[test]
-    fn player_delta_updates_visible_remote_presentation_instead_of_only_diagnostics() {
+    fn player_delta_updates_visible_remote_presentation_from_authoritative_snapshot() {
         let mut game = GameState::new();
+        game.online_player_slot = Some(2);
         game.online_remote_player_snapshots
             .push(OnlineRemotePlayerPresentation {
                 player_id: crate::multiplayer::PlayerId::new(1),
@@ -16157,14 +16190,29 @@ mod tests {
                 materials: BTreeMap::new(),
             });
 
-        let updated = apply_network_player_delta_to_remote_presentations_adapter(
+        let updated = apply_network_player_snapshots_to_remote_presentations_adapter(
             &mut game,
-            &[crate::multiplayer::PlayerId::new(1)],
+            &[crate::multiplayer::NetworkPlayerSnapshot {
+                player_id: crate::multiplayer::PlayerId::new(1),
+                x: 42.0,
+                y: 84.0,
+                velocity_x: 3.0,
+                velocity_y: -4.0,
+                fuel: 45.0,
+                hull: 55.0,
+                credits: 65,
+                cargo_used: 0,
+                cargo: BTreeMap::new(),
+                artifacts: BTreeMap::new(),
+                materials: BTreeMap::new(),
+                loadout: crate::multiplayer::NetworkPlayerLoadoutSnapshot::default(),
+                scanner_cooldown_seconds: 0.0,
+            }],
         );
 
         assert_eq!(updated, 1);
-        assert!((game.online_remote_player_snapshots[0].x - 12.0).abs() < f32::EPSILON);
-        assert!((game.online_remote_player_snapshots[0].y - 19.0).abs() < f32::EPSILON);
+        assert!((game.online_remote_player_snapshots[0].x - 42.0).abs() < f32::EPSILON);
+        assert!((game.online_remote_player_snapshots[0].y - 84.0).abs() < f32::EPSILON);
         assert!(game.online_remote_player_connected);
         assert!(
             game.online_last_sync_loop_status

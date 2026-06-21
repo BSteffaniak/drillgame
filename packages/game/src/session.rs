@@ -78,7 +78,7 @@ impl NetworkTickPayloadProvenance {
         );
         let delta_player_ids = input.delta.as_ref().map_or_else(Vec::new, |(_, payload)| {
             if let NetworkDeltaPayload::Players { players } = payload {
-                players.clone()
+                players.iter().map(|player| player.player_id).collect()
             } else {
                 Vec::new()
             }
@@ -1355,10 +1355,9 @@ impl CompactWorldDelta {
                     })
                     .collect(),
             },
-            Self::Players { players, .. } => NetworkDeltaPayload::Players {
-                players: players.clone(),
-            },
-            Self::KeyframeRequired { .. } => NetworkDeltaPayload::KeyframeRequired,
+            Self::Players { .. } | Self::KeyframeRequired { .. } => {
+                NetworkDeltaPayload::KeyframeRequired
+            }
         }
     }
 
@@ -6866,11 +6865,7 @@ impl GameSession {
             NetworkDeltaPayload::Noop
         } else {
             NetworkDeltaPayload::Players {
-                players: snapshot
-                    .players
-                    .iter()
-                    .map(|player| player.player_id)
-                    .collect(),
+                players: snapshot.players.clone(),
             }
         };
         QuinnSessionTickInput {
@@ -7020,7 +7015,10 @@ impl GameSession {
         &mut self,
         snapshot: &NetworkWorldSnapshot,
     ) -> ReplicatedWorldPresentationApplySummary {
-        let local_player_id = self.local_client().controlled_player_id;
+        let local_player_id = self.game.online_player_slot.map_or_else(
+            || self.local_client().controlled_player_id,
+            |slot| PlayerId::new(u64::from(slot)),
+        );
         let mut local_players_updated = 0;
         let mut remote_players_updated = 0;
         let mut clients_created = 0;
@@ -9316,12 +9314,7 @@ mod tests {
             }
         );
         let payload = compact_delta.network_payload();
-        assert_eq!(
-            payload,
-            NetworkDeltaPayload::Players {
-                players: vec![LOCAL_PLAYER_ID]
-            }
-        );
+        assert_eq!(payload, NetworkDeltaPayload::KeyframeRequired);
         assert_eq!(
             compact_delta.protocol_message(),
             ProtocolMessage::WorldDelta {
@@ -9968,7 +9961,8 @@ mod tests {
         assert_eq!(player.credits, 99);
         assert!(matches!(
             input.delta,
-            Some((_, NetworkDeltaPayload::Players { players })) if players.contains(&LOCAL_PLAYER_ID)
+            Some((_, NetworkDeltaPayload::Players { players }))
+                if players.iter().any(|player| player.player_id == LOCAL_PLAYER_ID)
         ));
         let packet = input.command_packet.expect("command packet included");
         assert_eq!(packet.client_id, LOCAL_CLIENT_ID);
@@ -11111,8 +11105,10 @@ mod tests {
         assert_eq!(delta_batch.kind, ProtocolExchangeKind::WorldDelta);
         assert!(matches!(
             delta_batch.messages.as_slice(),
-            [ProtocolMessage::WorldDelta { payload: NetworkDeltaPayload::Players { players }, .. }]
-                if players.contains(&LOCAL_PLAYER_ID)
+            [ProtocolMessage::WorldDelta {
+                payload: NetworkDeltaPayload::KeyframeRequired,
+                ..
+            }]
         ));
         let chunk_batch = session
             .live_terrain_chunk_exchange_batch(super::TerrainChunkPosition::from_tile(target), 0);
@@ -11549,10 +11545,7 @@ mod tests {
             panic!("expected world delta");
         };
         assert_eq!(tick, delta.tick);
-        assert!(matches!(
-            payload,
-            NetworkDeltaPayload::Players { players } if players.contains(&second_player)
-        ));
+        assert!(matches!(payload, NetworkDeltaPayload::KeyframeRequired));
     }
 
     #[test]

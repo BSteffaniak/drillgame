@@ -58,6 +58,12 @@ impl OnlineTaskDispatcher {
         }
     }
 
+    fn controller_mode_label(&self) -> Option<&'static str> {
+        self.controller
+            .as_ref()
+            .map(RealOnlineSessionController::mode_label)
+    }
+
     fn poll_descriptor_accept(&mut self, game: &mut GameState) {
         let Some(receiver) = &self.pending_descriptor_accept else {
             return;
@@ -615,6 +621,7 @@ pub fn run() {
             delta_seconds,
             mapped_input.player_commands.clone(),
         );
+        let online_authority_mode = online_tasks.controller_mode_label();
         let immediate_client_actions = mapped_input
             .client_actions
             .iter()
@@ -648,7 +655,14 @@ pub fn run() {
         } else {
             input
         };
-        let authority_update = if split_screen_active {
+        let authority_update = if online_authority_mode == Some("descriptor-client-connected") {
+            crate::session::SessionAuthorityUpdateSummary {
+                used_legacy_presentation_adapter: false,
+                local_movement_authority: false,
+                command_adapter_count: 0,
+                current_tick: session.current_tick(),
+            }
+        } else if split_screen_active {
             session.update_shell_frame_from_session_authority(authority_input, delta_seconds)
         } else {
             session.update_frame_from_session_authority(authority_input, delta_seconds)

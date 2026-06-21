@@ -3429,14 +3429,14 @@ pub struct NetworkTerrainTile {
     pub durability: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum NetworkDeltaPayload {
     Noop,
     TerrainChunks {
         revisions: Vec<NetworkTerrainChunkRevision>,
     },
     Players {
-        players: Vec<PlayerId>,
+        players: Vec<NetworkPlayerSnapshot>,
     },
     KeyframeRequired,
 }
@@ -4467,7 +4467,7 @@ mod tests {
         };
 
         session
-            .replicate_snapshot_keyframe(snapshot)
+            .replicate_snapshot_keyframe(snapshot.clone())
             .await
             .expect("snapshot replicates");
         assert_eq!(
@@ -4479,7 +4479,7 @@ mod tests {
             .replicate_world_delta(
                 SimulationTick::new(61),
                 NetworkDeltaPayload::Players {
-                    players: vec![player_id],
+                    players: snapshot.players.clone(),
                 },
             )
             .await
