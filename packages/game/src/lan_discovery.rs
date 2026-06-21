@@ -21,6 +21,10 @@ use crate::multiplayer::QuinnHostConnectionDescriptor;
 
 pub const SERVICE_TYPE: &str = "_drillgame._udp.local.";
 pub const PROTOCOL_VERSION: &str = "1";
+pub const DEFAULT_GAME_PORT: u16 = 4_242;
+pub const RECOMMENDED_DESCRIPTOR_PORT: u16 = 4_243;
+pub const MDNS_PORT: u16 = 5_353;
+pub const RECOMMENDED_BROADCAST_PORT: u16 = 34_242;
 const DESCRIPTOR_READ_LIMIT_BYTES: usize = 128 * 1024;
 const DEFAULT_DESCRIPTOR_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -168,6 +172,14 @@ impl Drop for LanDescriptorServer {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LanBrowseReport {
+    pub games: Vec<LanDiscoveredGame>,
+    pub events_seen: usize,
+    pub resolved_seen: usize,
+    pub unusable_resolved_services: Vec<String>,
+}
+
 pub struct LanDiscoveryBrowser {
     daemon: ServiceDaemon,
 }
@@ -190,20 +202,37 @@ impl LanDiscoveryBrowser {
     ///
     /// Returns an error if mDNS browsing fails.
     pub fn browse_for(&self, duration: Duration) -> Result<Vec<LanDiscoveredGame>, mdns_sd::Error> {
+        self.browse_report_for(duration).map(|report| report.games)
+    }
+
+    /// Browse for LAN sessions and retain diagnostic details about unusable mDNS results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if mDNS browsing fails.
+    pub fn browse_report_for(&self, duration: Duration) -> Result<LanBrowseReport, mdns_sd::Error> {
         let receiver = self.daemon.browse(SERVICE_TYPE)?;
         let deadline = std::time::Instant::now() + duration;
-        let mut games = Vec::new();
+        let mut report = LanBrowseReport::default();
         while std::time::Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if let Ok(ServiceEvent::ServiceResolved(info)) =
-                receiver.recv_timeout(remaining.min(Duration::from_millis(100)))
-                && let Some(game) = discovered_game_from_service(&info)
-                && !games.iter().any(|existing| existing == &game)
-            {
-                games.push(game);
+            if let Ok(event) = receiver.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                report.events_seen += 1;
+                if let ServiceEvent::ServiceResolved(info) = event {
+                    report.resolved_seen += 1;
+                    if let Some(game) = discovered_game_from_service(&info) {
+                        if !report.games.iter().any(|existing| existing == &game) {
+                            report.games.push(game);
+                        }
+                    } else {
+                        report
+                            .unusable_resolved_services
+                            .push(service_debug_summary(&info));
+                    }
+                }
             }
         }
-        Ok(games)
+        Ok(report)
     }
 }
 
@@ -231,6 +260,29 @@ pub const fn patch_descriptor_addr_for_lan(
 ) -> QuinnHostConnectionDescriptor {
     descriptor.host_addr = patch_non_lan_addr(descriptor.host_addr, discovered_game_addr.ip());
     descriptor
+}
+
+fn service_debug_summary(info: &ResolvedService) -> String {
+    let properties = info
+        .get_properties()
+        .iter()
+        .map(|property| format!("{}={}", property.key(), property.val_str()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let addresses = info
+        .get_addresses()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{} host={} port={} addresses=[{}] txt=[{}]",
+        info.get_fullname(),
+        info.get_hostname(),
+        info.get_port(),
+        addresses,
+        properties
+    )
 }
 
 fn resolved_service_addr(info: &ResolvedService) -> Option<SocketAddr> {

@@ -925,11 +925,10 @@ fn draw_online_flow_screen(
         subtitle,
         &ModalContent::new(vec![
             Section::new(
-                "Status",
+                "LAN State",
                 Color::ORANGE,
-                game.online_multiplayer_status_lines()
+                game.online_lan_troubleshooting_lines()
                     .into_iter()
-                    .take(12)
                     .map(SectionItem::text)
                     .collect(),
             ),

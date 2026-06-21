@@ -169,12 +169,19 @@ impl OnlineTaskDispatcher {
         let (sender, receiver) = mpsc::channel();
         self.pending_descriptor_accept = Some(receiver);
         runtime.spawn(async move {
+            eprintln!("Drillgame LAN host waiting for descriptor client over UDP");
             let mut game = GameState::new();
             let result = controller
                 .accept_descriptor_client(&mut game)
                 .await
-                .map(|()| controller)
-                .map_err(|error| format!("{error:?}"));
+                .map(|()| {
+                    eprintln!("Drillgame LAN host accepted descriptor client");
+                    controller
+                })
+                .map_err(|error| {
+                    eprintln!("Drillgame LAN host descriptor accept failed: {error:?}");
+                    format!("{error:?}")
+                });
             let _ignored = sender.send(OnlineDescriptorAcceptCompletion::Accepted(result));
         });
     }
@@ -231,16 +238,41 @@ impl OnlineTaskDispatcher {
             let result = async {
                 let browser = crate::lan_discovery::LanDiscoveryBrowser::new()
                     .map_err(|error| format!("LAN discovery failed: {error}"))?;
-                let games = browser
-                    .browse_for(std::time::Duration::from_secs(3))
+                let report = browser
+                    .browse_report_for(std::time::Duration::from_secs(6))
                     .map_err(|error| format!("LAN browse failed: {error}"))?;
-                let game = games
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| "No Drillgame LAN hosts found via mDNS".to_owned())?;
+                let diagnostic = format!(
+                    "mDNS events seen: {}, resolved services: {}, usable Drillgame hosts: {}",
+                    report.events_seen,
+                    report.resolved_seen,
+                    report.games.len()
+                );
+                eprintln!("Drillgame LAN join scan: {diagnostic}");
+                for service in &report.unusable_resolved_services {
+                    eprintln!("Drillgame LAN unusable resolved service: {service}");
+                }
+                let unusable = report
+                    .unusable_resolved_services
+                    .first()
+                    .map_or_else(String::new, |service| format!(" First unusable service: {service}"));
+                let game = report.games.into_iter().next().ok_or_else(|| {
+                    format!(
+                        "No usable Drillgame LAN hosts found after 6s. {diagnostic}.{unusable} If `dns-sd -L` sees the host, the app likely received no resolved service or discarded it because descriptor_addr/game_addr TXT data was missing or unparsable."
+                    )
+                })?;
+                eprintln!(
+                    "Drillgame LAN selected host: instance={} game_addr={} descriptor_addr={} session_id={}",
+                    game.instance_name, game.game_addr, game.descriptor_addr, game.session_id
+                );
                 let mut descriptor =
                     crate::lan_discovery::fetch_descriptor(game.descriptor_addr)
                         .map_err(|error| format!("LAN descriptor fetch failed: {error}"))?;
+                eprintln!(
+                    "Drillgame LAN descriptor fetched: host_addr={} server_name={} certificate_der_len={}",
+                    descriptor.host_addr,
+                    descriptor.server_name,
+                    descriptor.certificate_der.len()
+                );
                 descriptor =
                     crate::lan_discovery::patch_descriptor_addr_for_lan(descriptor, game.game_addr);
                 let path = std::env::temp_dir().join(format!(
@@ -250,9 +282,25 @@ impl OnlineTaskDispatcher {
                 ));
                 let json = serde_json::to_string(&descriptor).map_err(|error| error.to_string())?;
                 std::fs::write(&path, json).map_err(|error| error.to_string())?;
+                eprintln!("Drillgame LAN descriptor written: {}", path.display());
                 let mut local_game = GameState::new();
-                RealOnlineSessionController::connect_descriptor_client(&mut local_game, &path)
-                    .await
+                let connect_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    RealOnlineSessionController::connect_descriptor_client(&mut local_game, &path),
+                )
+                .await
+                .map_err(|_| {
+                    crate::multiplayer::QuinnOnlineSessionError::Connect(
+                        "timed out after 10s waiting for host to accept LAN descriptor client over UDP 4242"
+                            .to_owned(),
+                    )
+                })
+                .and_then(std::convert::identity);
+                match &connect_result {
+                    Ok(_) => eprintln!("Drillgame LAN descriptor client connected"),
+                    Err(error) => eprintln!("Drillgame LAN descriptor client connect failed: {error:?}"),
+                }
+                connect_result
                     .map(|controller| (controller, path))
                     .map_err(|error| format!("{error:?}"))
             }

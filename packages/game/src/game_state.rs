@@ -658,6 +658,13 @@ impl OnlineFailureStatus {
     #[must_use]
     pub fn classify(error: &str) -> Self {
         let normalized = error.to_ascii_lowercase();
+        if normalized.contains("no usable drillgame lan hosts") {
+            return Self {
+                category: OnlineFailureCategory::Descriptor,
+                player_message: error.to_owned(),
+                troubleshooting_hint: "The app mDNS scan did not produce a usable resolved host; compare these counts with dns-sd -L output.",
+            };
+        }
         if normalized.contains("version") || normalized.contains("protocol") {
             return Self {
                 category: OnlineFailureCategory::VersionMismatch,
@@ -3640,8 +3647,13 @@ impl RealOnlineSessionController {
                     path.display()
                 ))
             })?;
+        let client_bind_config = if descriptor.host_addr.ip().is_loopback() {
+            crate::multiplayer::QuinnEndpointConfig::localhost_ephemeral()
+        } else {
+            crate::multiplayer::QuinnEndpointConfig::any_ipv4_ephemeral()
+        };
         let connector = crate::multiplayer::QuinnClientConnector::bind_from_host_descriptor(
-            crate::multiplayer::QuinnEndpointConfig::localhost_ephemeral(),
+            client_bind_config,
             &descriptor,
         )?;
         let packet_io = connector
@@ -7593,6 +7605,123 @@ impl GameState {
                     .to_owned()
             },
         }
+    }
+
+    #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "LAN diagnostics intentionally enumerate specific detected failure states"
+    )]
+    pub fn online_lan_troubleshooting_lines(&self) -> Vec<String> {
+        let lan_ip = crate::lan_discovery::likely_lan_ip();
+        let pending_task = self
+            .online_network_task_request
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |task| format!("{task:?}"));
+        let mut lines = vec![
+            format!("Status: {}", self.online_session_status_message),
+            if self.online_last_failure_status.is_empty() {
+                "Last failure: none".to_owned()
+            } else {
+                format!("Last failure: {}", self.online_last_failure_status)
+            },
+            format!(
+                "State: {:?} | pending task: {}",
+                self.online_session_state, pending_task
+            ),
+            format!(
+                "Detected LAN IP: {}",
+                lan_ip.map_or_else(|| "not detected".to_owned(), |ip| ip.to_string())
+            ),
+            format!(
+                "Game UDP: bind {} | advertise {}",
+                self.online_host_bind_addr, self.online_host_advertise_addr
+            ),
+            format!(
+                "Discovery: mDNS service {} over UDP {}",
+                crate::lan_discovery::SERVICE_TYPE,
+                crate::lan_discovery::MDNS_PORT
+            ),
+        ];
+
+        let mut issues = Vec::new();
+        if lan_ip.is_none() {
+            issues.push(
+                "Detected issue: no LAN IP could be determined from the default route. The host may be offline, VPN-only, or on an interface the game is not selecting."
+                    .to_owned(),
+            );
+        }
+        if self.online_host_bind_addr.ip().is_loopback() {
+            issues.push(format!(
+                "Detected issue: host bind address {} is loopback-only, so other computers cannot connect.",
+                self.online_host_bind_addr
+            ));
+        }
+        if matches!(self.online_session_state, OnlineSessionUxState::Hosting)
+            && self.online_host_advertise_addr.ip().is_loopback()
+            && lan_ip.is_none()
+        {
+            issues.push(format!(
+                "Detected issue: advertised host address {} is loopback and no replacement LAN IP was found.",
+                self.online_host_advertise_addr
+            ));
+        }
+        if matches!(self.online_session_state, OnlineSessionUxState::Hosting)
+            && self.online_network_task_request == Some(OnlineNetworkTaskRequest::HostLanGame)
+        {
+            issues.push(
+                "In progress: LAN host request is queued but the networking task has not reported ready yet."
+                    .to_owned(),
+            );
+        }
+        if matches!(self.online_session_state, OnlineSessionUxState::Joining)
+            && self.online_network_task_request == Some(OnlineNetworkTaskRequest::JoinLanGame)
+        {
+            issues.push(
+                "In progress: LAN scan request is queued but has not completed yet.".to_owned(),
+            );
+        }
+        if matches!(self.online_session_state, OnlineSessionUxState::Error) {
+            issues.push(format!(
+                "Detected issue: last LAN task failed: {}",
+                self.online_session_status_message
+            ));
+        }
+        if self
+            .online_session_status_message
+            .contains("No usable Drillgame LAN hosts found")
+        {
+            issues.push(self.online_session_status_message.clone());
+        } else if self
+            .online_session_status_message
+            .contains("No Drillgame LAN hosts found")
+        {
+            issues.push(
+                "Detected issue: LAN scan completed and found zero hosts. This points to host not publishing, mDNS/multicast isolation, or app/network permission blocking discovery."
+                    .to_owned(),
+            );
+        }
+        if self
+            .online_session_status_message
+            .contains("LAN descriptor fetch failed")
+        {
+            issues.push(
+                "Detected issue: discovery found a host but the descriptor TCP endpoint was unreachable. This points to firewall or advertised address/port problems."
+                    .to_owned(),
+            );
+        }
+        if self
+            .online_session_status_message
+            .contains("LAN mDNS publish failed")
+        {
+            issues.push(
+                "Detected issue: the host could not publish its mDNS service. Discovery will not work from another computer."
+                    .to_owned(),
+            );
+        }
+
+        lines.extend(issues);
+        lines
     }
 
     #[must_use]
