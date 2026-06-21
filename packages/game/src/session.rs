@@ -3435,9 +3435,17 @@ impl RenderFramePlan {
         world: &WorldState,
         clients: &BTreeMap<ClientId, ClientState>,
     ) -> Self {
+        Self::from_world_and_client_views(world, clients.values().map(|client| client.view))
+    }
+
+    #[must_use]
+    pub fn from_world_and_client_views(
+        world: &WorldState,
+        views: impl IntoIterator<Item = ClientView>,
+    ) -> Self {
         Self {
             world_summary: world.authoritative_summary().clone(),
-            views: clients.values().map(|client| client.view).collect(),
+            views: views.into_iter().collect(),
             players: world.player_snapshots(),
         }
     }
@@ -4722,7 +4730,7 @@ pub struct GameSession {
     game: GameState,
     world: WorldState,
     clients: BTreeMap<ClientId, ClientState>,
-    local_input_client_ids: BTreeSet<ClientId>,
+    local_seat_client_ids: BTreeSet<ClientId>,
     local_client_id: ClientId,
     current_tick: SimulationTick,
     simulation_accumulator: Duration,
@@ -5853,7 +5861,7 @@ impl GameSession {
             game,
             world,
             clients: BTreeMap::from([(LOCAL_CLIENT_ID, local_client)]),
-            local_input_client_ids: BTreeSet::from([LOCAL_CLIENT_ID]),
+            local_seat_client_ids: BTreeSet::from([LOCAL_CLIENT_ID]),
             local_client_id: LOCAL_CLIENT_ID,
             current_tick: SimulationTick::default(),
             simulation_accumulator: Duration::ZERO,
@@ -5921,13 +5929,26 @@ impl GameSession {
     }
 
     #[must_use]
+    pub fn local_seat_views(&self) -> Vec<&ClientView> {
+        self.local_seat_client_ids
+            .iter()
+            .filter_map(|client_id| self.clients.get(client_id).map(|client| &client.view))
+            .collect()
+    }
+
+    #[must_use]
     pub fn render_views(&self) -> Vec<&ClientView> {
-        self.client_views()
+        self.local_seat_views()
     }
 
     #[must_use]
     pub fn render_frame_plan(&self) -> RenderFramePlan {
-        RenderFramePlan::from_world_and_clients(&self.world, &self.clients)
+        RenderFramePlan::from_world_and_client_views(
+            &self.world,
+            self.local_seat_client_ids
+                .iter()
+                .filter_map(|client_id| self.clients.get(client_id).map(|client| client.view)),
+        )
     }
 
     #[must_use]
@@ -6211,7 +6232,7 @@ impl GameSession {
 
     #[must_use]
     pub fn local_input_client_count(&self) -> usize {
-        self.local_input_client_ids.len()
+        self.local_seat_client_ids.len()
     }
 
     #[must_use]
@@ -6231,7 +6252,7 @@ impl GameSession {
 
     #[must_use]
     pub fn secondary_local_client_id(&self) -> Option<ClientId> {
-        self.local_input_client_ids
+        self.local_seat_client_ids
             .iter()
             .copied()
             .find(|client_id| *client_id != self.local_client_id)
@@ -6239,7 +6260,7 @@ impl GameSession {
 
     fn assign_local_split_screen_viewports(&mut self) {
         let viewports = split_screen_viewports(self.local_input_client_count());
-        for (client_id, viewport) in self.local_input_client_ids.iter().copied().zip(viewports) {
+        for (client_id, viewport) in self.local_seat_client_ids.iter().copied().zip(viewports) {
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.view.viewport = viewport;
             }
@@ -6266,7 +6287,7 @@ impl GameSession {
         if !self.insert_client_player(client_id, player_id) {
             return false;
         }
-        self.local_input_client_ids.insert(client_id);
+        self.local_seat_client_ids.insert(client_id);
         self.assign_local_split_screen_viewports();
         true
     }
