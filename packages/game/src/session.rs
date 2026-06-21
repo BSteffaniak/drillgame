@@ -2936,11 +2936,7 @@ impl WorldState {
 }
 
 fn client_id_for_online_slot(slot: u8) -> ClientId {
-    if slot == 2 {
-        ClientId::new(1)
-    } else {
-        ClientId::new(u64::from(slot))
-    }
+    ClientId::new(u64::from(slot))
 }
 
 fn apply_network_player_snapshot_to_player(player: &mut Player, snapshot: &NetworkPlayerSnapshot) {
@@ -7251,11 +7247,7 @@ impl GameSession {
         &mut self,
         summary: &CommandPacketExchangeSummary,
     ) -> usize {
-        let remote_client_id = if summary.client_id == self.local_client().client_id {
-            ClientId::new(2)
-        } else {
-            summary.client_id
-        };
+        let remote_client_id = summary.client_id;
         let Some(player_id) = summary
             .accepted_commands
             .iter()
@@ -7277,14 +7269,7 @@ impl GameSession {
             return 0;
         }
         let accepted_count = accepted.len();
-        self.route_client_player_commands(
-            remote_client_id,
-            CommandSource::OnlineClient,
-            accepted
-                .iter()
-                .map(|command| command.command.clone())
-                .collect(),
-        );
+        self.buffer_commands(accepted.clone());
         let target_ticks: BTreeSet<SimulationTick> =
             accepted.iter().map(|command| command.target_tick).collect();
         for target_tick in target_ticks {

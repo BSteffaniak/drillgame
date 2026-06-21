@@ -4320,95 +4320,101 @@ impl RealOnlineSessionController {
         if game.online_session_state == OnlineSessionUxState::Shutdown {
             return Ok(received_count);
         }
-        match tokio::time::timeout(timeout, packet_io.receive_datagram_packet()).await {
-            Ok(Ok(packet)) => {
-                let message = packet.decode_supported().map_err(|error| {
-                    crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
-                        "unsupported protocol version: expected {}, actual {}",
-                        error.expected, error.actual
-                    ))
-                })?;
-                match message {
-                    crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
-                        if game.online_player_slot.is_none() {
-                            game.online_player_slot = self.player_slot;
-                        }
-                        apply_network_snapshot_remote_players_presentation_adapter(game, &snapshot);
-                        let tick = snapshot.tick.get();
-                        let applied_local_player =
-                            apply_network_snapshot_local_player_presentation_adapter(
+        for _ in 0..32 {
+            match tokio::time::timeout(timeout, packet_io.receive_datagram_packet()).await {
+                Ok(Ok(packet)) => {
+                    let message = packet.decode_supported().map_err(|error| {
+                        crate::multiplayer::QuinnOnlineSessionError::Connect(format!(
+                            "unsupported protocol version: expected {}, actual {}",
+                            error.expected, error.actual
+                        ))
+                    })?;
+                    match message {
+                        crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot } => {
+                            if game.online_player_slot.is_none() {
+                                game.online_player_slot = self.player_slot;
+                            }
+                            apply_network_snapshot_remote_players_presentation_adapter(
                                 game, &snapshot,
                             );
-                        if applied_local_player {
-                            game.apply_online_authority_correction_status(
-                                &OnlineAuthorityCorrectionPresentation::from_plan(
-                                    crate::session::CorrectionPlan::None,
-                                    false,
-                                ),
-                            );
-                            let local_slot = game.online_player_slot.unwrap_or(1);
-                            game.apply_online_replicated_player_status(format!(
+                            let tick = snapshot.tick.get();
+                            let applied_local_player =
+                                apply_network_snapshot_local_player_presentation_adapter(
+                                    game, &snapshot,
+                                );
+                            if applied_local_player {
+                                game.apply_online_authority_correction_status(
+                                    &OnlineAuthorityCorrectionPresentation::from_plan(
+                                        crate::session::CorrectionPlan::None,
+                                        false,
+                                    ),
+                                );
+                                let local_slot = game.online_player_slot.unwrap_or(1);
+                                game.apply_online_replicated_player_status(format!(
                                 "tick {tick}: applied local slot {local_slot} snapshot; remote_presentations={}",
                                 game.online_remote_player_snapshots.len()
                             ));
+                            }
+                            client_runtime.handle_message(
+                                crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot },
+                            );
+                            game.apply_online_replication_status(format!(
+                                "snapshot keyframe tick {tick} received"
+                            ));
+                            received_count += 1;
                         }
-                        client_runtime.handle_message(
-                            crate::multiplayer::ProtocolMessage::SnapshotKeyframe { snapshot },
-                        );
-                        game.apply_online_replication_status(format!(
-                            "snapshot keyframe tick {tick} received"
-                        ));
-                        received_count += 1;
-                    }
-                    crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload } => {
-                        let tick_value = tick.get();
-                        let delta_status = match &payload {
-                            crate::multiplayer::NetworkDeltaPayload::Noop => {
-                                format!("tick {tick_value}: noop delta")
-                            }
-                            crate::multiplayer::NetworkDeltaPayload::TerrainChunks {
-                                revisions,
-                            } => {
-                                format!(
-                                    "tick {tick_value}: {} terrain chunk revision(s)",
-                                    revisions.len()
-                                )
-                            }
-                            crate::multiplayer::NetworkDeltaPayload::Players { players } => {
-                                let visible_updates =
+                        crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload } => {
+                            let tick_value = tick.get();
+                            let delta_status = match &payload {
+                                crate::multiplayer::NetworkDeltaPayload::Noop => {
+                                    format!("tick {tick_value}: noop delta")
+                                }
+                                crate::multiplayer::NetworkDeltaPayload::TerrainChunks {
+                                    revisions,
+                                } => {
+                                    format!(
+                                        "tick {tick_value}: {} terrain chunk revision(s)",
+                                        revisions.len()
+                                    )
+                                }
+                                crate::multiplayer::NetworkDeltaPayload::Players { players } => {
+                                    let visible_updates =
                                     apply_network_player_snapshots_to_remote_presentations_adapter(
                                         game, players,
                                     );
-                                format!(
-                                    "tick {tick_value}: {} authoritative player update(s), {visible_updates} visible remote update(s)",
-                                    players.len()
-                                )
-                            }
-                            crate::multiplayer::NetworkDeltaPayload::KeyframeRequired => {
-                                game.apply_online_sync_loop_status(
-                                    OnlineSyncLoopStatus::keyframe_required(),
-                                );
-                                format!("tick {tick_value}: keyframe required")
-                            }
-                        };
-                        client_runtime.handle_message(
-                            crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload },
-                        );
-                        game.apply_online_replication_status(format!(
-                            "world delta tick {tick_value} received"
-                        ));
-                        game.apply_online_replicated_player_status(delta_status);
-                        received_count += 1;
-                    }
-                    other => {
-                        return Err(
-                            crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(other),
-                        );
+                                    format!(
+                                        "tick {tick_value}: {} authoritative player update(s), {visible_updates} visible remote update(s)",
+                                        players.len()
+                                    )
+                                }
+                                crate::multiplayer::NetworkDeltaPayload::KeyframeRequired => {
+                                    game.apply_online_sync_loop_status(
+                                        OnlineSyncLoopStatus::keyframe_required(),
+                                    );
+                                    format!("tick {tick_value}: keyframe required")
+                                }
+                            };
+                            client_runtime.handle_message(
+                                crate::multiplayer::ProtocolMessage::WorldDelta { tick, payload },
+                            );
+                            game.apply_online_replication_status(format!(
+                                "world delta tick {tick_value} received"
+                            ));
+                            game.apply_online_replicated_player_status(delta_status);
+                            received_count += 1;
+                        }
+                        other => {
+                            return Err(
+                                crate::multiplayer::QuinnOnlineSessionError::UnexpectedMessage(
+                                    other,
+                                ),
+                            );
+                        }
                     }
                 }
+                Ok(Err(error)) => return Err(error.into()),
+                Err(_) => break,
             }
-            Ok(Err(error)) => return Err(error.into()),
-            Err(_) => {}
         }
         Ok(received_count)
     }
@@ -5136,19 +5142,11 @@ fn apply_network_snapshot_local_player_presentation_adapter(
     else {
         return false;
     };
-    let selected = snapshot
+    let Some(player) = snapshot
         .players
         .iter()
         .find(|player| player.player_id == preferred_player_id)
-        .or_else(|| {
-            matches!(
-                game.online_session_state,
-                OnlineSessionUxState::Connected | OnlineSessionUxState::Reconnecting
-            )
-            .then(|| snapshot.players.first())
-            .flatten()
-        });
-    let Some(player) = selected else {
+    else {
         return false;
     };
     apply_network_player_snapshot_to_game(game, player);
