@@ -3507,6 +3507,8 @@ pub struct RealOnlineSessionController {
     player_slot: Option<u8>,
     next_sequence: u32,
     next_tick: u64,
+    pending_command_acknowledgements: Vec<crate::multiplayer::CommandAcknowledgement>,
+    pending_command_rejections: Vec<crate::multiplayer::CommandRejection>,
 }
 
 #[allow(
@@ -3534,6 +3536,8 @@ impl RealOnlineSessionController {
             player_slot: Some(1),
             next_sequence: 30,
             next_tick: 301,
+            pending_command_acknowledgements: Vec::new(),
+            pending_command_rejections: Vec::new(),
         };
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_joined_session(
             controller.player_slot,
@@ -3622,6 +3626,8 @@ impl RealOnlineSessionController {
             player_slot: Some(1),
             next_sequence: 30,
             next_tick: 301,
+            pending_command_acknowledgements: Vec::new(),
+            pending_command_rejections: Vec::new(),
         };
         game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_host_descriptor_ready(
             Some(1),
@@ -3685,6 +3691,8 @@ impl RealOnlineSessionController {
             player_slot: Some(2),
             next_sequence: 30,
             next_tick: 301,
+            pending_command_acknowledgements: Vec::new(),
+            pending_command_rejections: Vec::new(),
         };
         game.apply_real_online_session_ux(
             RealOnlineSessionUxSnapshot::from_descriptor_client_connected(
@@ -4277,6 +4285,14 @@ impl RealOnlineSessionController {
                                 },
                             );
                         }
+                        crate::multiplayer::ProtocolMessage::CommandAcknowledgement(
+                            acknowledgement,
+                        ) => {
+                            self.pending_command_acknowledgements.push(acknowledgement);
+                        }
+                        crate::multiplayer::ProtocolMessage::CommandRejection(rejection) => {
+                            self.pending_command_rejections.push(rejection);
+                        }
                         crate::multiplayer::ProtocolMessage::SessionEnded { reason } => {
                             game.apply_online_session_boundary_status(
                                 &OnlineSessionBoundaryStatus::host_ended(&reason),
@@ -4687,6 +4703,18 @@ impl RealOnlineSessionController {
     #[must_use]
     pub const fn mode_label(&self) -> &'static str {
         self.mode.label()
+    }
+
+    pub fn drain_command_responses(
+        &mut self,
+    ) -> (
+        Vec<crate::multiplayer::CommandAcknowledgement>,
+        Vec<crate::multiplayer::CommandRejection>,
+    ) {
+        (
+            std::mem::take(&mut self.pending_command_acknowledgements),
+            std::mem::take(&mut self.pending_command_rejections),
+        )
     }
 
     #[must_use]

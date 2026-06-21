@@ -4131,6 +4131,29 @@ pub struct ClientPredictionState {
 }
 
 impl ClientPredictionState {
+    pub fn track_sent_commands<I>(&mut self, commands: I)
+    where
+        I: IntoIterator<Item = SequencedPlayerCommand>,
+    {
+        self.unacknowledged_commands.extend(commands);
+        let max_pending = usize::try_from(SIMULATION_HZ).expect("simulation hz fits usize") * 3;
+        if self.unacknowledged_commands.len() > max_pending {
+            let excess = self.unacknowledged_commands.len() - max_pending;
+            self.unacknowledged_commands.drain(0..excess);
+        }
+    }
+
+    pub fn acknowledge_commands_through(&mut self, sequence: InputSequence) {
+        self.unacknowledged_commands
+            .retain(|command| command.sequence > sequence);
+    }
+
+    pub fn reject_command(&mut self, sequence: InputSequence) {
+        self.unacknowledged_commands
+            .retain(|command| command.sequence != sequence);
+        self.note_prediction_failure(PredictionFailure::CommandRejected);
+    }
+
     #[must_use]
     pub fn unacknowledged_commands(&self) -> &[SequencedPlayerCommand] {
         &self.unacknowledged_commands
@@ -6585,6 +6608,27 @@ impl GameSession {
             .into_iter()
             .map(|producer| self.route_command_producer(client_id, producer))
             .collect()
+    }
+
+    pub fn track_online_prediction_commands(&mut self, packet: &CommandPacket) {
+        self.local_client_mut()
+            .prediction
+            .track_sent_commands(packet.commands.clone());
+    }
+
+    pub fn apply_online_command_acknowledgement(
+        &mut self,
+        acknowledgement: &CommandAcknowledgement,
+    ) {
+        self.local_client_mut()
+            .prediction
+            .acknowledge_commands_through(acknowledgement.acknowledged_sequence);
+    }
+
+    pub fn apply_online_command_rejection(&mut self, rejection: &CommandRejection) {
+        self.local_client_mut()
+            .prediction
+            .reject_command(rejection.sequence);
     }
 
     pub fn refresh_online_roster_status_on_shell(&mut self) {

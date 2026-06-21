@@ -576,6 +576,9 @@ impl OnlineTaskDispatcher {
                         local_player_commands,
                     )
                     .input;
+                if let Some(packet) = &input.command_packet {
+                    session.track_online_prediction_commands(packet);
+                }
                 runtime.block_on(
                     controller.drive_descriptor_client_outbound_tick(session.game_mut(), input),
                 )
@@ -605,8 +608,21 @@ impl OnlineTaskDispatcher {
                     .map(|telemetry| telemetry.summary)
             }
         };
+        let command_responses = if mode_label == "descriptor-client-connected" {
+            Some(controller.drain_command_responses())
+        } else {
+            None
+        };
         match result {
             Ok(summary) => {
+                if let Some((acknowledgements, rejections)) = command_responses {
+                    for acknowledgement in acknowledgements {
+                        session.apply_online_command_acknowledgement(&acknowledgement);
+                    }
+                    for rejection in rejections {
+                        session.apply_online_command_rejection(&rejection);
+                    }
+                }
                 let application = session.apply_online_tick_summary(mode_label, &summary);
                 let diagnostic = GameSession::online_tick_diagnostic(&summary, application);
                 session.game_mut().apply_online_runtime_tick_status(
