@@ -739,11 +739,15 @@ pub fn run() {
             input
         };
         let authority_update = if online_authority_mode == Some("descriptor-client-connected") {
-            crate::session::SessionAuthorityUpdateSummary {
-                used_legacy_presentation_adapter: false,
-                local_movement_authority: false,
-                command_adapter_count: 0,
-                current_tick: session.current_tick(),
+            if session.game().run_mode == crate::game_state::RunMode::Playing {
+                crate::session::SessionAuthorityUpdateSummary {
+                    used_legacy_presentation_adapter: false,
+                    local_movement_authority: false,
+                    command_adapter_count: 0,
+                    current_tick: session.current_tick(),
+                }
+            } else {
+                session.update_shell_frame_from_session_authority(authority_input, delta_seconds)
             }
         } else if split_screen_active {
             session.update_shell_frame_from_session_authority(authority_input, delta_seconds)
