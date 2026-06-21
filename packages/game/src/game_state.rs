@@ -3832,10 +3832,16 @@ impl RealOnlineSessionController {
             terrain_chunk_response: None,
             correction_summary: None,
         };
-        game.apply_real_online_session_ux(RealOnlineSessionUxSnapshot::from_tick_summary(
-            &summary,
-            self.player_slot,
-        ));
+        if self.player_slot.is_some() {
+            game.online_player_slot = self.player_slot;
+        }
+        game.online_session_state = OnlineSessionUxState::Connected;
+        game.online_host_owns_save = true;
+        game.online_remote_player_connected = true;
+        if game.online_remote_player_name.is_none() {
+            game.online_remote_player_name = Some("Remote miner".to_owned());
+        }
+        game.refresh_online_runtime_statuses();
         Ok(summary)
     }
 
@@ -5175,6 +5181,26 @@ impl RealOnlineSessionUxSnapshot {
             host_owns_save: player_slot != Some(2),
             player_slot,
             status_message: "Reconnected through real localhost Quinn session.".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_descriptor_host_tick_summary(
+        summary: &QuinnSessionTickSummary,
+        player_slot: Option<u8>,
+    ) -> Self {
+        Self {
+            state: OnlineSessionUxState::Connected,
+            host_owns_save: true,
+            player_slot,
+            status_message: format!(
+                "Descriptor host tick: command={}, snapshot={}, delta={}, chunk={}, correction={}",
+                summary.command_summary.is_some(),
+                summary.snapshot_replicated,
+                summary.delta_replicated,
+                summary.terrain_chunk_response.is_some(),
+                summary.correction_summary.is_some()
+            ),
         }
     }
 
@@ -6845,10 +6871,13 @@ impl GameState {
         player_id: crate::multiplayer::PlayerId,
         name: &str,
     ) {
+        let previous_name = self.online_remote_player_name.clone();
         self.online_remote_player_name = Some(name.to_owned());
         self.online_remote_player_connected = true;
-        self.online_session_status_message =
-            format!("Remote player identity synced: p{} {name}", player_id.get());
+        if previous_name.as_deref() != Some(name) {
+            self.online_session_status_message =
+                format!("Remote player identity synced: p{} {name}", player_id.get());
+        }
         self.refresh_online_lobby_status();
     }
 
@@ -6857,13 +6886,16 @@ impl GameState {
         player_id: crate::multiplayer::PlayerId,
         ready: bool,
     ) {
+        let previous_ready = self.online_remote_player_ready;
         self.online_remote_player_ready = ready;
         self.online_remote_player_connected = true;
-        self.online_session_status_message = format!(
-            "Remote player p{} ready state synced: {}",
-            player_id.get(),
-            if ready { "ready" } else { "not ready" }
-        );
+        if previous_ready != ready {
+            self.online_session_status_message = format!(
+                "Remote player p{} ready state synced: {}",
+                player_id.get(),
+                if ready { "ready" } else { "not ready" }
+            );
+        }
         self.refresh_online_lobby_status();
     }
 
